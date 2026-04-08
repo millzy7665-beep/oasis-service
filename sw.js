@@ -7,14 +7,14 @@ const CACHE = 'oasis-service-v1';
 
 const ASSETS = [
   '/',
-  '/index.html',
-  '/styles.css',
-  '/app.js',
-  '/manifest.json',
-  '/oasis-logo.png',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/icon-180.png',
+  '/oasis-service/index.html',
+  '/oasis-service/styles.css',
+  '/oasis-service/app.js',
+  '/oasis-service/manifest.json',
+  '/oasis-service/oasis-logo.png',
+  '/oasis-service/icon-192.png',
+  '/oasis-service/icon-512.png',
+  '/oasis-service/icon-180.png',
 ];
 
 /* Install — cache everything */
@@ -54,7 +54,7 @@ self.addEventListener('fetch', event => {
       }).catch(() => {
         /* Offline fallback for navigation */
         if (event.request.mode === 'navigate') {
-          return caches.match('/index.html');
+          return caches.match('/oasis-service/index.html');
         }
       });
     })

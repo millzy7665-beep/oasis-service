@@ -2,8 +2,8 @@
   "name": "OASIS Service",
   "short_name": "OASIS",
   "description": "OASIS Luxury Pool & Watershape Service App",
-  "start_url": "/index.html",
-  "scope": "/",
+  "start_url": "/oasis-service/index.html",
+  "scope": "/oasis-service/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0a1e2e",
@@ -23,6 +23,9 @@
       "purpose": "any maskable"
     }
   ],
-  "categories": ["business", "utilities"],
+  "categories": [
+    "business",
+    "utilities"
+  ],
   "screenshots": []
 }
