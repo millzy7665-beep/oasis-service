@@ -1,7 +1,7 @@
 'use strict';
 
 /* ── Version / localStorage reset ─────────────────────────────── */
-const APP_VERSION = 'v5-oasis-2026';
+const APP_VERSION = 'v6-oasis-2026';
 (function() {
   if (localStorage.getItem('psp_version') !== APP_VERSION) {
     ['psp_customers','psp_technicians','psp_routes','psp_workOrders','psp_session'].forEach(k => localStorage.removeItem(k));
