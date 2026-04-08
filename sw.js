@@ -1,10 +1,11 @@
 // OASIS Service — Service Worker for PWA
-const CACHE_NAME = 'oasis-service-v16';
+const CACHE_NAME = 'oasis-service-v17';
 const urlsToCache = [
   './',
   'index.html',
   'styles.css?v=10',
-  'app.js?v=25',
+  'tech-catalog.js?v=1',
+  'app.js?v=26',
   'manifest.json',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js',
@@ -41,6 +42,7 @@ self.addEventListener('fetch', event => {
       url.pathname === '/' ||
       url.pathname.endsWith('/index.html') ||
       url.pathname.endsWith('/app.js') ||
+      url.pathname.endsWith('/tech-catalog.js') ||
       url.pathname.endsWith('/styles.css') ||
       url.pathname.endsWith('/manifest.json')
     );

@@ -1,7 +1,7 @@
 'use strict';
 
 /* ── Version / localStorage reset ─────────────────────────────── */
-const APP_VERSION = 'v13-oasis-2026-tech-work-orders';
+const APP_VERSION = 'v14-oasis-2026-workbook-tech-orders';
 (function() {
   const storedVersion = localStorage.getItem('psp_version');
   if (!storedVersion || storedVersion !== APP_VERSION) {
@@ -155,16 +155,32 @@ function statusBadge(s) { const L={pending:'Pending','in-progress':'In Progress'
 function customerOptions(sel='') { return DB.customers.map(c=>`<option value="${esc(c.id)}"${c.id===sel?' selected':''}>${esc(c.name)}</option>`).join(''); }
 function techOptions(sel='')     { return DB.technicians.map(t=>`<option value="${esc(t.id)}"${t.id===sel?' selected':''}>${esc(t.name)}</option>`).join(''); }
 
-const TECH_WO_CATALOG = {
-  Pumps: ['Variable Speed Pump','Single Speed Pump','Booster Pump','Pump Motor','Pump Seal Kit','Pump Basket / Lid','Pump Plumbing Repair'],
-  Filters: ['Cartridge Filter','DE Filter','Sand Filter','Filter Grids','Filter Manifold','Filter Clamp / Band','Air Relief Assembly'],
-  Sanitizers: ['Salt Cell','Salt Controller','Inline Chlorinator','Brominator','UV System','Ozone System'],
-  Heaters: ['Gas Heater','Heat Pump','Igniter','Pressure Switch','Temperature Sensor','Bypass Valve'],
-  Automation: ['Automation Panel','Controller / Remote','Valve Actuator','Timer / Time Clock','Relay / Breaker','Communication Cable'],
-  Plumbing: ['PVC Repair','Jandy Valve','Check Valve','Skimmer Repair','Return Line Repair','Main Drain Cover'],
-  Electrical: ['Breaker / GFCI','Transformer','Pool Light','Junction Box','Bonding / Grounding','Wiring Repair'],
-  Cleaning: ['Cleaner Unit','Cleaner Hose','Vac Head','Brush','Pole / Net','Leaf Canister'],
-  Other: ['Inspection','Troubleshooting','Warranty Visit','Install / Replacement','Quote / Parts','Other']
+const TECH_WO_CATALOG = window.TECH_WO_CATALOG_DATA || {
+  'PUMPS': [
+    { partNumber:'', product:'Variable Speed Pump', price:0 },
+    { partNumber:'', product:'Single Speed Pump', price:0 },
+    { partNumber:'', product:'Booster Pump', price:0 }
+  ],
+  'FILTERS': [
+    { partNumber:'', product:'Cartridge Filter', price:0 },
+    { partNumber:'', product:'DE Filter', price:0 },
+    { partNumber:'', product:'Sand Filter', price:0 }
+  ],
+  'PLUMBING': [
+    { partNumber:'', product:'PVC Repair', price:0 },
+    { partNumber:'', product:'Valve Repair', price:0 },
+    { partNumber:'', product:'Pipe Replacement', price:0 }
+  ],
+  'ELECTRICAL': [
+    { partNumber:'', product:'Timer / Control Repair', price:0 },
+    { partNumber:'', product:'Transformer', price:0 },
+    { partNumber:'', product:'Junction Box', price:0 }
+  ],
+  'HEATERS': [
+    { partNumber:'', product:'Gas Heater', price:0 },
+    { partNumber:'', product:'Heat Pump', price:0 },
+    { partNumber:'', product:'Heater Sensor', price:0 }
+  ]
 };
 const TECH_WO_TYPES = ['Repair','Install','Replacement','Inspection','Warranty','Follow-up','Troubleshooting','Quote'];
 const TECH_PRIORITIES = ['Low','Normal','High','Urgent'];
@@ -941,38 +957,575 @@ function saveWorkOrder(id,extra={}){const custId=document.getElementById('wo-cus
 function completeStop(woId){const wo=DB.getWorkOrder(woId);if(!wo)return;const t=new Date().toTimeString().slice(0,5);saveWorkOrder(woId,{status:'completed',timeOut:t});DB.updateWorkOrder(woId,{status:'completed',timeOut:t});woState={view:'list'};Router.navigate('route');}
 
 /* TECH WORK ORDERS */
-let techOrderState={view:'list',id:null};
-let techItemRowCounter=0;
-function techSelectOptions(list, selected=''){return list.map(o=>`<option${o===selected?' selected':''}>${o}</option>`).join('');}
-function techCategoryOptions(selected=''){return Object.keys(TECH_WO_CATALOG).map(o=>`<option${o===selected?' selected':''}>${o}</option>`).join('');}
-function techEquipmentOptions(category, selected=''){return (TECH_WO_CATALOG[category]||[]).map(o=>`<option${o===selected?' selected':''}>${o}</option>`).join('');}
-function defaultTechItem(){return{category:'Pumps',equipment:'',qty:'1',unit:'ea',action:'Repair',status:'Open',note:''};}
-function techOrderNumberValue(order={}){return order.orderNumber||`TWO-${todayStr().replace(/-/g,'').slice(2)}-${String(new Date().getHours()).padStart(2,'0')}${String(new Date().getMinutes()).padStart(2,'0')}`;}
-function techOrderBadge(status){const map={Completed:'completed','In Progress':'in-progress','Needs Parts':'pending','Return Visit':'cancelled',Open:'pending',Quoted:'pending'};return `<span class="badge badge-${map[status]||'pending'}">${esc(status||'Open')}</span>`;}
+let techOrderState = { view: 'list', id: null };
+let techItemRowCounter = 0;
 
-function renderTechOrders(){return techOrderState.view==='form'?renderTechOrderForm(techOrderState.id):renderTechOrderList();}
-function renderTechOrderList(){
-  const techId=Auth.techId;
-  const orders=Auth.isAdmin?[...DB.techOrders]:DB.techOrders.filter(o=>o.technicianId===techId);
-  const sorted=orders.sort((a,b)=>(b.date+(b.timeIn||'')).localeCompare(a.date+(a.timeIn||'')));
-  const listHTML=sorted.length===0
-    ?`<div class="empty-state"><div class="empty-icon">🛠️</div><div class="empty-title">No technician work orders yet</div><div class="empty-subtitle">Tap + to create a repair or equipment work order.</div></div>`
-    :sorted.map(order=>{const cust=DB.getCustomer(order.customerId);const itemCount=(order.items||[]).length;return`<div class="job-card"><div class="job-card-header"><div><div class="job-card-title">${esc(cust?cust.name:'Unknown')}</div><div class="job-card-customer">${esc(order.workType||'Repair')} · ${itemCount} item${itemCount!==1?'s':''}</div></div>${techOrderBadge(order.status||'Open')}</div><div class="job-card-body"><div class="job-meta"><div class="job-meta-item">📅 ${fmtDate(order.date)}</div>${order.priority?`<div class="job-meta-item">⚡ ${esc(order.priority)}</div>`:''}${order.orderNumber?`<div class="job-meta-item"># ${esc(order.orderNumber)}</div>`:''}</div>${order.summary?`<div class="list-item-sub" style="margin-top:6px">${esc(order.summary)}</div>`:''}</div><div class="job-card-footer"><button class="btn btn-sm btn-primary" onclick="techOrderState={view:'form',id:'${esc(order.id)}'};App.render()">🛠️ Open</button><button class="btn btn-sm btn-secondary" onclick="saveTechOrderPDF('${esc(order.id)}')">📄 PDF</button><button class="btn btn-sm btn-secondary" onclick="shareTechOrderPDF('${esc(order.id)}')">📲 Share</button><button class="btn btn-sm btn-secondary" style="color:var(--danger)" onclick="deleteTechOrder('${esc(order.id)}')">🗑️</button></div></div>`;}).join('');
-  return`<div class="page-header"><div><div class="page-title">Tech Work Orders</div><div class="page-subtitle">${sorted.length} record${sorted.length!==1?'s':''}</div></div><button class="btn-fab" onclick="techOrderState={view:'form',id:null};App.render()">+</button></div><div style="margin-top:4px">${listHTML}</div>`;
+function techSelectOptions(list, selected = '') {
+  return list.map(o => `<option${o === selected ? ' selected' : ''}>${esc(o)}</option>`).join('');
 }
-function techItemRow(item={},idx){const cat=item.category||'Pumps';return`<div class="tech-item-row card" data-row="${idx}" style="margin-bottom:10px"><div class="card-body"><div class="form-row"><div class="form-group"><label class="form-label">Category</label><select class="form-control" id="two-cat-${idx}" onchange="updateTechEquipmentOptions(${idx})"><option value="">— Select —</option>${techCategoryOptions(cat)}</select></div><div class="form-group"><label class="form-label">Equipment</label><select class="form-control" id="two-item-${idx}"><option value="">— Select equipment —</option>${techEquipmentOptions(cat,item.equipment||'')}</select></div></div><div class="form-row"><div class="form-group"><label class="form-label">Quantity</label><input class="form-control" id="two-qty-${idx}" type="number" min="0" step="1" value="${esc(item.qty||'1')}"></div><div class="form-group"><label class="form-label">Unit</label><select class="form-control" id="two-unit-${idx}">${techSelectOptions(TECH_UNITS,item.unit||'ea')}</select></div></div><div class="form-row"><div class="form-group"><label class="form-label">Work Action</label><select class="form-control" id="two-action-${idx}">${techSelectOptions(TECH_ITEM_ACTIONS,item.action||'Repair')}</select></div><div class="form-group"><label class="form-label">Line Status</label><select class="form-control" id="two-line-status-${idx}">${techSelectOptions(TECH_ORDER_STATUSES,item.status||'Open')}</select></div></div><div class="form-group"><label class="form-label">Line Notes</label><input class="form-control" id="two-note-${idx}" value="${esc(item.note||'')}" placeholder="Serial, colour, part details, etc."></div><div style="display:flex;justify-content:flex-end"><button class="btn btn-sm btn-secondary" type="button" onclick="removeTechItemRow(${idx})">Remove Line</button></div></div></div>`;}
-function updateTechEquipmentOptions(idx){const cat=document.getElementById(`two-cat-${idx}`)?.value||'';const sel=document.getElementById(`two-item-${idx}`);if(!sel)return;sel.innerHTML=`<option value="">— Select equipment —</option>${techEquipmentOptions(cat)}`;}
-function addTechItemRow(item=defaultTechItem()){const list=document.getElementById('tech-items-list');if(!list)return;const idx=techItemRowCounter++;list.insertAdjacentHTML('beforeend',techItemRow(item,idx));}
-function removeTechItemRow(idx){document.querySelector(`#tech-items-list .tech-item-row[data-row="${idx}"]`)?.remove();}
-function getTechOrderItems(){return Array.from(document.querySelectorAll('#tech-items-list .tech-item-row')).map(row=>{const idx=row.dataset.row;return{category:document.getElementById(`two-cat-${idx}`)?.value||'',equipment:document.getElementById(`two-item-${idx}`)?.value||'',qty:document.getElementById(`two-qty-${idx}`)?.value.trim()||'',unit:document.getElementById(`two-unit-${idx}`)?.value||'ea',action:document.getElementById(`two-action-${idx}`)?.value||'Repair',status:document.getElementById(`two-line-status-${idx}`)?.value||'Open',note:document.getElementById(`two-note-${idx}`)?.value.trim()||''};}).filter(item=>item.category||item.equipment||item.qty||item.note);}
-function onTechOrderCustChange(){const sel=document.getElementById('two-customer');const cust=sel?.value?DB.getCustomer(sel.value):null;const addr=document.getElementById('two-address');if(addr)addr.value=cust?.address||'';}
-function renderTechOrderForm(id){const order=id?(DB.getTechOrder(id)||{}):{};resetPhotos(order);const custId=order.customerId||'';const today=todayStr();const tech=DB.getTechnician(Auth.techId);const items=(order.items&&order.items.length?order.items:[defaultTechItem()]);techItemRowCounter=items.length;return`<div class="wo-form"><div class="wo-bar"><button class="btn btn-secondary btn-sm" onclick="techOrderState={view:'list',id:null};App.render()">← Back</button><span class="wo-bar-title">${id?'Edit Tech Work Order':'New Tech Work Order'}</span><div style="display:flex;gap:8px">${id?`<button class="btn btn-secondary btn-sm" onclick="saveTechOrderPDF('${esc(id)}')">📄 PDF</button><button class="btn btn-secondary btn-sm" onclick="shareTechOrderPDF('${esc(id)}')">📲 Share</button>`:''}<button class="btn btn-primary btn-sm" onclick="saveTechOrder(${id?`'${esc(id)}'`:'null'})">💾 Save</button></div></div><div class="wo-sec"><div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>🛠️  Job Details</span><span class="wo-chev">▼</span></div><div class="wo-sec-bd"><div class="form-row"><div class="form-group"><label class="form-label">Technician</label><input class="form-control" value="${esc(tech?tech.name:'')}" readonly style="background:var(--gray-50)"></div><div class="form-group"><label class="form-label">Work Order #</label><input class="form-control" id="two-number" value="${esc(techOrderNumberValue(order))}"></div></div><div class="form-group"><label class="form-label">Customer *</label><select class="form-control" id="two-customer" onchange="onTechOrderCustChange()"><option value="">— Select client —</option>${customerOptions(custId)}</select></div><div class="form-group"><label class="form-label">Address</label><input class="form-control" id="two-address" readonly style="background:var(--gray-50)" value="${esc(order.address||(custId?DB.getCustomer(custId)?.address||'':''))}"></div><div class="form-row"><div class="form-group"><label class="form-label">Date *</label><input class="form-control" id="two-date" type="date" value="${esc(order.date||today)}"></div><div class="form-group"><label class="form-label">Work Type</label><select class="form-control" id="two-type">${techSelectOptions(TECH_WO_TYPES,order.workType||'Repair')}</select></div></div><div class="form-row"><div class="form-group"><label class="form-label">Priority</label><select class="form-control" id="two-priority">${techSelectOptions(TECH_PRIORITIES,order.priority||'Normal')}</select></div><div class="form-group"><label class="form-label">Order Status</label><select class="form-control" id="two-status">${techSelectOptions(TECH_ORDER_STATUSES,order.status||'Open')}</select></div></div><div class="form-row"><div class="form-group"><label class="form-label">Time In</label><input class="form-control" id="two-timein" type="time" value="${esc(order.timeIn||'')}"></div><div class="form-group"><label class="form-label">Time Out</label><input class="form-control" id="two-timeout" type="time" value="${esc(order.timeOut||'')}"></div></div><div class="form-group"><label class="form-label">Issue / Scope of Work</label><textarea class="form-control" id="two-summary" rows="3" placeholder="Describe the issue, customer request, or diagnostic findings">${esc(order.summary||'')}</textarea></div><div class="form-group"><label class="form-label">Work Performed</label><textarea class="form-control" id="two-performed" rows="3" placeholder="Describe what was repaired, installed, tested, or recommended">${esc(order.performed||'')}</textarea></div></div></div><div class="wo-sec"><div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>📦  Equipment / Materials</span><span class="wo-chev">▼</span></div><div class="wo-sec-bd"><p class="wo-hint">Choose the equipment category, item, and quantity for each line.</p><div id="tech-items-list">${items.map((item,idx)=>techItemRow(item,idx)).join('')}</div><button class="btn btn-secondary" style="width:100%;justify-content:center" type="button" onclick="addTechItemRow()">+ Add Equipment Line</button></div></div><div class="wo-sec"><div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>📝  Completion Notes</span><span class="wo-chev">▼</span></div><div class="wo-sec-bd"><div class="form-row"><div class="form-group"><label class="form-label">Customer Approval</label><select class="form-control" id="two-approval">${techSelectOptions(['Yes','No','N/A'],order.approval||'N/A')}</select></div><div class="form-group"><label class="form-label">Follow-up Required</label><select class="form-control" id="two-followup">${techSelectOptions(['No','Yes — return visit','Yes — order parts','Yes — quote required'],order.followUp||'No')}</select></div></div><div class="form-group"><label class="form-label">Additional Notes</label><textarea class="form-control" id="two-notes" rows="3" placeholder="Anything else the office or next technician should know">${esc(order.notes||'')}</textarea></div></div></div><div class="wo-sec"><div class="wo-sec-hd wo-photo-hd" onclick="toggleWoSection(this)"><span>📸  Photos</span><span class="wo-chev">▼</span></div><div class="wo-sec-bd"><p class="wo-hint">Attach before/after photos and any equipment close-ups.</p><div class="photo-ba-row">${photoSlot('before','Before')}${photoSlot('after','After')}</div><div class="wo-blk-lbl" style="margin-top:14px">Additional Photos</div><div class="photo-extra-grid">${photoSlot('extra1','1')}${photoSlot('extra2','2')}${photoSlot('extra3','3')}${photoSlot('extra4','4')}${photoSlot('extra5','5')}</div></div></div><div style="height:24px"></div></div>`;}
-function saveTechOrder(id){const custId=document.getElementById('two-customer')?.value;const date=document.getElementById('two-date')?.value;if(!custId){alert('Please select a client.');return;}if(!date){alert('Please enter a date.');return;}const v=eid=>document.getElementById(eid)?.value.trim()||'';const data={orderNumber:v('two-number'),customerId:custId,technicianId:Auth.techId,address:v('two-address'),date,timeIn:v('two-timein'),timeOut:v('two-timeout'),workType:document.getElementById('two-type')?.value||'Repair',priority:document.getElementById('two-priority')?.value||'Normal',status:document.getElementById('two-status')?.value||'Open',summary:v('two-summary'),performed:v('two-performed'),approval:document.getElementById('two-approval')?.value||'N/A',followUp:document.getElementById('two-followup')?.value||'No',notes:v('two-notes'),items:getTechOrderItems(),photos:{...WO_PHOTOS}};if(id&&id!=='null'){DB.updateTechOrder(id,data);showToast('Tech work order updated');}else{DB.addTechOrder(data);showToast('Tech work order saved');}techOrderState={view:'list',id:null};App.render();}
-function deleteTechOrder(id){Confirm.show('Delete this tech work order?',()=>{DB.deleteTechOrder(id);App.render();showToast('Deleted');});}
-async function saveTechOrderPDF(id,mode='save'){const order=DB.getTechOrder(id);if(!order){showToast('Save this tech work order first');return;}if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){showToast('PDF library not loaded');return;}const cust=DB.getCustomer(order.customerId);const tech=DB.getTechnician(order.technicianId);const activePhotos=(techOrderState.view==='form'&&techOrderState.id===id)?{...(order.photos||{}),...WO_PHOTOS}:(order.photos||{});const { jsPDF }=window.jspdf;const doc=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'});doc.setFillColor(10,30,46);doc.rect(0,0,210,28,'F');doc.setTextColor(212,201,187);doc.setFont('helvetica','bold');doc.setFontSize(22);doc.text('OASIS',15,13);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text('TECHNICIAN WORK ORDER',15,20);doc.setTextColor(255,255,255);doc.setFontSize(10);doc.text(fmtDate(order.date),195,13,{align:'right'});doc.text(order.orderNumber||'—',195,20,{align:'right'});let y=38;const nextLine=(step=6)=>{y+=step;if(y>270){doc.addPage();y=20;}};const writeSection=title=>{if(y>255){doc.addPage();y=20;}doc.setTextColor(26,64,95);doc.setFont('helvetica','bold');doc.setFontSize(11);doc.text(title,15,y);nextLine(7);};const writeDetail=(label,value,x=15,valueX=62)=>{doc.setTextColor(80,80,80);doc.setFont('helvetica','bold');doc.setFontSize(9);doc.text(`${label}:`,x,y);doc.setFont('helvetica','normal');doc.text(String(value||'—'),valueX,y);nextLine();};writeSection('JOB INFORMATION');writeDetail('Client',cust?cust.name:'—');writeDetail('Address',order.address||'—');writeDetail('Technician',tech?tech.name:'—');writeDetail('Work Type',order.workType||'—');writeDetail('Priority',order.priority||'—');writeDetail('Status',order.status||'—');writeDetail('Time',`${fmtTime(order.timeIn)||'—'} → ${fmtTime(order.timeOut)||'—'}`);writeSection('ISSUE / SCOPE');doc.setTextColor(80,80,80);doc.setFont('helvetica','normal');doc.setFontSize(9);let lines=doc.splitTextToSize(order.summary||'No issue entered.',175);doc.text(lines,15,y);y+=lines.length*5+6;writeSection('WORK PERFORMED');lines=doc.splitTextToSize(order.performed||'No completion notes entered.',175);doc.text(lines,15,y);y+=lines.length*5+6;writeSection('EQUIPMENT / MATERIALS');if(order.items&&order.items.length){order.items.forEach(item=>{doc.setTextColor(80,80,80);doc.setFont('helvetica','bold');doc.setFontSize(9);doc.text(`${item.category||'Other'} — ${item.equipment||'Item'}`,15,y);nextLine(5);doc.setFont('helvetica','normal');doc.text(`Qty: ${item.qty||'—'} ${item.unit||''} · ${item.action||'Repair'} · ${item.status||'Open'}`,18,y);nextLine(5);if(item.note){const note=doc.splitTextToSize(`Note: ${item.note}`,170);doc.text(note,18,y);y+=note.length*4.5;}nextLine(3);});}else{doc.setTextColor(80,80,80);doc.setFont('helvetica','normal');doc.setFontSize(9);doc.text('No equipment lines entered.',15,y);nextLine();}writeSection('FOLLOW-UP / NOTES');doc.setTextColor(80,80,80);doc.setFont('helvetica','normal');doc.setFontSize(9);const followText=`Customer approval: ${order.approval||'N/A'}
-Follow-up: ${order.followUp||'No'}
-Notes: ${order.notes||'None'}`;lines=doc.splitTextToSize(followText,175);doc.text(lines,15,y);y+=lines.length*5+6;const getImageSize=dataUrl=>new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>resolve({width:img.naturalWidth||img.width||1,height:img.naturalHeight||img.height||1});img.onerror=reject;img.src=dataUrl;});const photoEntries=PHOTO_KEYS.filter(key=>activePhotos[key]);if(photoEntries.length){writeSection('SITE PHOTOS');let col=0;const boxW=82,boxH=58;for(const key of photoEntries){const x=col===0?15:108;if(col===0&&y+boxH+16>280){doc.addPage();y=20;}const label=key==='before'?'Before':key==='after'?'After':`Photo ${key.replace('extra','')}`;doc.setTextColor(80,80,80);doc.setFont('helvetica','bold');doc.setFontSize(8);doc.text(label,x,y);const imgY=y+4;doc.setFillColor(248,245,241);doc.rect(x,imgY,boxW,boxH,'F');doc.setDrawColor(220,220,220);doc.rect(x,imgY,boxW,boxH);try{const dataUrl=activePhotos[key];const format=dataUrl.includes('image/png')?'PNG':'JPEG';const { width,height }=await getImageSize(dataUrl);const scale=Math.min(boxW/width,boxH/height);const drawW=Math.max(10,width*scale);const drawH=Math.max(10,height*scale);const drawX=x+(boxW-drawW)/2;const drawY=imgY+(boxH-drawH)/2;doc.addImage(dataUrl,format,drawX,drawY,drawW,drawH);}catch(err){console.warn('Tech order photo skipped in PDF:',err);}if(col===1){y+=boxH+14;col=0;}else{col=1;}}if(col===1)y+=boxH+14;}const fileName=`OASIS_TechWO_${(cust?cust.name:'Client').replace(/[^a-z0-9]+/gi,'-')}_${order.date||todayStr()}.pdf`;const pdfBlob=doc.output('blob');if(mode==='share'){try{const pdfFile=new File([pdfBlob],fileName,{type:'application/pdf'});const canShareFile=!!(navigator.share&&(!navigator.canShare||navigator.canShare({files:[pdfFile]})));if(window.isSecureContext&&canShareFile){await navigator.share({title:`OASIS Tech Work Order — ${cust?cust.name:'Client'}`,text:'Choose WhatsApp or another app to send this technician work order PDF.',files:[pdfFile]});showToast('📲 Choose WhatsApp to send the PDF');return;}if(!window.isSecureContext){showToast('Open the secure app link to share via WhatsApp');}else{showToast('Share not available on this device — saving PDF instead');}}catch(err){if(err&&err.name==='AbortError')return;console.warn('Tech order PDF share fallback:',err);showToast('Could not share directly — saving PDF instead');}}presentPDFBlob(pdfBlob,fileName);}
-function shareTechOrderPDF(id){return saveTechOrderPDF(id,'share');}
+function techCatalogItems(category) {
+  return (TECH_WO_CATALOG[category] || []).map(item =>
+    typeof item === 'string'
+      ? { partNumber: '', product: item, price: 0 }
+      : { partNumber: item.partNumber || '', product: item.product || '', price: Number(item.price) || 0 }
+  );
+}
+function techCategoryOptions(selected = '') {
+  return Object.keys(TECH_WO_CATALOG).map(o => `<option${o === selected ? ' selected' : ''}>${esc(o)}</option>`).join('');
+}
+function techEquipmentOptions(category, selected = '') {
+  return techCatalogItems(category).map(item => {
+    const label = item.partNumber ? `${item.product} — ${item.partNumber}` : item.product;
+    return `<option value="${esc(item.product)}"${item.product === selected ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+}
+function findTechCatalogItem(category, product) {
+  return techCatalogItems(category).find(item => item.product === product) || null;
+}
+function money(val) {
+  const num = Number(val) || 0;
+  return num.toFixed(2);
+}
+function techOrderNumberValue(order = {}) {
+  return order.orderNumber || `TWO-${todayStr().replace(/-/g,'').slice(2)}-${String(new Date().getHours()).padStart(2,'0')}${String(new Date().getMinutes()).padStart(2,'0')}`;
+}
+function techOrderBadge(status) {
+  const map = { Completed:'completed', 'In Progress':'in-progress', 'Needs Parts':'pending', 'Return Visit':'cancelled', Open:'pending', Quoted:'pending' };
+  return `<span class="badge badge-${map[status] || 'pending'}">${esc(status || 'Open')}</span>`;
+}
+function defaultTechItem() {
+  return {
+    category: Object.keys(TECH_WO_CATALOG)[0] || 'PUMPS',
+    equipment: '',
+    partNumber: '',
+    qty: '1',
+    unit: 'ea',
+    price: '',
+    subtotal: '',
+    action: 'Repair',
+    status: 'Open',
+    note: ''
+  };
+}
+function techOrderTotalValue(order = {}) {
+  return (order.items || []).reduce((sum, item) => sum + (Number(item.subtotal) || ((Number(item.qty) || 0) * (Number(item.price) || 0))), 0);
+}
+function renderTechOrders() {
+  if (techOrderState.view === 'form') {
+    App._afterRender = () => {
+      document.querySelectorAll('#tech-items-list .tech-item-row').forEach(row => syncTechItemMeta(row.dataset.row));
+      updateTechOrderTotal();
+    };
+    return renderTechOrderForm(techOrderState.id);
+  }
+  return renderTechOrderList();
+}
+function renderTechOrderList() {
+  const techId = Auth.techId;
+  const orders = Auth.isAdmin ? [...DB.techOrders] : DB.techOrders.filter(o => o.technicianId === techId);
+  const sorted = orders.sort((a, b) => (b.date + (b.timeIn || '')).localeCompare(a.date + (a.timeIn || '')));
+  const listHTML = sorted.length === 0
+    ? `<div class="empty-state"><div class="empty-icon">🛠️</div><div class="empty-title">No technician work orders yet</div><div class="empty-subtitle">Tap + to create a repair or equipment work order.</div></div>`
+    : sorted.map(order => {
+        const cust = DB.getCustomer(order.customerId);
+        const itemCount = (order.items || []).length;
+        const totalAmount = techOrderTotalValue(order);
+        return `<div class="job-card">
+          <div class="job-card-header">
+            <div>
+              <div class="job-card-title">${esc(cust ? cust.name : 'Unknown')}</div>
+              <div class="job-card-customer">${esc(order.workType || 'Repair')} · ${itemCount} item${itemCount !== 1 ? 's' : ''}</div>
+            </div>
+            ${techOrderBadge(order.status || 'Open')}
+          </div>
+          <div class="job-card-body">
+            <div class="job-meta">
+              <div class="job-meta-item">📅 ${fmtDate(order.date)}</div>
+              ${order.priority ? `<div class="job-meta-item">⚡ ${esc(order.priority)}</div>` : ''}
+              ${order.orderNumber ? `<div class="job-meta-item"># ${esc(order.orderNumber)}</div>` : ''}
+              ${totalAmount ? `<div class="job-meta-item">💲 ${money(totalAmount)}</div>` : ''}
+            </div>
+            ${order.summary ? `<div class="list-item-sub" style="margin-top:6px">${esc(order.summary)}</div>` : ''}
+          </div>
+          <div class="job-card-footer">
+            <button class="btn btn-sm btn-primary" onclick="techOrderState={view:'form',id:'${esc(order.id)}'};App.render()">🛠️ Open</button>
+            <button class="btn btn-sm btn-secondary" onclick="saveTechOrderPDF('${esc(order.id)}')">📄 PDF</button>
+            <button class="btn btn-sm btn-secondary" onclick="shareTechOrderPDF('${esc(order.id)}')">📲 Share</button>
+            <button class="btn btn-sm btn-secondary" style="color:var(--danger)" onclick="deleteTechOrder('${esc(order.id)}')">🗑️</button>
+          </div>
+        </div>`;
+      }).join('');
+  return `<div class="page-header"><div><div class="page-title">Tech Work Orders</div><div class="page-subtitle">${sorted.length} record${sorted.length !== 1 ? 's' : ''}</div></div><button class="btn-fab" onclick="techOrderState={view:'form',id:null};App.render()">+</button></div><div style="margin-top:4px">${listHTML}</div>`;
+}
+function techItemRow(item = {}, idx) {
+  const cat = item.category || Object.keys(TECH_WO_CATALOG)[0] || '';
+  const price = item.price !== undefined && item.price !== '' ? money(item.price) : '';
+  const subtotal = item.subtotal !== undefined && item.subtotal !== ''
+    ? money(item.subtotal)
+    : ((Number(item.qty) || 0) && (Number(item.price) || 0) ? money((Number(item.qty) || 0) * (Number(item.price) || 0)) : '');
+  return `<div class="tech-item-row card" data-row="${idx}" style="margin-bottom:10px">
+    <div class="card-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Category</label>
+          <select class="form-control" id="two-cat-${idx}" onchange="updateTechEquipmentOptions(${idx})">
+            <option value="">— Select —</option>
+            ${techCategoryOptions(cat)}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Product</label>
+          <select class="form-control" id="two-item-${idx}" onchange="syncTechItemMeta(${idx})">
+            <option value="">— Select product —</option>
+            ${techEquipmentOptions(cat, item.equipment || '')}
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">MFG Part #</label>
+          <input class="form-control" id="two-part-${idx}" value="${esc(item.partNumber || '')}" readonly style="background:var(--gray-50)">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Quantity</label>
+          <input class="form-control" id="two-qty-${idx}" type="number" min="0" step="1" value="${esc(item.qty || '1')}" oninput="recalcTechItemSubtotal(${idx})">
+        </div>
+      </div>
+      <div class="form-row" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="form-group">
+          <label class="form-label">Unit</label>
+          <select class="form-control" id="two-unit-${idx}">${techSelectOptions(TECH_UNITS, item.unit || 'ea')}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Price</label>
+          <input class="form-control" id="two-price-${idx}" type="number" min="0" step="0.01" value="${esc(price)}" oninput="recalcTechItemSubtotal(${idx})">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Subtotal</label>
+          <input class="form-control" id="two-subtotal-${idx}" value="${esc(subtotal)}" readonly style="background:var(--gray-50)">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Work Action</label>
+          <select class="form-control" id="two-action-${idx}">${techSelectOptions(TECH_ITEM_ACTIONS, item.action || 'Repair')}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Line Status</label>
+          <select class="form-control" id="two-line-status-${idx}">${techSelectOptions(TECH_ORDER_STATUSES, item.status || 'Open')}</select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Line Notes</label>
+        <input class="form-control" id="two-note-${idx}" value="${esc(item.note || '')}" placeholder="Serial, colour, part details, etc.">
+      </div>
+      <div style="display:flex;justify-content:flex-end">
+        <button class="btn btn-sm btn-secondary" type="button" onclick="removeTechItemRow(${idx})">Remove Line</button>
+      </div>
+    </div>
+  </div>`;
+}
+function syncTechItemMeta(idx) {
+  const category = document.getElementById(`two-cat-${idx}`)?.value || '';
+  const product = document.getElementById(`two-item-${idx}`)?.value || '';
+  const partField = document.getElementById(`two-part-${idx}`);
+  const priceField = document.getElementById(`two-price-${idx}`);
+  const item = findTechCatalogItem(category, product);
+  if (partField) partField.value = item ? item.partNumber : '';
+  if (priceField && item) priceField.value = money(item.price);
+  recalcTechItemSubtotal(idx);
+}
+function recalcTechItemSubtotal(idx) {
+  const qty = Number(document.getElementById(`two-qty-${idx}`)?.value || 0);
+  const price = Number(document.getElementById(`two-price-${idx}`)?.value || 0);
+  const subtotalField = document.getElementById(`two-subtotal-${idx}`);
+  if (subtotalField) subtotalField.value = qty || price ? money(qty * price) : '';
+  updateTechOrderTotal();
+}
+function updateTechEquipmentOptions(idx) {
+  const cat = document.getElementById(`two-cat-${idx}`)?.value || '';
+  const sel = document.getElementById(`two-item-${idx}`);
+  if (!sel) return;
+  sel.innerHTML = `<option value="">— Select product —</option>${techEquipmentOptions(cat)}`;
+  syncTechItemMeta(idx);
+}
+function addTechItemRow(item = defaultTechItem()) {
+  const list = document.getElementById('tech-items-list');
+  if (!list) return;
+  const idx = techItemRowCounter++;
+  list.insertAdjacentHTML('beforeend', techItemRow(item, idx));
+  syncTechItemMeta(idx);
+}
+function removeTechItemRow(idx) {
+  document.querySelector(`#tech-items-list .tech-item-row[data-row="${idx}"]`)?.remove();
+  updateTechOrderTotal();
+}
+function getTechOrderItems() {
+  return Array.from(document.querySelectorAll('#tech-items-list .tech-item-row')).map(row => {
+    const idx = row.dataset.row;
+    return {
+      category: document.getElementById(`two-cat-${idx}`)?.value || '',
+      equipment: document.getElementById(`two-item-${idx}`)?.value || '',
+      partNumber: document.getElementById(`two-part-${idx}`)?.value || '',
+      qty: document.getElementById(`two-qty-${idx}`)?.value.trim() || '',
+      unit: document.getElementById(`two-unit-${idx}`)?.value || 'ea',
+      price: document.getElementById(`two-price-${idx}`)?.value.trim() || '',
+      subtotal: document.getElementById(`two-subtotal-${idx}`)?.value.trim() || '',
+      action: document.getElementById(`two-action-${idx}`)?.value || 'Repair',
+      status: document.getElementById(`two-line-status-${idx}`)?.value || 'Open',
+      note: document.getElementById(`two-note-${idx}`)?.value.trim() || ''
+    };
+  }).filter(item => item.category || item.equipment || item.qty || item.note);
+}
+function updateTechOrderTotal() {
+  const total = Array.from(document.querySelectorAll('#tech-items-list .tech-item-row')).reduce((sum, row) => {
+    const idx = row.dataset.row;
+    return sum + (Number(document.getElementById(`two-subtotal-${idx}`)?.value || 0) || 0);
+  }, 0);
+  const el = document.getElementById('two-total');
+  if (el) el.value = money(total);
+}
+function onTechOrderCustChange() {
+  const sel = document.getElementById('two-customer');
+  const cust = sel?.value ? DB.getCustomer(sel.value) : null;
+  const addr = document.getElementById('two-address');
+  if (addr) addr.value = cust?.address || '';
+}
+function renderTechOrderForm(id) {
+  const order = id ? (DB.getTechOrder(id) || {}) : {};
+  resetPhotos(order);
+  const custId = order.customerId || '';
+  const today = todayStr();
+  const tech = DB.getTechnician(Auth.techId);
+  const items = (order.items && order.items.length ? order.items : [defaultTechItem()]);
+  techItemRowCounter = items.length;
+  return `<div class="wo-form">
+    <div class="wo-bar">
+      <button class="btn btn-secondary btn-sm" onclick="techOrderState={view:'list',id:null};App.render()">← Back</button>
+      <span class="wo-bar-title">${id ? 'Edit Tech Work Order' : 'New Tech Work Order'}</span>
+      <div style="display:flex;gap:8px">
+        ${id ? `<button class="btn btn-secondary btn-sm" onclick="saveTechOrderPDF('${esc(id)}')">📄 PDF</button><button class="btn btn-secondary btn-sm" onclick="shareTechOrderPDF('${esc(id)}')">📲 Share</button>` : ''}
+        <button class="btn btn-primary btn-sm" onclick="saveTechOrder(${id ? `'${esc(id)}'` : 'null'})">💾 Save</button>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>🛠️  Work Sheet</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">W/O #</label><input class="form-control" id="two-number" value="${esc(techOrderNumberValue(order))}"></div>
+          <div class="form-group"><label class="form-label">Date Created *</label><input class="form-control" id="two-date" type="date" value="${esc(order.date || today)}"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Property *</label><select class="form-control" id="two-customer" onchange="onTechOrderCustChange()"><option value="">— Select client —</option>${customerOptions(custId)}</select></div>
+        <div class="form-group"><label class="form-label">Address</label><input class="form-control" id="two-address" readonly style="background:var(--gray-50)" value="${esc(order.address || (custId ? DB.getCustomer(custId)?.address || '' : ''))}"></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Technician</label><input class="form-control" value="${esc(tech ? tech.name : '')}" readonly style="background:var(--gray-50)"></div>
+          <div class="form-group"><label class="form-label">Work Type</label><select class="form-control" id="two-type">${techSelectOptions(TECH_WO_TYPES, order.workType || 'Repair')}</select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Priority</label><select class="form-control" id="two-priority">${techSelectOptions(TECH_PRIORITIES, order.priority || 'Normal')}</select></div>
+          <div class="form-group"><label class="form-label">Order Status</label><select class="form-control" id="two-status">${techSelectOptions(TECH_ORDER_STATUSES, order.status || 'Open')}</select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Time In</label><input class="form-control" id="two-timein" type="time" value="${esc(order.timeIn || '')}"></div>
+          <div class="form-group"><label class="form-label">Time Out</label><input class="form-control" id="two-timeout" type="time" value="${esc(order.timeOut || '')}"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>📝  Notes</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <div class="form-group"><label class="form-label">Work Description</label><textarea class="form-control" id="two-summary" rows="3" placeholder="Describe the issue or requested work">${esc(order.summary || '')}</textarea></div>
+        <div class="form-group"><label class="form-label">Notes for Billing</label><textarea class="form-control" id="two-billing-notes" rows="3" placeholder="Billing notes, charges, or office details">${esc(order.billingNotes || '')}</textarea></div>
+        <div class="form-group"><label class="form-label">Notes for Tech</label><textarea class="form-control" id="two-tech-notes" rows="3" placeholder="Site notes for the technician">${esc(order.techNotes || '')}</textarea></div>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>📦  Materials / Equipment</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <p class="wo-hint">Loaded from <code>WO_TEMPLATE.xlsm</code> by category with part numbers, products, quantities and pricing.</p>
+        <div id="tech-items-list">${items.map((item, idx) => techItemRow(item, idx)).join('')}</div>
+        <button class="btn btn-secondary" style="width:100%;justify-content:center" type="button" onclick="addTechItemRow()">+ Add Equipment Line</button>
+        <div class="form-row" style="margin-top:12px">
+          <div class="form-group"><label class="form-label">Materials Total</label><input class="form-control" id="two-total" value="${esc(money(order.total || techOrderTotalValue(order)))}" readonly style="background:var(--gray-50)"></div>
+          <div class="form-group"><label class="form-label">Customer Approval</label><select class="form-control" id="two-approval">${techSelectOptions(['Yes','No','N/A'], order.approval || 'N/A')}</select></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>✅  Completion</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <div class="form-group"><label class="form-label">Work Performed</label><textarea class="form-control" id="two-performed" rows="3" placeholder="Describe what was repaired, installed, tested, or recommended">${esc(order.performed || '')}</textarea></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Follow-up Required</label><select class="form-control" id="two-followup">${techSelectOptions(['No','Yes — return visit','Yes — order parts','Yes — quote required'], order.followUp || 'No')}</select></div>
+          <div class="form-group"><label class="form-label">Comments</label><input class="form-control" id="two-comments" value="${esc(order.comments || '')}" placeholder="Office / manager comment"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Additional Notes</label><textarea class="form-control" id="two-notes" rows="3" placeholder="Anything else the office or next technician should know">${esc(order.notes || '')}</textarea></div>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd wo-photo-hd" onclick="toggleWoSection(this)"><span>📸  Photos</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <p class="wo-hint">Attach before/after photos and any equipment close-ups.</p>
+        <div class="photo-ba-row">${photoSlot('before','Before')}${photoSlot('after','After')}</div>
+        <div class="wo-blk-lbl" style="margin-top:14px">Additional Photos</div>
+        <div class="photo-extra-grid">${photoSlot('extra1','1')}${photoSlot('extra2','2')}${photoSlot('extra3','3')}${photoSlot('extra4','4')}${photoSlot('extra5','5')}</div>
+      </div>
+    </div>
+    <div style="height:24px"></div>
+  </div>`;
+}
+function saveTechOrder(id) {
+  const custId = document.getElementById('two-customer')?.value;
+  const date = document.getElementById('two-date')?.value;
+  if (!custId) { alert('Please select a client.'); return; }
+  if (!date) { alert('Please enter a date.'); return; }
+  const v = eid => document.getElementById(eid)?.value.trim() || '';
+  const items = getTechOrderItems();
+  const data = {
+    orderNumber: v('two-number'),
+    customerId: custId,
+    technicianId: Auth.techId,
+    address: v('two-address'),
+    date,
+    timeIn: v('two-timein'),
+    timeOut: v('two-timeout'),
+    workType: document.getElementById('two-type')?.value || 'Repair',
+    priority: document.getElementById('two-priority')?.value || 'Normal',
+    status: document.getElementById('two-status')?.value || 'Open',
+    summary: v('two-summary'),
+    billingNotes: v('two-billing-notes'),
+    techNotes: v('two-tech-notes'),
+    performed: v('two-performed'),
+    approval: document.getElementById('two-approval')?.value || 'N/A',
+    followUp: document.getElementById('two-followup')?.value || 'No',
+    comments: v('two-comments'),
+    notes: v('two-notes'),
+    total: v('two-total'),
+    items,
+    photos: { ...WO_PHOTOS }
+  };
+  if (id && id !== 'null') {
+    DB.updateTechOrder(id, data);
+    showToast('Tech work order updated');
+  } else {
+    DB.addTechOrder(data);
+    showToast('Tech work order saved');
+  }
+  techOrderState = { view:'list', id:null };
+  App.render();
+}
+function deleteTechOrder(id) {
+  Confirm.show('Delete this tech work order?', () => {
+    DB.deleteTechOrder(id);
+    App.render();
+    showToast('Deleted');
+  });
+}
+async function saveTechOrderPDF(id, mode = 'save') {
+  const order = DB.getTechOrder(id);
+  if (!order) { showToast('Save this tech work order first'); return; }
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) { showToast('PDF library not loaded'); return; }
+
+  const cust = DB.getCustomer(order.customerId);
+  const tech = DB.getTechnician(order.technicianId);
+  const activePhotos = (techOrderState.view === 'form' && techOrderState.id === id)
+    ? { ...(order.photos || {}), ...WO_PHOTOS }
+    : (order.photos || {});
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+
+  doc.setFillColor(10,30,46);
+  doc.rect(0,0,210,28,'F');
+  doc.setTextColor(212,201,187);
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(22);
+  doc.text('OASIS',15,13);
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(8);
+  doc.text('TECHNICIAN WORK ORDER',15,20);
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(10);
+  doc.text(fmtDate(order.date),195,13,{align:'right'});
+  doc.text(order.orderNumber || '—',195,20,{align:'right'});
+
+  let y = 38;
+  const nextLine = (step = 6) => {
+    y += step;
+    if (y > 270) {
+      doc.addPage();
+      y = 20;
+    }
+  };
+  const writeSection = (title) => {
+    if (y > 255) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.setTextColor(26,64,95);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(11);
+    doc.text(title,15,y);
+    nextLine(7);
+  };
+  const writeDetail = (label, value, x = 15, valueX = 62) => {
+    doc.setTextColor(80,80,80);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(9);
+    doc.text(`${label}:`,x,y);
+    doc.setFont('helvetica','normal');
+    doc.text(String(value || '—'),valueX,y);
+    nextLine();
+  };
+
+  writeSection('WORK SHEET');
+  writeDetail('Property', cust ? cust.name : '—');
+  writeDetail('Address', order.address || '—');
+  writeDetail('Date Created', fmtDate(order.date));
+  writeDetail('Technician', tech ? tech.name : '—');
+  writeDetail('Work Type', order.workType || '—');
+  writeDetail('Priority', order.priority || '—');
+  writeDetail('Status', order.status || '—');
+  writeDetail('Time', `${fmtTime(order.timeIn) || '—'} → ${fmtTime(order.timeOut) || '—'}`);
+
+  writeSection('WORK DESCRIPTION');
+  doc.setTextColor(80,80,80);
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  let lines = doc.splitTextToSize(order.summary || 'No work description entered.', 175);
+  doc.text(lines, 15, y);
+  y += lines.length * 5 + 6;
+
+  writeSection('NOTES FOR BILLING');
+  lines = doc.splitTextToSize(order.billingNotes || 'No billing notes entered.', 175);
+  doc.text(lines, 15, y);
+  y += lines.length * 5 + 6;
+
+  writeSection('NOTES FOR TECH');
+  lines = doc.splitTextToSize(order.techNotes || 'No technician notes entered.', 175);
+  doc.text(lines, 15, y);
+  y += lines.length * 5 + 6;
+
+  writeSection('PARTS / MATERIALS');
+  if (order.items && order.items.length) {
+    order.items.forEach(item => {
+      doc.setTextColor(80,80,80);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(9);
+      doc.text(`${item.partNumber || '—'} | ${item.equipment || 'Item'}`, 15, y);
+      nextLine(5);
+      doc.setFont('helvetica','normal');
+      doc.text(`Category: ${item.category || '—'} · Qty: ${item.qty || '—'} ${item.unit || ''}`, 18, y);
+      nextLine(5);
+      doc.text(`Price: $${money(item.price)} · Subtotal: $${money(item.subtotal || ((Number(item.qty)||0) * (Number(item.price)||0)))}`, 18, y);
+      nextLine(5);
+      doc.text(`Action: ${item.action || 'Repair'} · Status: ${item.status || 'Open'}`, 18, y);
+      nextLine(5);
+      if (item.note) {
+        const note = doc.splitTextToSize(`Note: ${item.note}`, 170);
+        doc.text(note, 18, y);
+        y += note.length * 4.5;
+      }
+      nextLine(3);
+    });
+  } else {
+    doc.setTextColor(80,80,80);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9);
+    doc.text('No equipment lines entered.', 15, y);
+    nextLine();
+  }
+  writeDetail('Materials Total', `$${money(order.total || techOrderTotalValue(order))}`);
+
+  writeSection('COMPLETION / COMMENTS');
+  const completionText = `Work Performed: ${order.performed || 'None'}\nCustomer Approval: ${order.approval || 'N/A'}\nFollow-up: ${order.followUp || 'No'}\nComments: ${order.comments || 'None'}\nAdditional Notes: ${order.notes || 'None'}`;
+  lines = doc.splitTextToSize(completionText, 175);
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  doc.text(lines, 15, y);
+  y += lines.length * 5 + 6;
+
+  const getImageSize = dataUrl => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth || img.width || 1, height: img.naturalHeight || img.height || 1 });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+  const photoEntries = PHOTO_KEYS.filter(key => activePhotos[key]);
+  if (photoEntries.length) {
+    writeSection('SITE PHOTOS');
+    let col = 0;
+    const boxW = 82;
+    const boxH = 58;
+    for (const key of photoEntries) {
+      const x = col === 0 ? 15 : 108;
+      if (col === 0 && y + boxH + 16 > 280) {
+        doc.addPage();
+        y = 20;
+      }
+      const label = key === 'before' ? 'Before' : key === 'after' ? 'After' : `Photo ${key.replace('extra', '')}`;
+      doc.setTextColor(80,80,80);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(8);
+      doc.text(label, x, y);
+      const imgY = y + 4;
+      doc.setFillColor(248,245,241);
+      doc.rect(x, imgY, boxW, boxH, 'F');
+      doc.setDrawColor(220,220,220);
+      doc.rect(x, imgY, boxW, boxH);
+      try {
+        const dataUrl = activePhotos[key];
+        const format = dataUrl.includes('image/png') ? 'PNG' : 'JPEG';
+        const { width, height } = await getImageSize(dataUrl);
+        const scale = Math.min(boxW / width, boxH / height);
+        const drawW = Math.max(10, width * scale);
+        const drawH = Math.max(10, height * scale);
+        const drawX = x + (boxW - drawW) / 2;
+        const drawY = imgY + (boxH - drawH) / 2;
+        doc.addImage(dataUrl, format, drawX, drawY, drawW, drawH);
+      } catch (err) {
+        console.warn('Tech order photo skipped in PDF:', err);
+      }
+      if (col === 1) {
+        y += boxH + 14;
+        col = 0;
+      } else {
+        col = 1;
+      }
+    }
+    if (col === 1) y += boxH + 14;
+  }
+
+  const fileName = `OASIS_TechWO_${(cust ? cust.name : 'Client').replace(/[^a-z0-9]+/gi,'-')}_${order.date || todayStr()}.pdf`;
+  const pdfBlob = doc.output('blob');
+  if (mode === 'share') {
+    try {
+      const pdfFile = new File([pdfBlob], fileName, { type:'application/pdf' });
+      const canShareFile = !!(navigator.share && (!navigator.canShare || navigator.canShare({ files:[pdfFile] })));
+      if (window.isSecureContext && canShareFile) {
+        await navigator.share({
+          title: `OASIS Tech Work Order — ${cust ? cust.name : 'Client'}`,
+          text: 'Choose WhatsApp or another app to send this technician work order PDF.',
+          files: [pdfFile]
+        });
+        showToast('📲 Choose WhatsApp to send the PDF');
+        return;
+      }
+      if (!window.isSecureContext) showToast('Open the secure app link to share via WhatsApp');
+      else showToast('Share not available on this device — saving PDF instead');
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      console.warn('Tech order PDF share fallback:', err);
+      showToast('Could not share directly — saving PDF instead');
+    }
+  }
+  presentPDFBlob(pdfBlob, fileName);
+}
+function shareTechOrderPDF(id) { return saveTechOrderPDF(id, 'share'); }
 
 /* CLIENTS */
 let custSearch='';
