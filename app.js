@@ -6,8 +6,8 @@ const STORAGE_PREFIX = window.APP_STORAGE_PREFIX || 'psp_';
 const STORAGE_VERSION_KEY = `${STORAGE_PREFIX}version`;
 const SESSION_KEY = `${STORAGE_PREFIX}session`;
 const APP_VERSION = APP_MODE === 'tech'
-  ? 'v16-oasis-2026-tech-separate'
-  : 'v16-oasis-2026-pool-separate';
+  ? 'v17-oasis-2026-tech-simplified'
+  : 'v17-oasis-2026-pool-separate';
 (function() {
   const storedVersion = localStorage.getItem(STORAGE_VERSION_KEY);
   if (!storedVersion || storedVersion !== APP_VERSION) {
@@ -70,19 +70,14 @@ const DB = {
 
 /* ── SEED DATA ─────────────────────────────────────────────────── */
 function seedDemoData() {
-  if (DB.technicians.length > 0) return;
   DB.technicians = [
-    { id:'t1', name:'Ace',       pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
-    { id:'t2', name:'Ariel',     pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
-    { id:'t3', name:'Donald',    pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
-    { id:'t4', name:'Elvin',     pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
-    { id:'t5', name:'Jermaine',  pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
-    { id:'t6', name:'Kadeem',    pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
-    { id:'t7', name:'Kingsley',  pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
-    { id:'t8', name:'Malik',     pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
-    { id:'admin', name:'Chris Mills (Admin)', pin:'0000', isAdmin:true, specialty:'Management', phone:'(345) 945-7665', email:'chris@oasis.ky' },
+    { id:'t1', name:'Jet',    pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
+    { id:'t2', name:'Mark',   pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
+    { id:'t3', name:'Tech 3', pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
+    { id:'admin', name:'Chris (Admin)', pin:'0000', isAdmin:true, specialty:'Management', phone:'(345) 945-7665', email:'chris@oasis.ky' },
   ];
   DB.save('technicians');
+  if (DB.customers.length > 0) return;
 
   DB.customers = [
     { id:'c01', name:'Harbour Heights Villa',  address:'14 Harbour Drive, Grand Cayman',     poolSize:'18000', poolType:'Inground Gunite',    notes:'Remote gate — code #4477' },
@@ -189,8 +184,6 @@ const TECH_WO_CATALOG = window.TECH_WO_CATALOG_DATA || {
   ]
 };
 const TECH_WO_TYPES = ['Repair','Install','Replacement','Inspection','Warranty','Follow-up','Troubleshooting','Quote'];
-const TECH_PRIORITIES = ['Low','Normal','High','Urgent'];
-const TECH_ORDER_STATUSES = ['Open','Quoted','In Progress','Completed','Needs Parts','Return Visit'];
 const TECH_ITEM_ACTIONS = ['Inspect','Repair','Install','Replace','Clean','Test'];
 const TECH_UNITS = ['ea','set','ft','kit','box','bag'];
 
@@ -774,16 +767,16 @@ function renderDashboard() {
 
   if (APP_MODE === 'tech') {
     const myOrders = DB.techOrders.filter(o => o.technicianId === techId);
-    const openCount = myOrders.filter(o => (o.status || 'Open') !== 'Completed').length;
-    const doneToday = myOrders.filter(o => o.date === today && o.status === 'Completed').length;
+    const openCount = myOrders.length;
+    const doneToday = myOrders.filter(o => o.date === today).length;
     const recentHTML = myOrders.length === 0
       ? `<p style="padding:16px;color:var(--gray-400);text-align:center;font-size:13px">No technician work orders created yet.</p>`
       : myOrders.sort((a,b)=>(b.date+(b.timeIn||'')).localeCompare(a.date+(a.timeIn||''))).slice(0,5).map(order => {
           const cust = DB.getCustomer(order.customerId);
           return `<div class="schedule-item" onclick="techOrderState={view:'form',id:'${esc(order.id)}'};Router.navigate('tech-orders')" style="cursor:pointer">
-            <div class="schedule-dot ${(order.status === 'Completed') ? 'completed' : (order.status === 'In Progress' ? 'in-progress' : 'pending')}"></div>
+            <div class="schedule-dot pending"></div>
             <div class="schedule-info"><div class="schedule-name">${esc(cust ? cust.name : 'Unknown')}</div><div class="schedule-detail">${esc(order.workType || 'Repair')} · ${esc(order.orderNumber || '')}</div></div>
-            ${techOrderBadge(order.status || 'Open')}
+            ${techOrderBadge()}
           </div>`;
         }).join('');
 
@@ -794,8 +787,8 @@ function renderDashboard() {
     </div>
     <div class="stats-grid" style="margin-top:20px">
       <div class="stat-card primary"><div class="stat-icon">🛠️</div><div class="stat-value">${myOrders.length}</div><div class="stat-label">My Work Orders</div></div>
-      <div class="stat-card primary"><div class="stat-icon">✅</div><div class="stat-value">${doneToday}</div><div class="stat-label">Done Today</div></div>
-      <div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value" style="color:var(--warning)">${openCount}</div><div class="stat-label">Open</div></div>
+      <div class="stat-card primary"><div class="stat-icon">✅</div><div class="stat-value">${doneToday}</div><div class="stat-label">Created Today</div></div>
+      <div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value" style="color:var(--warning)">${openCount}</div><div class="stat-label">Active WOs</div></div>
       <div class="stat-card"><div class="stat-icon">👥</div><div class="stat-value" style="color:var(--teal)">${DB.customers.length}</div><div class="stat-label">Clients</div></div>
     </div>
     <div class="section-header"><span class="section-title">Recent Work Orders</span><button class="btn btn-sm btn-primary" onclick="Router.navigate('tech-orders')">Open All</button></div>
@@ -1034,11 +1027,12 @@ function money(val) {
   return num.toFixed(2);
 }
 function techOrderNumberValue(order = {}) {
-  return order.orderNumber || `TWO-${todayStr().replace(/-/g,'').slice(2)}-${String(new Date().getHours()).padStart(2,'0')}${String(new Date().getMinutes()).padStart(2,'0')}`;
+  if (order.orderNumber) return order.orderNumber;
+  const nextNumber = (DB.techOrders?.length || 0) + 1;
+  return `#${nextNumber}`;
 }
-function techOrderBadge(status) {
-  const map = { Completed:'completed', 'In Progress':'in-progress', 'Needs Parts':'pending', 'Return Visit':'cancelled', Open:'pending', Quoted:'pending' };
-  return `<span class="badge badge-${map[status] || 'pending'}">${esc(status || 'Open')}</span>`;
+function techOrderBadge() {
+  return `<span class="badge badge-pending">Tech WO</span>`;
 }
 function defaultTechItem() {
   return {
@@ -1050,7 +1044,6 @@ function defaultTechItem() {
     price: '',
     subtotal: '',
     action: 'Repair',
-    status: 'Open',
     note: ''
   };
 }
@@ -1083,13 +1076,12 @@ function renderTechOrderList() {
               <div class="job-card-title">${esc(cust ? cust.name : 'Unknown')}</div>
               <div class="job-card-customer">${esc(order.workType || 'Repair')} · ${itemCount} item${itemCount !== 1 ? 's' : ''}</div>
             </div>
-            ${techOrderBadge(order.status || 'Open')}
+            ${techOrderBadge()}
           </div>
           <div class="job-card-body">
             <div class="job-meta">
               <div class="job-meta-item">📅 ${fmtDate(order.date)}</div>
-              ${order.priority ? `<div class="job-meta-item">⚡ ${esc(order.priority)}</div>` : ''}
-              ${order.orderNumber ? `<div class="job-meta-item"># ${esc(order.orderNumber)}</div>` : ''}
+              ${order.orderNumber ? `<div class="job-meta-item">WO ${esc(order.orderNumber)}</div>` : ''}
               ${totalAmount ? `<div class="job-meta-item">💲 ${money(totalAmount)}</div>` : ''}
             </div>
             ${order.summary ? `<div class="list-item-sub" style="margin-top:6px">${esc(order.summary)}</div>` : ''}
@@ -1152,15 +1144,9 @@ function techItemRow(item = {}, idx) {
           <input class="form-control" id="two-subtotal-${idx}" value="${esc(subtotal)}" readonly style="background:var(--gray-50)">
         </div>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Work Action</label>
-          <select class="form-control" id="two-action-${idx}">${techSelectOptions(TECH_ITEM_ACTIONS, item.action || 'Repair')}</select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Line Status</label>
-          <select class="form-control" id="two-line-status-${idx}">${techSelectOptions(TECH_ORDER_STATUSES, item.status || 'Open')}</select>
-        </div>
+      <div class="form-group">
+        <label class="form-label">Work Action</label>
+        <select class="form-control" id="two-action-${idx}">${techSelectOptions(TECH_ITEM_ACTIONS, item.action || 'Repair')}</select>
       </div>
       <div class="form-group">
         <label class="form-label">Line Notes</label>
@@ -1219,7 +1205,6 @@ function getTechOrderItems() {
       price: document.getElementById(`two-price-${idx}`)?.value.trim() || '',
       subtotal: document.getElementById(`two-subtotal-${idx}`)?.value.trim() || '',
       action: document.getElementById(`two-action-${idx}`)?.value || 'Repair',
-      status: document.getElementById(`two-line-status-${idx}`)?.value || 'Open',
       note: document.getElementById(`two-note-${idx}`)?.value.trim() || ''
     };
   }).filter(item => item.category || item.equipment || item.qty || item.note);
@@ -1282,14 +1267,7 @@ function renderTechOrderForm(id) {
           <div class="form-group"><label class="form-label">Technician</label><input class="form-control" value="${esc(tech ? tech.name : '')}" readonly style="background:var(--gray-50)"></div>
           <div class="form-group"><label class="form-label">Work Type</label><select class="form-control" id="two-type">${techSelectOptions(TECH_WO_TYPES, order.workType || 'Repair')}</select></div>
         </div>
-        <div class="form-row">
-          <div class="form-group"><label class="form-label">Priority</label><select class="form-control" id="two-priority">${techSelectOptions(TECH_PRIORITIES, order.priority || 'Normal')}</select></div>
-          <div class="form-group"><label class="form-label">Order Status</label><select class="form-control" id="two-status">${techSelectOptions(TECH_ORDER_STATUSES, order.status || 'Open')}</select></div>
-        </div>
-        <div class="form-row">
-          <div class="form-group"><label class="form-label">Time In</label><input class="form-control" id="two-timein" type="time" value="${esc(order.timeIn || '')}"></div>
-          <div class="form-group"><label class="form-label">Time Out</label><input class="form-control" id="two-timeout" type="time" value="${esc(order.timeOut || '')}"></div>
-        </div>
+        <div class="form-group"><label class="form-label">Work Description</label><textarea class="form-control" id="two-summary" rows="3" placeholder="Describe the issue or requested work">${esc(order.summary || '')}</textarea></div>
       </div>
     </div>
 
@@ -1298,15 +1276,6 @@ function renderTechOrderForm(id) {
       <div class="wo-sec-bd">
         <p class="wo-hint">Matches the workbook labour entry rows for date, tech name, time in/out, and total hours.</p>
         ${laborEntries.map((entry, idx) => techLaborRow(entry, idx, tech ? tech.name : '')).join('')}
-      </div>
-    </div>
-
-    <div class="wo-sec">
-      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>📝  Notes</span><span class="wo-chev">▼</span></div>
-      <div class="wo-sec-bd">
-        <div class="form-group"><label class="form-label">Work Description</label><textarea class="form-control" id="two-summary" rows="3" placeholder="Describe the issue or requested work">${esc(order.summary || '')}</textarea></div>
-        <div class="form-group"><label class="form-label">Notes for Billing</label><textarea class="form-control" id="two-billing-notes" rows="3" placeholder="Billing notes, charges, or office details">${esc(order.billingNotes || '')}</textarea></div>
-        <div class="form-group"><label class="form-label">Notes for Tech</label><textarea class="form-control" id="two-tech-notes" rows="3" placeholder="Site notes for the technician">${esc(order.techNotes || '')}</textarea></div>
       </div>
     </div>
 
@@ -1331,7 +1300,6 @@ function renderTechOrderForm(id) {
           <div class="form-group"><label class="form-label">Follow-up Required</label><select class="form-control" id="two-followup">${techSelectOptions(['No','Yes — return visit','Yes — order parts','Yes — quote required'], order.followUp || 'No')}</select></div>
           <div class="form-group"><label class="form-label">Comments</label><input class="form-control" id="two-comments" value="${esc(order.comments || '')}" placeholder="Office / manager comment"></div>
         </div>
-        <div class="form-group"><label class="form-label">Additional Notes</label><textarea class="form-control" id="two-notes" rows="3" placeholder="Anything else the office or next technician should know">${esc(order.notes || '')}</textarea></div>
       </div>
     </div>
 
@@ -1360,20 +1328,13 @@ function saveTechOrder(id) {
     technicianId: Auth.techId,
     address: v('two-address'),
     date,
-    timeIn: v('two-timein'),
-    timeOut: v('two-timeout'),
     workType: document.getElementById('two-type')?.value || 'Repair',
-    priority: document.getElementById('two-priority')?.value || 'Normal',
-    status: document.getElementById('two-status')?.value || 'Open',
     summary: v('two-summary'),
-    billingNotes: v('two-billing-notes'),
-    techNotes: v('two-tech-notes'),
     laborEntries: getTechLaborEntries(),
     performed: v('two-performed'),
     approval: document.getElementById('two-approval')?.value || 'N/A',
     followUp: document.getElementById('two-followup')?.value || 'No',
     comments: v('two-comments'),
-    notes: v('two-notes'),
     total: v('two-total'),
     items,
     photos: { ...WO_PHOTOS }
@@ -1457,9 +1418,6 @@ async function saveTechOrderPDF(id, mode = 'save') {
   writeDetail('Date Created', fmtDate(order.date));
   writeDetail('Technician', tech ? tech.name : '—');
   writeDetail('Work Type', order.workType || '—');
-  writeDetail('Priority', order.priority || '—');
-  writeDetail('Status', order.status || '—');
-  writeDetail('Time', `${fmtTime(order.timeIn) || '—'} → ${fmtTime(order.timeOut) || '—'}`);
 
   writeSection('LABOUR LOG');
   if (order.laborEntries && order.laborEntries.length) {
@@ -1489,16 +1447,6 @@ async function saveTechOrderPDF(id, mode = 'save') {
   doc.text(lines, 15, y);
   y += lines.length * 5 + 6;
 
-  writeSection('NOTES FOR BILLING');
-  lines = doc.splitTextToSize(order.billingNotes || 'No billing notes entered.', 175);
-  doc.text(lines, 15, y);
-  y += lines.length * 5 + 6;
-
-  writeSection('NOTES FOR TECH');
-  lines = doc.splitTextToSize(order.techNotes || 'No technician notes entered.', 175);
-  doc.text(lines, 15, y);
-  y += lines.length * 5 + 6;
-
   writeSection('PARTS / MATERIALS');
   if (order.items && order.items.length) {
     order.items.forEach(item => {
@@ -1512,7 +1460,7 @@ async function saveTechOrderPDF(id, mode = 'save') {
       nextLine(5);
       doc.text(`Price: $${money(item.price)} · Subtotal: $${money(item.subtotal || ((Number(item.qty)||0) * (Number(item.price)||0)))}`, 18, y);
       nextLine(5);
-      doc.text(`Action: ${item.action || 'Repair'} · Status: ${item.status || 'Open'}`, 18, y);
+      doc.text(`Action: ${item.action || 'Repair'}`, 18, y);
       nextLine(5);
       if (item.note) {
         const note = doc.splitTextToSize(`Note: ${item.note}`, 170);
@@ -1531,7 +1479,7 @@ async function saveTechOrderPDF(id, mode = 'save') {
   writeDetail('Materials Total', `$${money(order.total || techOrderTotalValue(order))}`);
 
   writeSection('COMPLETION / COMMENTS');
-  const completionText = `Work Performed: ${order.performed || 'None'}\nCustomer Approval: ${order.approval || 'N/A'}\nFollow-up: ${order.followUp || 'No'}\nComments: ${order.comments || 'None'}\nAdditional Notes: ${order.notes || 'None'}`;
+  const completionText = `Work Performed: ${order.performed || 'None'}\nCustomer Approval: ${order.approval || 'N/A'}\nFollow-up: ${order.followUp || 'No'}\nComments: ${order.comments || 'None'}`;
   lines = doc.splitTextToSize(completionText, 175);
   doc.setFont('helvetica','normal');
   doc.setFontSize(9);
