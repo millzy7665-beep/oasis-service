@@ -1,10 +1,10 @@
 // OASIS Service — Service Worker for PWA
-const CACHE_NAME = 'oasis-service-v15';
+const CACHE_NAME = 'oasis-service-v16';
 const urlsToCache = [
   './',
   'index.html',
   'styles.css?v=10',
-  'app.js?v=24',
+  'app.js?v=25',
   'manifest.json',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js',
