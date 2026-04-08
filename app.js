@@ -253,236 +253,80 @@ function photoSlot(key,label){const d=WO_PHOTOS[key];return`<div class="photo-sl
 
 /* ── SEND REPORT ───────────────────────────────────────────────── */
 const REPORT_EMAIL='chris@oasis.ky';
-function buildReportText(wo){
-  const cust=DB.getCustomer(wo.customerId),tech=DB.getTechnician(wo.technicianId);
-  const p=wo.pool||{},s=wo.spa||{};
-  const r=(v,u='')=>v?`${v}${u}`:'—';
-  const cA=(o,lbl)=>{const pts=[];if(o.tabs)pts.push(`Tabs:${o.tabs}ea`);if(o.hypo)pts.push(`Hypo:${o.hypo}lbs`);if(o.acid)pts.push(`Acid:${o.acid}gal`);if(o.sodaAsh)pts.push(`Soda Ash:${o.sodaAsh}lbs`);if(o.bicarb)pts.push(`Bicarb:${o.bicarb}lbs`);if(o.conditioner)pts.push(`Cond:${o.conditioner}lbs`);if(o.bromine)pts.push(`Bromine:${o.bromine}ea`);if(o.phosphateOz)pts.push(`Phos:${o.phosphateOz}oz`);if(o.saltBag)pts.push(`Salt:${o.saltBag}bag`);if(o.algaecide)pts.push(`Alg:${o.algaecide}oz`);if(o.clarifier)pts.push(`Clar:${o.clarifier}oz`);return pts.length?`${lbl}\n${pts.join(' | ')}`:`${lbl}\nNone`;};
-  const photoCount=PHOTO_KEYS.filter(k=>(wo.photos||{})[k]).length;
-  return['═══════════════════════════════','OASIS — SERVICE REPORT','═══════════════════════════════','',`Tech: ${tech?tech.name:'—'}   Route: ${wo.routeNumber||'—'}`,`Client: ${cust?cust.name:'—'}`,`Address: ${wo.address||'—'}`,`Date: ${fmtDate(wo.date)}   In: ${fmtTime(wo.timeIn)||'—'} → Out: ${fmtTime(wo.timeOut)||'—'}`,`Condition: ${wo.condition||'—'}   Pool: ${wo.gallons?parseInt(wo.gallons).toLocaleString()+' gal':'—'}`,'','─── CHEMICAL READINGS ──────────',`             POOL          SPA`,`Chlorine     ${r(p.chlorine,'ppm').padEnd(14)} ${r(s.chlorine,'ppm')}`,`pH           ${r(p.pH).padEnd(14)} ${r(s.pH)}`,`Alkalinity   ${r(p.alk,'ppm').padEnd(14)} ${r(s.alk,'ppm')}`,`CYA          ${r(p.cya,'ppm').padEnd(14)} ${r(s.cya,'ppm')}`,`Calcium      ${r(p.calcium,'ppm').padEnd(14)} ${r(s.calcium,'ppm')}`,`Salt         ${r(p.salt,'ppm').padEnd(14)} ${r(s.salt,'ppm')}`,`Phosphate    ${r(p.phosphate,'ppb').padEnd(14)} ${r(s.phosphate,'ppb')}`,`TDS          ${r(p.tds,'ppm').padEnd(14)} ${r(s.tds,'ppm')}`,'','─── CHEMICALS ADDED ────────────',cA(p,'POOL'),'',cA(s,'SPA'),'','─── SERVICE NOTES ──────────────',wo.notes||'None','',photoCount>0?`📸 ${photoCount} photo(s) attached.`:'','','═══════════════════════════════','Sent via OASIS Service App','═══════════════════════════════'].join('\n');
-}
 function sendReport(id) {
   const wo = DB.getWorkOrder(id); if (!wo) return;
-  const cust  = DB.getCustomer(wo.customerId);
-  const tech  = DB.getTechnician(wo.technicianId);
+  const cust = DB.getCustomer(wo.customerId);
+  const tech = DB.getTechnician(wo.technicianId);
+  const p = wo.pool || {}, s = wo.spa || {};
+
+  const r = (v, u) => (v && String(v).trim()) ? v + (u||'') : '\u2014';
+
+  const chemLine = (label, pv, pu, sv) =>
+    label.padEnd(14) + r(pv, pu).padEnd(16) + r(sv, pu);
+
+  const added = (o, label) => {
+    const pts = [];
+    if (o.tabs)         pts.push('Tabs: '           + o.tabs + ' ea');
+    if (o.hypo)         pts.push('Hypo: '           + o.hypo + ' lbs');
+    if (o.acid)         pts.push('Acid: '           + o.acid + ' gal');
+    if (o.sodaAsh)      pts.push('Soda Ash: '       + o.sodaAsh + ' lbs');
+    if (o.bicarb)       pts.push('Na Bicarb: '      + o.bicarb + ' lbs');
+    if (o.conditioner)  pts.push('Conditioner: '    + o.conditioner + ' lbs');
+    if (o.bromine)      pts.push('Bromine: '        + o.bromine + ' ea');
+    if (o.phosphateOz)  pts.push('Phosphate Rmvr: ' + o.phosphateOz + ' oz');
+    if (o.saltBag)      pts.push('Salt: '           + o.saltBag + ' bag');
+    if (o.algaecide)    pts.push('Algaecide: '      + o.algaecide + ' oz');
+    if (o.clarifier)    pts.push('Clarifier: '      + o.clarifier + ' oz');
+    return label + '\n' + (pts.length ? pts.join('\n') : 'None added');
+  };
+
+  const lines = [
+    'OASIS SERVICE REPORT',
+    '================================',
+    'Technician : ' + (tech ? tech.name : '\u2014'),
+    'Route      : ' + (wo.routeNumber || '\u2014'),
+    'Client     : ' + (cust ? cust.name : '\u2014'),
+    'Address    : ' + (wo.address || '\u2014'),
+    'Date       : ' + fmtDate(wo.date),
+    'Time       : ' + (fmtTime(wo.timeIn) || '\u2014') + ' \u2192 ' + (fmtTime(wo.timeOut) || '\u2014'),
+    'Condition  : ' + (wo.condition || '\u2014'),
+    'Pool Size  : ' + (wo.gallons ? parseInt(wo.gallons).toLocaleString() + ' gal' : '\u2014'),
+    '',
+    'CHEMICAL READINGS',
+    '================================',
+    '              POOL            SPA',
+    chemLine('Chlorine',   p.chlorine,  ' ppm', s.chlorine),
+    chemLine('pH',         p.pH,        '',     s.pH),
+    chemLine('Alkalinity', p.alk,       ' ppm', s.alk),
+    chemLine('CYA',        p.cya,       ' ppm', s.cya),
+    chemLine('Calcium',    p.calcium,   ' ppm', s.calcium),
+    chemLine('Salt',       p.salt,      ' ppm', s.salt),
+    chemLine('Phosphate',  p.phosphate, ' ppb', s.phosphate),
+    chemLine('TDS',        p.tds,       ' ppm', s.tds),
+    '',
+    'CHEMICALS ADDED',
+    '================================',
+    added(p, 'POOL'),
+    '',
+    added(s, 'SPA'),
+    '',
+    'SERVICE NOTES',
+    '================================',
+    wo.notes || 'None',
+    '',
+    '================================',
+    'Sent via OASIS Service App',
+  ];
+
   const subject = encodeURIComponent(
     'OASIS Service Report \u2014 ' + (cust ? cust.name : 'Client') + ' \u2014 ' + fmtDate(wo.date)
   );
-  const mailBody = encodeURIComponent(
-    'Please find the OASIS Service Report attached as a PDF.\n\n'
-    + 'Client     : ' + (cust ? cust.name : '\u2014') + '\n'
-    + 'Date       : ' + fmtDate(wo.date) + '\n'
-    + 'Technician : ' + (tech ? tech.name : '\u2014') + '\n'
-    + 'Route      : ' + (wo.routeNumber || '\u2014') + '\n\n'
-    + 'Save the PDF report from the window that opened, then attach it to this email.'
-  );
-  openPrintReport(wo);
-  showToast('\ud83d\udcc4 Save as PDF \u2192 attach to email that opens');
-  setTimeout(function() {
-    window.location.href = 'mailto:' + REPORT_EMAIL + '?subject=' + subject + '&body=' + mailBody;
-  }, 800);
+  const body = encodeURIComponent(lines.join('\n'));
+
+  window.location.href = 'mailto:' + REPORT_EMAIL + '?subject=' + subject + '&body=' + body;
+  showToast('\u2709\ufe0f Report sent to chris@oasis.ky');
 }
 
-function openPrintReport(wo) {
-  const cust   = DB.getCustomer(wo.customerId);
-  const tech   = DB.getTechnician(wo.technicianId);
-  const p      = wo.pool || {}, s = wo.spa || {};
-  const photos = wo.photos || {};
-  const photoEntries = PHOTO_KEYS.filter(function(k){ return photos[k]; });
-
-  /* Resolve logo as absolute file path so the popup can load it */
-  const logoSrc = (function() {
-    const a = document.createElement('a');
-    a.href = 'oasis-logo.png';
-    return a.href;
-  })();
-
-  function dot(param, val) {
-    var v = parseFloat(val);
-    var ranges = { chlorine:{ok:[1,3],warn:[0.5,5]}, pH:{ok:[7.2,7.6],warn:[7.0,7.8]}, alk:{ok:[80,120],warn:[60,180]}, cya:{ok:[30,50],warn:[20,80]}, calcium:{ok:[200,400],warn:[150,500]} };
-    var r = ranges[param]; if (!r || isNaN(v)) return '';
-    if (v >= r.ok[0] && v <= r.ok[1])    return '<span style="color:#2a7a4f">\u25cf</span>';
-    if (v >= r.warn[0] && v <= r.warn[1]) return '<span style="color:#9a6f1e">\u25cf</span>';
-    return '<span style="color:#b53030">\u25cf</span>';
-  }
-
-  function rv(v, u) { return v ? (v + (u||'')) : '\u2014'; }
-
-  function chemRow(label, pv, pu, sv, param) {
-    return '<tr>'
-      + '<td class="rl">' + label + '</td>'
-      + '<td class="rv">' + dot(param, pv) + '&nbsp;' + rv(pv, pu) + '</td>'
-      + '<td class="rv">' + rv(sv, pu) + '</td>'
-      + '</tr>';
-  }
-
-  function addedParts(o) {
-    var rows = [];
-    if (o.tabs)         rows.push(['Tabs', o.tabs + ' ea']);
-    if (o.hypo)         rows.push(['Hypo-Chlorite', o.hypo + ' lbs']);
-    if (o.acid)         rows.push(['Acid', o.acid + ' gal']);
-    if (o.sodaAsh)      rows.push(['Soda Ash', o.sodaAsh + ' lbs']);
-    if (o.bicarb)       rows.push(['Na Bicarbonate', o.bicarb + ' lbs']);
-    if (o.conditioner)  rows.push(['Conditioner', o.conditioner + ' lbs']);
-    if (o.bromine)      rows.push(['Bromine', o.bromine + ' ea']);
-    if (o.phosphateOz)  rows.push(['Phosphate Remover', o.phosphateOz + ' oz']);
-    if (o.saltBag)      rows.push(['Salt', o.saltBag + ' bag']);
-    if (o.algaecide)    rows.push(['Algaecide', o.algaecide + ' oz']);
-    if (o.clarifier)    rows.push(['Clarifier', o.clarifier + ' oz']);
-    if (!rows.length)   return '<tr><td colspan="2" style="color:#999;font-style:italic;padding:6px 0">None added</td></tr>';
-    return rows.map(function(r){ return '<tr><td class="al">' + r[0] + '</td><td class="av">' + r[1] + '</td></tr>'; }).join('');
-  }
-
-  var photoHTML = '';
-  if (photoEntries.length) {
-    photoHTML = '<div class="section-hd">SITE PHOTOS</div>'
-      + '<div class="photos-grid">'
-      + photoEntries.map(function(k) {
-          var label = k === 'before' ? 'Before' : k === 'after' ? 'After' : 'Photo ' + k.replace('extra','');
-          return '<div class="photo-item"><img src="' + photos[k] + '" /><div class="photo-cap">' + label + '</div></div>';
-        }).join('')
-      + '</div>';
-  }
-
-  var css = [
-    '* { box-sizing:border-box; margin:0; padding:0; }',
-    'body { font-family: Georgia, serif; background:#fff; color:#231F20; font-size:11px; }',
-    '@page { size:A4; margin:0; }',
-    '@media print { .no-print { display:none!important; } body { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }',
-    /* print bar */
-    '.print-bar { position:fixed; top:0; left:0; right:0; background:#1A405F; padding:11px 28px; display:flex; align-items:center; justify-content:space-between; z-index:100; }',
-    '.print-bar-left { color:#D4C9BB; font-family:Arial,sans-serif; font-size:12px; letter-spacing:0.06em; }',
-    '.print-btn { background:linear-gradient(135deg,#539199,#226683); color:#fff; border:none; padding:10px 26px; border-radius:4px; font-family:Arial,sans-serif; font-size:12px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; cursor:pointer; }',
-    '.page { margin-top:54px; }',
-    /* header */
-    '.hdr { background:#0a1e2e; padding:20px 32px; display:flex; align-items:center; justify-content:space-between; }',
-    '.hdr-left { display:flex; align-items:center; gap:14px; }',
-    '.hdr-logo { width:52px; height:auto; display:block; }',
-    '.hdr-brand { color:#D4C9BB; font-family:Georgia,serif; font-size:28px; font-weight:300; letter-spacing:0.38em; text-transform:uppercase; }',
-    '.hdr-right { text-align:right; }',
-    '.hdr-title { color:#fff; font-family:Arial,sans-serif; font-size:13px; font-weight:700; letter-spacing:0.2em; text-transform:uppercase; }',
-    '.hdr-sub { color:#539199; font-family:Arial,sans-serif; font-size:8.5px; letter-spacing:0.16em; text-transform:uppercase; margin-top:5px; }',
-    /* gold rule */
-    '.gold-rule { height:3px; background:linear-gradient(90deg,#c9a87c,#D4C9BB,#c9a87c); }',
-    /* job info */
-    '.job-block { padding:16px 32px; background:#f8f5f1; border-bottom:1px solid #dbd5cc; }',
-    '.job-grid { display:grid; grid-template-columns:1fr 1fr; gap:4px 32px; }',
-    '.jl { font-family:Arial,sans-serif; font-size:8px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:#a09589; }',
-    '.jv { font-family:Arial,sans-serif; font-size:12px; font-weight:600; color:#1A405F; margin-top:2px; margin-bottom:8px; }',
-    /* section */
-    '.section-hd { background:#1A405F; color:#D4C9BB; font-family:Arial,sans-serif; font-size:8.5px; font-weight:700; letter-spacing:0.22em; text-transform:uppercase; padding:8px 32px; }',
-    '.section-body { padding:14px 32px; }',
-    /* chem table */
-    '.chem-tbl { width:100%; border-collapse:collapse; }',
-    '.chem-tbl th { background:#226683; color:#fff; font-family:Arial,sans-serif; font-size:8.5px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; padding:8px 12px; text-align:left; }',
-    '.chem-tbl th:nth-child(2), .chem-tbl th:nth-child(3) { text-align:center; }',
-    '.rl { padding:7px 12px; font-family:Arial,sans-serif; font-size:10px; color:#334155; border-bottom:1px solid #ede9e3; }',
-    '.rv { padding:7px 12px; font-family:Arial,sans-serif; font-size:10px; font-weight:600; color:#1A405F; text-align:center; border-bottom:1px solid #ede9e3; }',
-    '.chem-tbl tr:nth-child(even) td { background:#f8f5f1; }',
-    '.ideal-note { font-family:Arial,sans-serif; font-size:8px; color:#a09589; font-style:italic; padding:6px 12px 10px; border-bottom:2px solid #D4C9BB; }',
-    /* added */
-    '.added-wrap { display:grid; grid-template-columns:1fr 1fr; gap:28px; }',
-    '.added-title { font-family:Arial,sans-serif; font-size:9px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:#539199; margin-bottom:8px; padding-bottom:5px; border-bottom:1px solid #D4C9BB; }',
-    '.added-tbl { width:100%; border-collapse:collapse; }',
-    '.al { font-family:Arial,sans-serif; font-size:10px; color:#334155; padding:5px 0; border-bottom:1px solid #ede9e3; }',
-    '.av { font-family:Arial,sans-serif; font-size:10px; font-weight:700; color:#1A405F; padding:5px 0; text-align:right; border-bottom:1px solid #ede9e3; }',
-    /* notes */
-    '.notes-box { background:#f8f5f1; border-left:3px solid #D4C9BB; padding:12px 16px; font-family:Arial,sans-serif; font-size:11px; line-height:1.6; color:#334155; min-height:44px; border-radius:0 4px 4px 0; }',
-    /* photos */
-    '.photos-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; padding:14px 32px; }',
-    '.photo-item img { width:100%; aspect-ratio:4/3; object-fit:cover; border-radius:4px; border:1px solid #dbd5cc; }',
-    '.photo-cap { font-family:Arial,sans-serif; font-size:8.5px; text-align:center; color:#a09589; margin-top:4px; letter-spacing:0.08em; text-transform:uppercase; }',
-    /* footer */
-    '.footer { background:#0a1e2e; padding:14px 32px; display:flex; align-items:center; justify-content:space-between; page-break-inside:avoid; margin-top:24px; }',
-    '.footer-logo { width:36px; height:auto; display:block; }',
-    '.footer-brand { color:#D4C9BB; font-family:Georgia,serif; font-size:15px; font-weight:300; letter-spacing:0.32em; text-transform:uppercase; }',
-    '.footer-info { color:rgba(212,201,187,.5); font-family:Arial,sans-serif; font-size:8px; letter-spacing:0.1em; margin-top:3px; }',
-    '.footer-right { text-align:right; color:rgba(212,201,187,.55); font-family:Arial,sans-serif; font-size:8px; letter-spacing:0.06em; line-height:1.8; }',
-  ].join('\n');
-
-  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
-    + '<title>OASIS Service Report \u2014 ' + (cust ? cust.name : '') + '</title>'
-    + '<style>' + css + '</style>'
-    + '</head><body>'
-
-    /* print bar */
-    + '<div class="print-bar no-print">'
-    + '<div class="print-bar-left">OASIS Service Report \u2014 ' + (cust ? cust.name : '') + '</div>'
-    + '<button class="print-btn" onclick="window.print()">Save as PDF \u2193</button>'
-    + '</div>'
-
-    + '<div class="page">'
-
-    /* header */
-    + '<div class="hdr">'
-    + '<div class="hdr-left">'
-    + '<img class="hdr-logo" src="' + logoSrc + '" alt="OASIS">'
-    + '<div class="hdr-brand">Oasis</div>'
-    + '</div>'
-    + '<div class="hdr-right"><div class="hdr-title">Service Report</div><div class="hdr-sub">Luxury Pool &amp; Watershape Design</div></div>'
-    + '</div>'
-    + '<div class="gold-rule"></div>'
-
-    /* job info */
-    + '<div class="job-block"><div class="job-grid">'
-    + '<div><div class="jl">Client</div><div class="jv">' + (cust ? cust.name : '\u2014') + '</div></div>'
-    + '<div><div class="jl">Date</div><div class="jv">' + fmtDate(wo.date) + '</div></div>'
-    + '<div><div class="jl">Address</div><div class="jv">' + (wo.address || '\u2014') + '</div></div>'
-    + '<div><div class="jl">Time In / Out</div><div class="jv">' + (fmtTime(wo.timeIn) || '\u2014') + ' \u2192 ' + (fmtTime(wo.timeOut) || '\u2014') + '</div></div>'
-    + '<div><div class="jl">Technician</div><div class="jv">' + (tech ? tech.name : '\u2014') + '</div></div>'
-    + '<div><div class="jl">Route &amp; Pool Size</div><div class="jv">Route ' + (wo.routeNumber || '\u2014') + (wo.gallons ? ' \u00b7 ' + parseInt(wo.gallons).toLocaleString() + ' gal' : '') + '</div></div>'
-    + '<div><div class="jl">Surface Type</div><div class="jv">' + (wo.surfaceType || '\u2014') + '</div></div>'
-    + '<div><div class="jl">Condition</div><div class="jv">' + (wo.condition || '\u2014') + '</div></div>'
-    + '</div></div>'
-
-    /* chemical readings */
-    + '<div class="section-hd">Chemical Readings</div>'
-    + '<table class="chem-tbl">'
-    + '<thead><tr><th style="width:38%">Parameter</th><th style="width:31%">Pool</th><th style="width:31%">Spa</th></tr></thead>'
-    + '<tbody>'
-    + chemRow('Chlorine', p.chlorine, ' ppm', s.chlorine, 'chlorine')
-    + chemRow('pH', p.pH, '', s.pH, 'pH')
-    + chemRow('Total Alkalinity', p.alk, ' ppm', s.alk, 'alk')
-    + chemRow('CYA / Stabilizer', p.cya, ' ppm', s.cya, 'cya')
-    + chemRow('Calcium Hardness', p.calcium, ' ppm', s.calcium, 'calcium')
-    + chemRow('Salt', p.salt, ' ppm', s.salt, '')
-    + chemRow('Phosphate', p.phosphate, ' ppb', s.phosphate, '')
-    + chemRow('TDS', p.tds, ' ppm', s.tds, '')
-    + '</tbody></table>'
-    + '<div class="ideal-note">\u25cf Ideal: Chlorine 1\u20133 ppm \u00b7 pH 7.2\u20137.6 \u00b7 Alkalinity 80\u2013120 ppm \u00b7 CYA 30\u201350 ppm \u00b7 Calcium 200\u2013400 ppm</div>'
-
-    /* chemicals added */
-    + '<div class="section-hd">Chemicals Added</div>'
-    + '<div class="section-body"><div class="added-wrap">'
-    + '<div><div class="added-title">Pool</div><table class="added-tbl">' + addedParts(p) + '</table></div>'
-    + '<div><div class="added-title">Spa</div><table class="added-tbl">' + addedParts(s) + '</table></div>'
-    + '</div></div>'
-
-    /* notes */
-    + '<div class="section-hd">Service Notes</div>'
-    + '<div class="section-body"><div class="notes-box">' + (wo.notes || '<span style="color:#a09589;font-style:italic">No notes recorded.</span>') + '</div></div>'
-
-    /* photos */
-    + photoHTML
-
-    /* footer */
-    + '<div class="footer">'
-    + '<div style="display:flex;align-items:center;gap:14px">'
-    + '<img class="footer-logo" src="' + logoSrc + '" alt="OASIS">'
-    + '<div><div class="footer-brand">Oasis</div><div class="footer-info">Luxury Pool &amp; Watershape Design, Construction &amp; Maintenance</div></div>'
-    + '</div>'
-    + '<div class="footer-right">Harbour Walk, 2nd Floor \u2014 Grand Cayman, KY1-1001<br>+1 345-945-7665 \u00b7 oasis.ky<br>Generated ' + new Date().toLocaleDateString('en-US',{day:'numeric',month:'long',year:'numeric'}) + '</div>'
-    + '</div>'
-
-    + '</div>'
-    + '<script>window.onload=function(){window.print();};<\/script>'
-    + '</body></html>';
-
-  var w = window.open('', '_blank', 'width=860,height=720');
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
-}
 
 function dataURLtoFile(dataURL,filename){const arr=dataURL.split(','),mime=arr[0].match(/:(.*?);/)[1],bstr=atob(arr[1]),u8=new Uint8Array(bstr.length);for(let i=0;i<bstr.length;i++)u8[i]=bstr.charCodeAt(i);return new File([u8],filename,{type:mime});}
 
