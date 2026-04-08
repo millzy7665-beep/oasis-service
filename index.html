@@ -11,7 +11,9 @@
   <link rel="manifest" href="manifest.json">
   <title>OASIS &mdash; Service</title>
   <link rel="icon" type="image/png" href="https://oasis.ky/wp-content/uploads/2024/08/Site-Icon-Oasis-150x150.png">
-  <link rel="stylesheet" href="styles.css?v=7">
+  <link rel="stylesheet" href="styles.css?v=10">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 
@@ -81,7 +83,7 @@
         </button>
         <button class="nav-item" data-view="logs">
           <span class="nav-icon">&#128203;</span>
-          <span class="nav-label">Chem Sheet</span>
+          <span class="nav-label">Chem Sheets</span>
         </button>
         <button class="nav-item admin-only" style="display:none" data-view="admin">
           <span class="nav-icon">&#9881;</span>
@@ -123,10 +125,18 @@
 
   </div><!-- /app -->
 
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=21"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js')
+      window.__swRefreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function() {
+        if (window.__swRefreshing) return;
+        window.__swRefreshing = true;
+        window.location.reload();
+      });
+
+      navigator.serviceWorker.register('sw.js')
+        .then(function(reg){ return reg.update(); })
         .catch(function(e){ console.warn('SW registration failed:', e); });
     }
   </script>

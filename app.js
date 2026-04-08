@@ -1,7 +1,7 @@
 'use strict';
 
 /* ── Version / localStorage reset ─────────────────────────────── */
-const APP_VERSION = 'v6-oasis-2026';
+const APP_VERSION = 'v9-oasis-2026-secure';
 (function() {
   if (localStorage.getItem('psp_version') !== APP_VERSION) {
     ['psp_customers','psp_technicians','psp_routes','psp_workOrders','psp_session'].forEach(k => localStorage.removeItem(k));
@@ -251,132 +251,179 @@ function viewPhoto(key) {
 function photoPlaceholder(key){const l=key==='before'?'+ Before':key==='after'?'+ After':'+ Photo';return `<label class="photo-add-btn" for="photo-input-${key}">${l}</label>`;}
 function photoSlot(key,label){const d=WO_PHOTOS[key];return`<div class="photo-slot"><div class="photo-slot-lbl">${label}</div><div class="photo-preview-box" id="photo-preview-${key}">${d?`<img src="${d}" class="photo-thumb" onclick="viewPhoto('${key}')"><button class="photo-remove" onclick="removePhoto('${key}')">&times;</button>`:photoPlaceholder(key)}</div><input type="file" accept="image/*" capture="environment" id="photo-input-${key}" class="photo-file-inp" onchange="handlePhotoUpload('${key}',this)"></div>`;}
 
-/* ── SEND REPORT ───────────────────────────────────────────────── */
-const REPORT_EMAIL='chris@oasis.ky';
-function sendReport(id) {
-  const wo = DB.getWorkOrder(id); if (!wo) return;
+/* ── PDF DOWNLOAD ────────────────────────────────────────────── */
+function presentPDFBlob(blob, fileName) {
+  const blobUrl = URL.createObjectURL(blob);
+
+  try {
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = fileName;
+    link.rel = 'noopener';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    showToast('📄 Saving PDF to device');
+
+    setTimeout(() => {
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    }, 1500);
+    return;
+  } catch (err) {
+    console.warn('Direct PDF download fallback:', err);
+  }
+
+  window.open(blobUrl, '_blank', 'noopener');
+  showToast('📄 PDF opened — use the browser save button');
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+}
+
+function savePDFReport(id) {
+  const wo = DB.getWorkOrder(id);
+  if (!wo) {
+    showToast('Save this chem sheet first');
+    return;
+  }
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+    showToast('PDF library not loaded');
+    return;
+  }
+
   const cust = DB.getCustomer(wo.customerId);
   const tech = DB.getTechnician(wo.technicianId);
   const p = wo.pool || {}, s = wo.spa || {};
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
-  // Box layout — all lines exactly 46 chars: 1(border) + 44(inner) + 1(border)
-  const IW    = 44;
-  const LINE  = '\u2500'.repeat(IW);   // ─ × 44
-  const DLINE = '\u2550'.repeat(IW);   // ═ × 44
-
-  // Value with unit, or em-dash for empty
-  const fv = (val, unit) => (val && String(val).trim()) ? String(val) + (unit||'') : '\u2014';
-
-  // Double-border content row  ║ space text(43) ║  = 46
-  const hrow = (text) => '\u2551 ' + String(text).slice(0, IW-1).padEnd(IW-1) + '\u2551';
-
-  // Single-border content row  │ space text(43) │  = 46
-  const row  = (text) => '\u2502 ' + String(text).slice(0, IW-1).padEnd(IW-1) + '\u2502';
-
-  // Key-value row: label(14) fills with value
-  const kv = (label, val) => {
-    const inner = (' ' + label).padEnd(14) + String(val == null ? '\u2014' : val);
-    return '\u2502 ' + inner.slice(0, IW-1).padEnd(IW-1) + '\u2502';
-  };
-
-  // Chemical reading row: │ label(14) pool(15) spa(15) │  = 46
-  const chemRow = (lbl, pv, pu, sv) => {
-    const label = (' ' + lbl).padEnd(14).slice(0, 14);
-    const pool  = fv(pv, pu).padEnd(15).slice(0, 15);
-    const spa   = fv(sv, pu).padEnd(15).slice(0, 15);
-    return '\u2502' + label + pool + spa + '\u2502';
-  };
-
-  // Bulleted list of chemicals added, each line boxed
-  const addedRows = (o) => {
+  const safe = (val, unit = '') => (val && String(val).trim()) ? `${val}${unit}` : '—';
+  const addeds = (o) => {
     const items = [];
-    if (o.tabs)        items.push('  \u2022 Tabs              ' + o.tabs + ' ea');
-    if (o.hypo)        items.push('  \u2022 Hypo-Chlorite     ' + o.hypo + ' lbs');
-    if (o.acid)        items.push('  \u2022 Acid              ' + o.acid + ' gal');
-    if (o.sodaAsh)     items.push('  \u2022 Soda Ash          ' + o.sodaAsh + ' lbs');
-    if (o.bicarb)      items.push('  \u2022 Na Bicarbonate    ' + o.bicarb + ' lbs');
-    if (o.conditioner) items.push('  \u2022 Conditioner       ' + o.conditioner + ' lbs');
-    if (o.bromine)     items.push('  \u2022 Bromine           ' + o.bromine + ' ea');
-    if (o.phosphateOz) items.push('  \u2022 Phosphate Remover ' + o.phosphateOz + ' oz');
-    if (o.saltBag)     items.push('  \u2022 Salt              ' + o.saltBag + ' bag');
-    if (o.algaecide)   items.push('  \u2022 Algaecide         ' + o.algaecide + ' oz');
-    if (o.clarifier)   items.push('  \u2022 Clarifier         ' + o.clarifier + ' oz');
-    const src = items.length ? items : ['  None added'];
-    return src.map(l => '\u2502 ' + l.slice(0, IW-1).padEnd(IW-1) + '\u2502').join('\n');
+    if (o.tabs) items.push(`Tabs: ${o.tabs} ea`);
+    if (o.hypo) items.push(`Hypo-Chlorite: ${o.hypo} lbs`);
+    if (o.acid) items.push(`Acid: ${o.acid} gal`);
+    if (o.sodaAsh) items.push(`Soda Ash: ${o.sodaAsh} lbs`);
+    if (o.bicarb) items.push(`Na Bicarbonate: ${o.bicarb} lbs`);
+    if (o.conditioner) items.push(`Conditioner: ${o.conditioner} lbs`);
+    if (o.bromine) items.push(`Bromine: ${o.bromine} ea`);
+    if (o.phosphateOz) items.push(`Phosphate Remover: ${o.phosphateOz} oz`);
+    if (o.saltBag) items.push(`Salt: ${o.saltBag} bag`);
+    if (o.algaecide) items.push(`Algaecide: ${o.algaecide} oz`);
+    if (o.clarifier) items.push(`Clarifier: ${o.clarifier} oz`);
+    return items.length ? items : ['None added'];
   };
 
-  const body = [
-    '',
-    '\u2554' + DLINE + '\u2557',
-    hrow(' O A S I S  \u2014  S E R V I C E  R E P O R T'),
-    hrow(' Luxury Pool & Watershape Design'),
-    '\u255a' + DLINE + '\u255d',
-    '',
-    '\u250c' + LINE + '\u2510',
-    row('  JOB INFORMATION'),
-    '\u251c' + LINE + '\u2524',
-    kv('Technician', tech ? tech.name : '\u2014'),
-    kv('Route',      wo.routeNumber || '\u2014'),
-    kv('Client',     cust ? cust.name : '\u2014'),
-    kv('Address',    wo.address || '\u2014'),
-    kv('Date',       fmtDate(wo.date)),
-    kv('Time',       (fmtTime(wo.timeIn)||'\u2014') + ' \u2192 ' + (fmtTime(wo.timeOut)||'\u2014')),
-    kv('Condition',  wo.condition || '\u2014'),
-    kv('Pool Size',  wo.gallons ? parseInt(wo.gallons).toLocaleString() + ' gal' : '\u2014'),
-    '\u2514' + LINE + '\u2518',
-    '',
-    '\u250c' + LINE + '\u2510',
-    row('  CHEMICAL READINGS'),
-    '\u251c' + LINE + '\u2524',
-    '\u2502' + ' Parameter    '.padEnd(14) + 'Pool'.padEnd(15) + 'Spa'.padEnd(15) + '\u2502',
-    '\u251c' + LINE + '\u2524',
-    chemRow('Chlorine',   p.chlorine,  ' ppm', s.chlorine),
-    chemRow('pH',         p.pH,        '',     s.pH),
-    chemRow('Alkalinity', p.alk,       ' ppm', s.alk),
-    chemRow('CYA',        p.cya,       ' ppm', s.cya),
-    chemRow('Calcium',    p.calcium,   ' ppm', s.calcium),
-    chemRow('Salt',       p.salt,      ' ppm', s.salt),
-    chemRow('Phosphate',  p.phosphate, ' ppb', s.phosphate),
-    chemRow('TDS',        p.tds,       ' ppm', s.tds),
-    '\u2514' + LINE + '\u2518',
-    '  Ideal: Cl 1\u20133 ppm \u00b7 pH 7.2\u20137.6 \u00b7 Alk 80\u2013120 \u00b7 CYA 30\u201350 \u00b7 Ca 200\u2013400 ppm',
-    '',
-    '\u250c' + LINE + '\u2510',
-    row('  CHEMICALS ADDED'),
-    '\u251c' + LINE + '\u2524',
-    row('  POOL'),
-    '\u251c' + LINE + '\u2524',
-    addedRows(p),
-    '\u251c' + LINE + '\u2524',
-    row('  SPA'),
-    '\u251c' + LINE + '\u2524',
-    addedRows(s),
-    '\u2514' + LINE + '\u2518',
-    '',
-    '\u250c' + LINE + '\u2510',
-    row('  SERVICE NOTES'),
-    '\u251c' + LINE + '\u2524',
-    '\u2502 ' + (wo.notes || 'None').slice(0, IW-1).padEnd(IW-1) + '\u2502',
-    '\u2514' + LINE + '\u2518',
-    '',
-    '\u2550'.repeat(IW + 2),
-    '  Sent via OASIS Service App  \u00b7  oasis.ky',
-    '\u2550'.repeat(IW + 2),
-    '',
-  ].join('\n');
+  doc.setFillColor(10, 30, 46);
+  doc.rect(0, 0, 210, 28, 'F');
+  doc.setTextColor(212, 201, 187);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(22);
+  doc.text('OASIS', 15, 13);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.text('LUXURY POOL & WATERSHAPE SERVICE', 15, 20);
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(10);
+  doc.text('CHEM SHEET REPORT', 195, 13, { align: 'right' });
+  doc.text(fmtDate(wo.date), 195, 20, { align: 'right' });
 
+  let y = 38;
+  const nextLine = (step = 6) => {
+    y += step;
+    if (y > 270) {
+      doc.addPage();
+      y = 20;
+    }
+  };
+  const writeSection = (title) => {
+    if (y > 255) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.setTextColor(26, 64, 95);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(title, 15, y);
+    nextLine(7);
+  };
+  const writeDetail = (label, value, x = 15, valueX = 55) => {
+    doc.setTextColor(80, 80, 80);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text(`${label}:`, x, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(String(value || '—'), valueX, y);
+    nextLine();
+  };
 
-  const subject = encodeURIComponent(
-    'OASIS Service Report \u2014 ' + (cust ? cust.name : 'Client') + ' \u2014 ' + fmtDate(wo.date)
-  );
+  writeSection('JOB INFORMATION');
+  writeDetail('Client', cust ? cust.name : '—');
+  writeDetail('Address', wo.address || '—');
+  writeDetail('Technician', tech ? tech.name : '—');
+  writeDetail('Route', wo.routeNumber || '—');
+  writeDetail('Time', `${fmtTime(wo.timeIn) || '—'} → ${fmtTime(wo.timeOut) || '—'}`);
+  writeDetail('Condition', wo.condition || '—');
+  writeDetail('Pool Size', wo.gallons ? `${parseInt(wo.gallons).toLocaleString()} gal` : '—');
 
-  /* Fire email immediately */
-  window.location.href = 'mailto:' + REPORT_EMAIL + '?subject=' + subject + '&body=' + encodeURIComponent(body);
+  writeSection('CHEMICAL READINGS');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('Parameter', 15, y);
+  doc.text('Pool', 95, y);
+  doc.text('Spa', 145, y);
+  nextLine(6);
 
-  /* Open branded report in background for records */
-  setTimeout(() => openBrandedReport(wo), 600);
+  [
+    ['Chlorine', safe(p.chlorine, ' ppm'), safe(s.chlorine, ' ppm')],
+    ['pH', safe(p.pH), safe(s.pH)],
+    ['Alkalinity', safe(p.alk, ' ppm'), safe(s.alk, ' ppm')],
+    ['CYA', safe(p.cya, ' ppm'), safe(s.cya, ' ppm')],
+    ['Calcium', safe(p.calcium, ' ppm'), safe(s.calcium, ' ppm')],
+    ['Salt', safe(p.salt, ' ppm'), safe(s.salt, ' ppm')],
+    ['Phosphate', safe(p.phosphate, ' ppb'), safe(s.phosphate, ' ppb')],
+    ['TDS', safe(p.tds, ' ppm'), safe(s.tds, ' ppm')]
+  ].forEach(row => {
+    doc.setFont('helvetica', 'bold');
+    doc.text(row[0], 15, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(String(row[1]), 95, y);
+    doc.text(String(row[2]), 145, y);
+    nextLine();
+  });
 
-  showToast('\u2709\ufe0f Sending to chris@oasis.ky\u2026');
+  writeSection('CHEMICALS ADDED — POOL');
+  addeds(p).forEach(item => {
+    doc.setTextColor(80, 80, 80);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(`• ${item}`, 18, y);
+    nextLine();
+  });
+
+  writeSection('CHEMICALS ADDED — SPA');
+  addeds(s).forEach(item => {
+    doc.setTextColor(80, 80, 80);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(`• ${item}`, 18, y);
+    nextLine();
+  });
+
+  writeSection('SERVICE NOTES');
+  doc.setTextColor(80, 80, 80);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  const noteLines = doc.splitTextToSize(wo.notes || 'No notes recorded.', 175);
+  doc.text(noteLines, 15, y);
+  y += noteLines.length * 5 + 6;
+
+  const fileName = `OASIS_${(cust ? cust.name : 'Client').replace(/[^a-z0-9]+/gi, '-')}_${wo.date || todayStr()}.pdf`;
+  const pdfBlob = doc.output('blob');
+  presentPDFBlob(pdfBlob, fileName);
+}
+
+function sendReport(id) {
+  savePDFReport(id);
 }
 
 function openBrandedReport(wo) {
@@ -681,7 +728,7 @@ function renderWorkOrderList(){
         </div>
         <div class="job-card-footer">
           <button class="btn btn-sm btn-primary" onclick="woState={view:'form',id:'${esc(wo.id)}'};App.render()">📋 Open</button>
-          <button class="btn btn-sm" style="background:var(--navy);color:var(--champagne)" onclick="sendReport('${esc(wo.id)}')">📧 Send</button>
+          <button class="btn btn-sm btn-secondary" onclick="savePDFReport('${esc(wo.id)}')">📄 Save PDF</button>
           <button class="btn btn-sm btn-secondary" style="color:var(--danger)" onclick="deleteWO('${esc(wo.id)}')">🗑️</button>
         </div>
       </div>`;}).join('');
@@ -695,7 +742,7 @@ function renderWorkOrderForm(id){
   const p=wo.pool||{},s=wo.spa||{},custId=wo.customerId||'',today=todayStr();
   const tech=DB.getTechnician(Auth.techId);
   return`<div class="wo-form">
-  <div class="wo-bar"><button class="btn btn-secondary btn-sm" onclick="woState={view:'list'};App.render()">← Back</button><span class="wo-bar-title">${id?'Edit Chem Sheet':'New Chem Sheet'}</span><button class="btn btn-primary btn-sm" onclick="saveWorkOrder(${id?`'${esc(id)}'`:'null'})">💾 Save</button></div>
+  <div class="wo-bar"><button class="btn btn-secondary btn-sm" onclick="woState={view:'list'};App.render()">← Back</button><span class="wo-bar-title">${id?'Edit Chem Sheet':'New Chem Sheet'}</span><div style="display:flex;gap:8px">${id?`<button class="btn btn-secondary btn-sm" onclick="savePDFReport('${esc(id)}')">📄 Save PDF</button>`:''}<button class="btn btn-primary btn-sm" onclick="saveWorkOrder(${id?`'${esc(id)}'`:'null'})">💾 Save</button></div></div>
   <div class="wo-sec"><div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>📋  Job Info</span><span class="wo-chev">▼</span></div>
   <div class="wo-sec-bd">
     <div class="form-row">

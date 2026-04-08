@@ -1,0 +1,661 @@
+{
+	"folders": [
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/AppTranslocation"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/assessmentagent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/AudioComponentRegistrar"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/AudioConverterService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/betaenrollmentagent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlackPearl.mlmodelc"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlackPearlSender.mlmodelc"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlackPearlTS.mlmodelc"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlobRegistryFiles-bhjXHYxe"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlobRegistryFiles-ctbJeuZA"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlobRegistryFiles-MjZXFMGU"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlobRegistryFiles-NmBPjJMo"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlobRegistryFiles-PU5trIvE"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlobRegistryFiles-QtEItcFN"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/BlobRegistryFiles-ZPyqJPaN"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/chrismills-code-zsh"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/codex-ipc"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.accessibility.mediaaccessibilityd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.adprivacyd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.akd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.amp.mediasharingd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.amsaccountsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.amsengagementd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.amsondevicestoraged"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.AMSUIPaymentViewService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.analyticsagent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ap.adprivacyd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ap.promotedcontentd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ap.PromotedContentJetService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.appleaccountd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.appplaceholdersync"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.AppSSOAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.appstoreagent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.appstorecomponentsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.AUHelperService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.AuthenticationServices.ASConfigurationSubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.avatarsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.AvatarUI.AvatarPickerMemojiPicker"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.avconferenced"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.backgroundassets.managed.helper.service"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.BiomeAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.biomesyncd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.bird"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.bluetoothuserd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.businessservicesd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.calaccessd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.chrono"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ciphermld"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.cloudd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.CloudDocs.iCloudDriveFileProvider"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.CloudDocsDaemon.container-metadata-extractor"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.cloudkit.upload-request.cache"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.communicationtrustd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.CoreGraphics.CGPDFService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.corespeechd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.dataaccess"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.desktopservices.ArchiveService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.devicecheckd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.dmd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.donotdisturbd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.DPSubmissionService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.email.maild"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.FaceTime.FTConversationService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.familycircled"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.FeatureAccessAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.fileproviderd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.financed"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.findmy.findmylocateagent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.frauddefensed"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.fskit.fskit_agent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.GameController.gamecontrolleragentd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.GamePolicyAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.GenerativeFunctions.generativeexperiencesd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.geoanalyticsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.homeenergyd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.homeeventsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.icloud.searchpartyuseragent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.iCloudNotificationAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.icloudwebd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.iconservicesagent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.identityservicesd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ImageIOXPCService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.imagent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.imdpersistence.IMDPersistenceAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.imtransferservices.IMTransferAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.inputanalyticsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.intelligenceflow.intelligencecontextd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.intelligenceflow.intelligenceflowd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.intelligenceplatform.IntelligencePlatformComputeService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.intelligenceplatformd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.intelligencetasksd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.intelligentroutingd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.jetpackassetd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.keychainsharingmessagingd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.knowledgeconstructiond"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.linkd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.lockdownmoded"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.managedappdistributionagent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ManagedSettings"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ManagedSettingsAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.Maps.mapssyncd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.milod"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.MTLCompilerService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.naturallanguaged"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.nsurlsessiond"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.parsec-fbf"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.parsecd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.passd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.pluginkit"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.printtool.agent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.privatecloudcomputed"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.proactiveeventtrackerd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.progressd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ProtectedCloudKeySyncing"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.quicklook.qlmanage"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.quicklook.quicklookd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.quicklook.satellite.general"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.quicklook.ThumbnailsAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remindd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remotemanagement.AccountSubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remotemanagement.InteractiveLegacyProfilesSubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remotemanagement.LegacyProfilesSubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remotemanagement.ManagedAppsSubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remotemanagement.ManagedSettingsSubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remotemanagement.ManagementTestSubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remotemanagement.PasscodeSettingsSubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remotemanagement.ScreenSharingSubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.remotemanagement.SecuritySubscriber"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.RemoteManagementAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.replayd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.replicatord"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.SafariLaunchAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ScopedBookmarkAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.secureelementservice"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.securityuploadd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.SetStoreUpdateService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.sessionkit"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.sharingd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.shazamd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.siri-distributed-evaluation"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.siri.SuggestionsBookkeepingService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.siriactionsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.siriinferenced"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.sirittsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.sociallayerd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.speech.localspeechrecognition"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.stickersd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.StorageManagement.Service"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.storekit"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.StreamingUnzipService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.studentd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.syncdefaultsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.systempreferences.SpotlightIndexExtension"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.tccd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.TelephonyUtilities"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.textunderstandingd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.ThreadCommissionerService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.tipsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.translationd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.transparencyd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.trial.TrialArchivingService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.triald"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.trustd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.TrustedPeersHelper"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.useractivityd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.usernotificationsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.weatherd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.WebKit.GPU"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.WebKit.Networking"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.WebKit.WebContent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.WindowManager"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.apple.WorkflowKit.BackgroundShortcutRunner"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.openai.chat"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/com.google.Chrome.55CSPm"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/contentlinkingd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/CrashHandlerService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/CSExattrCryptoService"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/diagnosticextensionsd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/duetexpertd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/gamed"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/heard"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/homed"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/hsperfdata_chrismills"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/icdd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/itunescloudd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-03nssQ"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-4VYXw6"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-8koxhi"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-bbalvt"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-cHx8Z6"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-D5qgSa"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-d8HtS3"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-GiVEgk"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-gPjOUc"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-j9BQZk"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-kAD3cY"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-KXUR2Y"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-LEpEt7"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-nS1n8o"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-q5Jeon"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-UFNVZo"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-VJpwr5"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-wGG33R"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-x9oED4"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mcp-zNvTqV"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mediaanalysisd-access"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/metrickitd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/mobiletimerd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/node-compile-cache"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/proactived"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/ptpcamerad"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/python-languageserver-cancellation"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/recordings"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/SandboxHelper"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/StatusKitAgent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/studentd"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/talagent"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/TemporaryItems"
+		},
+		{
+			"path": "../../../private/var/folders/_7/l1w7ytvs47sf484tr9dl_m400000gn/T/vscode-typescript501"
+		}
+	]
+}
