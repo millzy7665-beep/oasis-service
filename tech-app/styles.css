@@ -1,0 +1,11 @@
+@import url('../styles.css?v=10');
+
+.bottom-nav {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.wo-hint code {
+  background: rgba(10, 30, 46, 0.08);
+  padding: 2px 6px;
+  border-radius: 6px;
+}

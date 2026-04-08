@@ -1,11 +1,17 @@
 'use strict';
 
 /* ── Version / localStorage reset ─────────────────────────────── */
-const APP_VERSION = 'v14-oasis-2026-workbook-tech-orders';
+const APP_MODE = window.APP_MODE || 'pool';
+const STORAGE_PREFIX = window.APP_STORAGE_PREFIX || 'psp_';
+const STORAGE_VERSION_KEY = `${STORAGE_PREFIX}version`;
+const SESSION_KEY = `${STORAGE_PREFIX}session`;
+const APP_VERSION = APP_MODE === 'tech'
+  ? 'v15-oasis-2026-tech-separate'
+  : 'v15-oasis-2026-pool-separate';
 (function() {
-  const storedVersion = localStorage.getItem('psp_version');
+  const storedVersion = localStorage.getItem(STORAGE_VERSION_KEY);
   if (!storedVersion || storedVersion !== APP_VERSION) {
-    localStorage.setItem('psp_version', APP_VERSION);
+    localStorage.setItem(STORAGE_VERSION_KEY, APP_VERSION);
   }
 })();
 
@@ -13,23 +19,23 @@ const APP_VERSION = 'v14-oasis-2026-workbook-tech-orders';
 const Auth = {
   current: null,
   load() {
-    try { this.current = JSON.parse(sessionStorage.getItem('psp_session')) || null; } catch { this.current = null; }
+    try { this.current = JSON.parse(sessionStorage.getItem(SESSION_KEY)) || null; } catch { this.current = null; }
   },
   signIn(techId) {
     const t = DB.getTechnician(techId);
     if (!t) return false;
     this.current = { techId, name: t.name, isAdmin: !!t.isAdmin };
-    sessionStorage.setItem('psp_session', JSON.stringify(this.current));
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(this.current));
     return true;
   },
-  signOut() { this.current = null; sessionStorage.removeItem('psp_session'); },
+  signOut() { this.current = null; sessionStorage.removeItem(SESSION_KEY); },
   get isAdmin() { return !!(this.current && this.current.isAdmin); },
   get techId()  { return this.current ? this.current.techId : null; },
 };
 
 /* ── DATABASE ──────────────────────────────────────────────────── */
 const DB = {
-  _key: k => `psp_${k}`,
+  _key: k => `${STORAGE_PREFIX}${k}`,
   load() {
     this.customers   = this._get('customers');
     this.technicians = this._get('technicians');
@@ -240,7 +246,11 @@ function showAppShell() {
   const tech = DB.getTechnician(Auth.techId);
   const routeNum = DB.routes.find(r=>r.technicianId===Auth.techId)?.routeNumber || '';
   const sub = document.querySelector('.header-sub');
-  if (sub) sub.textContent = (tech ? tech.name : '') + (routeNum ? ' \u00b7 Route ' + routeNum : '');
+  if (sub) {
+    sub.textContent = APP_MODE === 'tech'
+      ? ((tech ? tech.name : 'Technician') + ' · Work Orders')
+      : ((tech ? tech.name : '') + (routeNum ? ' · Route ' + routeNum : ''));
+  }
 
   App.render();
 }
@@ -759,23 +769,60 @@ function updateDosingCalc(){const g=document.getElementById('wo-gallons')?.value
 
 /* DASHBOARD */
 function renderDashboard() {
-  const techId=Auth.techId,today=todayStr(),dow=todayDOW();
-  const todayStops=getTodaysStops(techId);
-  const h=new Date().getHours(),greet=h<12?'Good Morning':h<17?'Good Afternoon':'Good Evening';
-  const done=todayStops.filter(s=>{const wo=getStopWO(s.id,today);return wo&&wo.status==='completed';}).length;
-  const myWOs=DB.workOrders.filter(w=>w.technicianId===techId).length;
-  const tech=DB.getTechnician(techId);
+  const techId = Auth.techId, today = todayStr(), dow = todayDOW();
+  const h = new Date().getHours(), greet = h < 12 ? 'Good Morning' : h < 17 ? 'Good Afternoon' : 'Good Evening';
 
-  const stopsHTML=todayStops.length===0
-    ?`<p style="padding:16px;color:var(--gray-400);text-align:center;font-size:13px">${DAY_NAMES[dow]} is not a scheduled service day.</p>`
-    :todayStops.map(s=>{const cust=DB.getCustomer(s.customerId);const wo=getStopWO(s.id,today);const st=wo?wo.status:'pending';
-      return`<div class="schedule-item" onclick="Router.navigate('route')" style="cursor:pointer">
-        <div class="schedule-dot ${st}"></div>
-        <div style="min-width:24px;font-size:13px;font-weight:700;color:var(--champagne-dk)">${s.stopOrder}</div>
-        <div class="schedule-info"><div class="schedule-name">${esc(cust?cust.name:'Unknown')}</div><div class="schedule-detail">${esc(s.serviceType)}</div></div>
-        ${statusBadge(st)}</div>`;}).join('');
+  if (APP_MODE === 'tech') {
+    const myOrders = DB.techOrders.filter(o => o.technicianId === techId);
+    const openCount = myOrders.filter(o => (o.status || 'Open') !== 'Completed').length;
+    const doneToday = myOrders.filter(o => o.date === today && o.status === 'Completed').length;
+    const recentHTML = myOrders.length === 0
+      ? `<p style="padding:16px;color:var(--gray-400);text-align:center;font-size:13px">No technician work orders created yet.</p>`
+      : myOrders.sort((a,b)=>(b.date+(b.timeIn||'')).localeCompare(a.date+(a.timeIn||''))).slice(0,5).map(order => {
+          const cust = DB.getCustomer(order.customerId);
+          return `<div class="schedule-item" onclick="techOrderState={view:'form',id:'${esc(order.id)}'};Router.navigate('tech-orders')" style="cursor:pointer">
+            <div class="schedule-dot ${(order.status === 'Completed') ? 'completed' : (order.status === 'In Progress' ? 'in-progress' : 'pending')}"></div>
+            <div class="schedule-info"><div class="schedule-name">${esc(cust ? cust.name : 'Unknown')}</div><div class="schedule-detail">${esc(order.workType || 'Repair')} · ${esc(order.orderNumber || '')}</div></div>
+            ${techOrderBadge(order.status || 'Open')}
+          </div>`;
+        }).join('');
 
-  return`<div class="wave-banner">
+    return `<div class="wave-banner">
+      <div class="wave-banner-eyebrow">OASIS Technician Work Orders</div>
+      <div class="wave-banner-title">${esc(greet)}</div>
+      <div class="wave-banner-sub">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+    </div>
+    <div class="stats-grid" style="margin-top:20px">
+      <div class="stat-card primary"><div class="stat-icon">🛠️</div><div class="stat-value">${myOrders.length}</div><div class="stat-label">My Work Orders</div></div>
+      <div class="stat-card primary"><div class="stat-icon">✅</div><div class="stat-value">${doneToday}</div><div class="stat-label">Done Today</div></div>
+      <div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value" style="color:var(--warning)">${openCount}</div><div class="stat-label">Open</div></div>
+      <div class="stat-card"><div class="stat-icon">👥</div><div class="stat-value" style="color:var(--teal)">${DB.customers.length}</div><div class="stat-label">Clients</div></div>
+    </div>
+    <div class="section-header"><span class="section-title">Recent Work Orders</span><button class="btn btn-sm btn-primary" onclick="Router.navigate('tech-orders')">Open All</button></div>
+    <div class="card">${recentHTML}</div>
+    <div class="section-header"><span class="section-title">Quick Actions</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 16px 16px">
+      <button class="btn btn-primary" style="justify-content:center" onclick="techOrderState={view:'form',id:null};Router.navigate('tech-orders')">🛠️ New Work Order</button>
+      <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('tech-orders')">📄 My Work Orders</button>
+      <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('customers')">👥 Clients</button>
+      <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('admin')">⚙️ Admin</button>
+    </div>`;
+  }
+
+  const todayStops = getTodaysStops(techId);
+  const done = todayStops.filter(s => { const wo = getStopWO(s.id, today); return wo && wo.status === 'completed'; }).length;
+  const myWOs = DB.workOrders.filter(w => w.technicianId === techId).length;
+  const stopsHTML = todayStops.length === 0
+    ? `<p style="padding:16px;color:var(--gray-400);text-align:center;font-size:13px">${DAY_NAMES[dow]} is not a scheduled service day.</p>`
+    : todayStops.map(s => { const cust = DB.getCustomer(s.customerId); const wo = getStopWO(s.id, today); const st = wo ? wo.status : 'pending';
+        return `<div class="schedule-item" onclick="Router.navigate('route')" style="cursor:pointer">
+          <div class="schedule-dot ${st}"></div>
+          <div style="min-width:24px;font-size:13px;font-weight:700;color:var(--champagne-dk)">${s.stopOrder}</div>
+          <div class="schedule-info"><div class="schedule-name">${esc(cust ? cust.name : 'Unknown')}</div><div class="schedule-detail">${esc(s.serviceType)}</div></div>
+          ${statusBadge(st)}</div>`;
+      }).join('');
+
+  return `<div class="wave-banner">
     <div class="wave-banner-eyebrow">Luxury Pool &amp; Watershape Service</div>
     <div class="wave-banner-title">${esc(greet)}</div>
     <div class="wave-banner-sub">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
@@ -783,7 +830,7 @@ function renderDashboard() {
   <div class="stats-grid" style="margin-top:20px">
     <div class="stat-card primary"><div class="stat-icon">📍</div><div class="stat-value">${todayStops.length}</div><div class="stat-label">Stops Today</div></div>
     <div class="stat-card primary"><div class="stat-icon">✅</div><div class="stat-value">${done}</div><div class="stat-label">Completed</div></div>
-    <div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value" style="color:var(--warning)">${todayStops.length-done}</div><div class="stat-label">Remaining</div></div>
+    <div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value" style="color:var(--warning)">${todayStops.length - done}</div><div class="stat-label">Remaining</div></div>
     <div class="stat-card"><div class="stat-icon">📋</div><div class="stat-value" style="color:var(--teal)">${myWOs}</div><div class="stat-label">My Chem Sheets</div></div>
   </div>
   <div class="section-header"><span class="section-title">Today — ${DAY_SHORT[dow]}</span><button class="btn btn-sm btn-primary" onclick="Router.navigate('route')">Full Route</button></div>
@@ -793,7 +840,7 @@ function renderDashboard() {
     <button class="btn btn-primary" style="justify-content:center" onclick="Router.navigate('route')">📍 My Route</button>
     <button class="btn btn-secondary" style="justify-content:center" onclick="woState={view:'form',id:null};Router.navigate('logs')">📋 New Chem Sheet</button>
     <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('customers')">👥 Clients</button>
-    <button class="btn btn-secondary" style="justify-content:center" onclick="techOrderState={view:'form',id:null};Router.navigate('tech-orders')">🛠️ Tech WOs</button>
+    <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('logs')">📄 My Sheets</button>
   </div>`;
 }
 

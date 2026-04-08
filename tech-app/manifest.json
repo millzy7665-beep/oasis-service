@@ -1,0 +1,26 @@
+{
+  "name": "OASIS Technician Work Orders",
+  "short_name": "OASIS Tech",
+  "description": "Separate technician work order app for OASIS",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a1e2e",
+  "theme_color": "#0a1e2e",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "../icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "../icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

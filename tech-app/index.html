@@ -6,31 +6,29 @@
   <meta name="theme-color" content="#0a1e2e">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="OASIS Service">
-  <link rel="apple-touch-icon" href="icon-180.png">
+  <meta name="apple-mobile-web-app-title" content="OASIS Tech">
+  <link rel="apple-touch-icon" href="../icon-180.png">
   <link rel="manifest" href="manifest.json">
-  <title>OASIS &mdash; Service</title>
+  <title>OASIS — Technician Work Orders</title>
   <link rel="icon" type="image/png" href="https://oasis.ky/wp-content/uploads/2024/08/Site-Icon-Oasis-150x150.png">
-  <link rel="stylesheet" href="styles.css?v=10">
+  <link rel="stylesheet" href="styles.css?v=1">
+  <script>
+    window.APP_MODE = 'tech';
+    window.APP_STORAGE_PREFIX = 'twp_';
+  </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
-
-  <!-- ═══════════════════════════════════════════════════════
-       LOGIN SCREEN — outside #app so position:fixed is full-viewport
-       ═══════════════════════════════════════════════════════ -->
   <div id="login-screen" class="lsn">
-    <img class="lsn-logo"
-      src="https://oasis.ky/wp-content/uploads/2024/08/Oasis_Logo_Icon_White-300x267.png"
-      alt="OASIS">
+    <img class="lsn-logo" src="https://oasis.ky/wp-content/uploads/2024/08/Oasis_Logo_Icon_White-300x267.png" alt="OASIS">
     <div class="lsn-brand">OASIS</div>
-    <div class="lsn-tag">Luxury Pool &amp; Watershape Service</div>
+    <div class="lsn-tag">Technician Work Orders</div>
 
     <div class="lsn-form">
       <label class="lsn-lbl">Select Your Name</label>
       <select id="login-tech" class="lsn-fld" onchange="document.getElementById('login-error').style.display='none'">
-        <option value="">&#8212; Select your name &#8212;</option>
+        <option value="">— Select your name —</option>
         <option value="t1">Ace</option>
         <option value="t2">Ariel</option>
         <option value="t3">Donald</option>
@@ -47,19 +45,12 @@
     </div>
   </div>
 
-  <!-- ═══════════════════════════════════════════════════════
-       MAIN APP
-       ═══════════════════════════════════════════════════════ -->
   <div id="app" style="display:none">
-
     <div id="app-shell">
-
       <header class="app-header">
         <div class="header-left">
-          <img class="header-logo-icon"
-            src="https://oasis.ky/wp-content/uploads/2024/08/Oasis_Logo_Icon_White-300x267.png"
-            alt="OASIS">
-          <div class="header-sub">Elevate Your Outdoor Living Space</div>
+          <img class="header-logo-icon" src="https://oasis.ky/wp-content/uploads/2024/08/Oasis_Logo_Icon_White-300x267.png" alt="OASIS">
+          <div class="header-sub">Technician Work Orders</div>
         </div>
         <div id="header-actions" class="header-actions">
           <button class="signout-btn" onclick="signOut()">Sign Out</button>
@@ -70,30 +61,24 @@
 
       <nav class="bottom-nav">
         <button class="nav-item active" data-view="dashboard">
-          <span class="nav-icon">&#9961;</span>
+          <span class="nav-icon">⌂</span>
           <span class="nav-label">Home</span>
         </button>
-        <button class="nav-item" data-view="route">
-          <span class="nav-icon">&#128205;</span>
-          <span class="nav-label">My Route</span>
+        <button class="nav-item" data-view="tech-orders">
+          <span class="nav-icon">🛠️</span>
+          <span class="nav-label">Work Orders</span>
         </button>
         <button class="nav-item" data-view="customers">
-          <span class="nav-icon">&#128101;</span>
+          <span class="nav-icon">👥</span>
           <span class="nav-label">Clients</span>
         </button>
-        <button class="nav-item" data-view="logs">
-          <span class="nav-icon">&#128203;</span>
-          <span class="nav-label">Chem Sheets</span>
-        </button>
         <button class="nav-item admin-only" style="display:none" data-view="admin">
-          <span class="nav-icon">&#9881;</span>
+          <span class="nav-icon">⚙</span>
           <span class="nav-label">Admin</span>
         </button>
       </nav>
+    </div>
 
-    </div><!-- /app-shell -->
-
-    <!-- Modal -->
     <div id="modal-overlay" class="modal-overlay hidden">
       <div class="modal">
         <div class="modal-header">
@@ -108,7 +93,6 @@
       </div>
     </div>
 
-    <!-- Confirm -->
     <div id="confirm-overlay" class="modal-overlay hidden">
       <div class="modal modal-sm">
         <div class="modal-header"><h2 id="confirm-title">Confirm</h2></div>
@@ -120,13 +104,11 @@
       </div>
     </div>
 
-    <!-- Toast -->
     <div id="toast" class="toast hidden"></div>
+  </div>
 
-  </div><!-- /app -->
-
-  <script src="tech-catalog.js?v=1"></script>
-  <script src="app.js?v=27"></script>
+  <script src="../tech-catalog.js?v=1"></script>
+  <script src="../app.js?v=27"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.__swRefreshing = false;
@@ -135,10 +117,7 @@
         window.__swRefreshing = true;
         window.location.reload();
       });
-
-      navigator.serviceWorker.register('sw.js')
-        .then(function(reg){ return reg.update(); })
-        .catch(function(e){ console.warn('SW registration failed:', e); });
+      navigator.serviceWorker.register('sw.js').then(function(reg){ return reg.update(); }).catch(function(e){ console.warn('SW registration failed:', e); });
     }
   </script>
 </body>
