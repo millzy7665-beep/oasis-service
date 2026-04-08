@@ -1,7 +1,7 @@
 'use strict';
 
 /* ── Version / localStorage reset ─────────────────────────────── */
-const APP_VERSION = 'v10-oasis-2026-whatsapp-share';
+const APP_VERSION = 'v11-oasis-2026-photo-picker';
 (function() {
   if (localStorage.getItem('psp_version') !== APP_VERSION) {
     ['psp_customers','psp_technicians','psp_routes','psp_workOrders','psp_session'].forEach(k => localStorage.removeItem(k));
@@ -248,8 +248,8 @@ function viewPhoto(key) {
   ov.innerHTML=`<img src="${src}" style="max-width:100%;max-height:100%;object-fit:contain;">`;
   document.body.appendChild(ov);
 }
-function photoPlaceholder(key){const l=key==='before'?'+ Before':key==='after'?'+ After':'+ Photo';return `<label class="photo-add-btn" for="photo-input-${key}">${l}</label>`;}
-function photoSlot(key,label){const d=WO_PHOTOS[key];return`<div class="photo-slot"><div class="photo-slot-lbl">${label}</div><div class="photo-preview-box" id="photo-preview-${key}">${d?`<img src="${d}" class="photo-thumb" onclick="viewPhoto('${key}')"><button class="photo-remove" onclick="removePhoto('${key}')">&times;</button>`:photoPlaceholder(key)}</div><input type="file" accept="image/*" capture="environment" id="photo-input-${key}" class="photo-file-inp" onchange="handlePhotoUpload('${key}',this)"></div>`;}
+function photoPlaceholder(key){const l=key==='before'?'+ Before':key==='after'?'+ After':'+ Photo';return `<label class="photo-add-btn" for="photo-input-${key}">${l}<span style="display:block;font-size:11px;font-weight:500;margin-top:4px">Camera or Gallery</span></label>`;}
+function photoSlot(key,label){const d=WO_PHOTOS[key];return`<div class="photo-slot"><div class="photo-slot-lbl">${label}</div><div class="photo-preview-box" id="photo-preview-${key}">${d?`<img src="${d}" class="photo-thumb" onclick="viewPhoto('${key}')"><button class="photo-remove" onclick="removePhoto('${key}')">&times;</button>`:photoPlaceholder(key)}</div><input type="file" accept="image/*" id="photo-input-${key}" class="photo-file-inp" onchange="handlePhotoUpload('${key}',this)"></div>`;}
 
 /* ── PDF DOWNLOAD ────────────────────────────────────────────── */
 function presentPDFBlob(blob, fileName) {
