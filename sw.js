@@ -1,62 +1,44 @@
 /* ============================================================
-   OASIS Service — Service Worker
-   Caches all app assets for full offline support
+   OASIS Service — Service Worker  (network-first, always fresh)
    ============================================================ */
 
-const CACHE = 'oasis-service-v5';
+const CACHE = 'oasis-service-v6';
 
-const ASSETS = [
-  '/',
-  '/oasis-service/index.html',
-  '/oasis-service/styles.css',
-  '/oasis-service/app.js',
-  '/oasis-service/manifest.json',
-  '/oasis-service/oasis-logo.png',
-  '/oasis-service/icon-192.png',
-  '/oasis-service/icon-512.png',
-  '/oasis-service/icon-180.png',
-];
-
-/* Install — cache everything */
+/* Install — skip waiting immediately so new SW takes over at once */
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE).then(cache => cache.addAll(ASSETS))
-  );
   self.skipWaiting();
 });
 
-/* Activate — clean up old caches */
+/* Activate — delete ALL old caches, claim all clients immediately */
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-    )
+    caches.keys()
+      .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
+      .then(() => {
+        /* Tell every open tab to reload so they get the fresh version */
+        return self.clients.matchAll({ type: 'window' }).then(clients => {
+          clients.forEach(client => client.navigate(client.url));
+        });
+      })
   );
-  self.clients.claim();
 });
 
-/* Fetch — serve from cache, fall back to network */
+/* Fetch — NETWORK FIRST, cache only as fallback for offline */
 self.addEventListener('fetch', event => {
-  /* Skip non-GET and chrome-extension requests */
   if (event.request.method !== 'GET') return;
   if (!event.request.url.startsWith('http')) return;
 
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-      return fetch(event.request).then(response => {
-        /* Cache any new successful responses for same origin */
+    fetch(event.request)
+      .then(response => {
+        /* Store a fresh copy in cache for offline use */
         if (response && response.status === 200 && response.type === 'basic') {
           const clone = response.clone();
           caches.open(CACHE).then(cache => cache.put(event.request, clone));
         }
         return response;
-      }).catch(() => {
-        /* Offline fallback for navigation */
-        if (event.request.mode === 'navigate') {
-          return caches.match('/oasis-service/index.html');
-        }
-      });
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });
