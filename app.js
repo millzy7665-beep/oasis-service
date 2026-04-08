@@ -259,19 +259,29 @@ function sendReport(id) {
   const tech = DB.getTechnician(wo.technicianId);
   const p = wo.pool || {}, s = wo.spa || {};
 
-  // Format a value with unit, or em-dash if empty
-  const v = (val, unit) => (val && String(val).trim()) ? String(val) + (unit||'') : '\u2014';
+  // Value formatter — returns value+unit or em-dash
+  const fv = (val, unit) => (val && String(val).trim()) ? String(val) + (unit||'') : '\u2014';
 
-  // Fixed-width reading row: label | pool value | spa value
-  const W = 44; // total line width inside box
+  // Box dimensions: inner width = 44 chars, full row = │ + 44 + │ = 46
+  const IW   = 44;
+  const LINE  = '\u2500'.repeat(IW);   // ────────────────────────────────────────────
+  const DLINE = '\u2550'.repeat(IW);   // ════════════════════════════════════════════
+
+  // Standard content row — text padded to fill inner width exactly
+  const row = (text) => '\u2502 ' + text.padEnd(IW - 1) + '\u2502';
+
+  // Key-value row inside a box — label 14 chars, value fills rest
+  const kv = (label, value) => row(' ' + label.padEnd(13) + value.slice(0, IW - 15));
+
+  // Chemical reading row — label 14 + pool 14 + spa fill
   const chemRow = (lbl, pv, pu, sv) => {
-    const label = lbl.padEnd(14);
-    const pool  = v(pv, pu).padEnd(14);
-    const spa   = v(sv, pu);
-    return '\u2502 ' + label + pool + spa;
+    const label = (' ' + lbl).padEnd(14);
+    const pool  = fv(pv, pu).padEnd(14);
+    const spa   = fv(sv, pu).padEnd(IW - 30);   // 14+14 = 28 used, 1 prefix = 29, IW-29 for spa
+    return '\u2502' + label + pool + spa + '\u2502';
   };
 
-  // Chemicals added list
+  // Chemicals added bulleted list
   const addedList = (o) => {
     const items = [];
     if (o.tabs)        items.push('  \u2022 Tabs              ' + o.tabs + ' ea');
@@ -288,66 +298,63 @@ function sendReport(id) {
     return items.length ? items.join('\n') : '  None added';
   };
 
-  const LINE  = '\u2500'.repeat(46);
-  const DLINE = '\u2550'.repeat(46);
-  const SPC   = ' ';
-
   const body = [
     '',
-    '  \u250c' + DLINE + '\u2510',
-    '  \u2551' + '  O A S I S  \u2014  S E R V I C E  R E P O R T  '.padEnd(46) + '\u2551',
-    '  \u2551' + '  Luxury Pool & Watershape Design'.padEnd(46) + '\u2551',
-    '  \u255a' + DLINE + '\u255d',
+    '\u2554' + DLINE + '\u2557',
+    '\u2551' + '  O A S I S  \u2014  S E R V I C E  R E P O R T'.padEnd(IW) + '\u2551',
+    '\u2551' + '  Luxury Pool & Watershape Design, Cayman Islands'.padEnd(IW) + '\u2551',
+    '\u255a' + DLINE + '\u255d',
     '',
-    '  \u250c' + LINE + '\u2510',
-    '  \u2502  JOB INFORMATION'.padEnd(48) + '\u2502',
-    '  \u251c' + LINE + '\u2524',
-    '  \u2502  Technician   ' + (tech ? tech.name : '\u2014').padEnd(32) + '\u2502',
-    '  \u2502  Route        ' + (wo.routeNumber || '\u2014').padEnd(32) + '\u2502',
-    '  \u2502  Client       ' + (cust ? cust.name : '\u2014').padEnd(32) + '\u2502',
-    '  \u2502  Address      ' + (wo.address || '\u2014').padEnd(32) + '\u2502',
-    '  \u2502  Date         ' + fmtDate(wo.date).padEnd(32) + '\u2502',
-    '  \u2502  Time         ' + ((fmtTime(wo.timeIn)||'\u2014') + ' \u2192 ' + (fmtTime(wo.timeOut)||'\u2014')).padEnd(32) + '\u2502',
-    '  \u2502  Condition    ' + (wo.condition || '\u2014').padEnd(32) + '\u2502',
-    '  \u2502  Pool Size    ' + (wo.gallons ? parseInt(wo.gallons).toLocaleString() + ' gal' : '\u2014').padEnd(32) + '\u2502',
-    '  \u2514' + LINE + '\u2518',
+    '\u250c' + LINE + '\u2510',
+    row('  JOB INFORMATION'),
+    '\u251c' + LINE + '\u2524',
+    kv('Technician', tech ? tech.name : '\u2014'),
+    kv('Route',      wo.routeNumber || '\u2014'),
+    kv('Client',     cust ? cust.name : '\u2014'),
+    kv('Address',    wo.address || '\u2014'),
+    kv('Date',       fmtDate(wo.date)),
+    kv('Time',       (fmtTime(wo.timeIn)||'\u2014') + ' \u2192 ' + (fmtTime(wo.timeOut)||'\u2014')),
+    kv('Condition',  wo.condition || '\u2014'),
+    kv('Pool Size',  wo.gallons ? parseInt(wo.gallons).toLocaleString() + ' gal' : '\u2014'),
+    '\u2514' + LINE + '\u2518',
     '',
-    '  \u250c' + LINE + '\u2510',
-    '  \u2502  CHEMICAL READINGS'.padEnd(48) + '\u2502',
-    '  \u251c' + LINE + '\u2524',
-    '  \u2502  ' + 'Parameter'.padEnd(14) + 'Pool'.padEnd(14) + 'Spa'.padEnd(14) + '  \u2502',
-    '  \u251c' + LINE + '\u2524',
-    '  ' + chemRow('Chlorine',   p.chlorine,  ' ppm', s.chlorine),
-    '  ' + chemRow('pH',         p.pH,        '',     s.pH),
-    '  ' + chemRow('Alkalinity', p.alk,       ' ppm', s.alk),
-    '  ' + chemRow('CYA',        p.cya,       ' ppm', s.cya),
-    '  ' + chemRow('Calcium',    p.calcium,   ' ppm', s.calcium),
-    '  ' + chemRow('Salt',       p.salt,      ' ppm', s.salt),
-    '  ' + chemRow('Phosphate',  p.phosphate, ' ppb', s.phosphate),
-    '  ' + chemRow('TDS',        p.tds,       ' ppm', s.tds),
-    '  \u2514' + LINE + '\u2518',
-    '  Ideal ranges: Cl 1\u20133 ppm \u00b7 pH 7.2\u20137.6 \u00b7 Alk 80\u2013120 \u00b7 CYA 30\u201350 \u00b7 Ca 200\u2013400',
+    '\u250c' + LINE + '\u2510',
+    row('  CHEMICAL READINGS'),
+    '\u251c' + LINE + '\u2524',
+    '\u2502' + ' Parameter    '.padEnd(14) + 'Pool          '.padEnd(14) + 'Spa           '.padEnd(IW - 28) + '\u2502',
+    '\u251c' + LINE + '\u2524',
+    chemRow('Chlorine',   p.chlorine,  ' ppm', s.chlorine),
+    chemRow('pH',         p.pH,        '',     s.pH),
+    chemRow('Alkalinity', p.alk,       ' ppm', s.alk),
+    chemRow('CYA',        p.cya,       ' ppm', s.cya),
+    chemRow('Calcium',    p.calcium,   ' ppm', s.calcium),
+    chemRow('Salt',       p.salt,      ' ppm', s.salt),
+    chemRow('Phosphate',  p.phosphate, ' ppb', s.phosphate),
+    chemRow('TDS',        p.tds,       ' ppm', s.tds),
+    '\u2514' + LINE + '\u2518',
+    '  Ideal: Cl 1\u20133 ppm \u00b7 pH 7.2\u20137.6 \u00b7 Alk 80\u2013120 \u00b7 CYA 30\u201350 \u00b7 Ca 200\u2013400 ppm',
     '',
-    '  \u250c' + LINE + '\u2510',
-    '  \u2502  CHEMICALS ADDED'.padEnd(48) + '\u2502',
-    '  \u251c' + LINE + '\u2524',
-    '  \u2502  POOL'.padEnd(48) + '\u2502',
-    '  \u2514' + LINE + '\u2518',
-    addedList(p),
+    '\u250c' + LINE + '\u2510',
+    row('  CHEMICALS ADDED'),
+    '\u251c' + LINE + '\u2524',
+    row('  POOL'),
+    '\u251c' + LINE + '\u2524',
+    addedList(p).split('\n').map(l => '\u2502 ' + l.padEnd(IW - 1) + '\u2502').join('\n'),
+    '\u251c' + LINE + '\u2524',
+    row('  SPA'),
+    '\u251c' + LINE + '\u2524',
+    addedList(s).split('\n').map(l => '\u2502 ' + l.padEnd(IW - 1) + '\u2502').join('\n'),
+    '\u2514' + LINE + '\u2518',
     '',
-    '  \u250c' + LINE + '\u2510',
-    '  \u2502  SPA'.padEnd(48) + '\u2502',
-    '  \u2514' + LINE + '\u2518',
-    addedList(s),
+    '\u250c' + LINE + '\u2510',
+    row('  SERVICE NOTES'),
+    '\u251c' + LINE + '\u2524',
+    '\u2502 ' + (wo.notes || 'None').padEnd(IW - 1) + '\u2502',
+    '\u2514' + LINE + '\u2518',
     '',
-    '  \u250c' + LINE + '\u2510',
-    '  \u2502  SERVICE NOTES'.padEnd(48) + '\u2502',
-    '  \u2514' + LINE + '\u2518',
-    '  ' + (wo.notes || 'None'),
-    '',
-    '  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+    '\u2550'.repeat(IW + 2),
     '  Sent via OASIS Service App  \u00b7  oasis.ky',
-    '  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+    '\u2550'.repeat(IW + 2),
     '',
   ].join('\n');
 

@@ -2,7 +2,7 @@
    OASIS Service — Service Worker  (network-first, always fresh)
    ============================================================ */
 
-const CACHE = 'oasis-service-v6';
+const CACHE = 'oasis-service-v7';
 
 /* Install — skip waiting immediately so new SW takes over at once */
 self.addEventListener('install', event => {
