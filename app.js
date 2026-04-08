@@ -1,7 +1,7 @@
 'use strict';
 
 /* ── Version / localStorage reset ─────────────────────────────── */
-const APP_VERSION = 'v9-oasis-2026-secure';
+const APP_VERSION = 'v10-oasis-2026-whatsapp-share';
 (function() {
   if (localStorage.getItem('psp_version') !== APP_VERSION) {
     ['psp_customers','psp_technicians','psp_routes','psp_workOrders','psp_session'].forEach(k => localStorage.removeItem(k));
@@ -279,7 +279,7 @@ function presentPDFBlob(blob, fileName) {
   setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
 }
 
-function savePDFReport(id) {
+async function savePDFReport(id, mode = 'save') {
   const wo = DB.getWorkOrder(id);
   if (!wo) {
     showToast('Save this chem sheet first');
@@ -419,11 +419,43 @@ function savePDFReport(id) {
 
   const fileName = `OASIS_${(cust ? cust.name : 'Client').replace(/[^a-z0-9]+/gi, '-')}_${wo.date || todayStr()}.pdf`;
   const pdfBlob = doc.output('blob');
+
+  if (mode === 'share') {
+    try {
+      const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+      const canShareFile = !!(navigator.share && (!navigator.canShare || navigator.canShare({ files: [pdfFile] })));
+
+      if (window.isSecureContext && canShareFile) {
+        await navigator.share({
+          title: `OASIS Chem Sheet — ${cust ? cust.name : 'Client'}`,
+          text: 'Choose WhatsApp to send this PDF.',
+          files: [pdfFile]
+        });
+        showToast('📲 Choose WhatsApp to send the PDF');
+        return;
+      }
+
+      if (!window.isSecureContext) {
+        showToast('Open the secure app link to share via WhatsApp');
+      } else {
+        showToast('Share not available on this device — saving PDF instead');
+      }
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      console.warn('PDF share fallback:', err);
+      showToast('Could not share directly — saving PDF instead');
+    }
+  }
+
   presentPDFBlob(pdfBlob, fileName);
 }
 
+function sharePDFReport(id) {
+  return savePDFReport(id, 'share');
+}
+
 function sendReport(id) {
-  savePDFReport(id);
+  sharePDFReport(id);
 }
 
 function openBrandedReport(wo) {
@@ -729,6 +761,7 @@ function renderWorkOrderList(){
         <div class="job-card-footer">
           <button class="btn btn-sm btn-primary" onclick="woState={view:'form',id:'${esc(wo.id)}'};App.render()">📋 Open</button>
           <button class="btn btn-sm btn-secondary" onclick="savePDFReport('${esc(wo.id)}')">📄 Save PDF</button>
+          <button class="btn btn-sm btn-secondary" onclick="sharePDFReport('${esc(wo.id)}')">📲 Share</button>
           <button class="btn btn-sm btn-secondary" style="color:var(--danger)" onclick="deleteWO('${esc(wo.id)}')">🗑️</button>
         </div>
       </div>`;}).join('');
@@ -742,7 +775,7 @@ function renderWorkOrderForm(id){
   const p=wo.pool||{},s=wo.spa||{},custId=wo.customerId||'',today=todayStr();
   const tech=DB.getTechnician(Auth.techId);
   return`<div class="wo-form">
-  <div class="wo-bar"><button class="btn btn-secondary btn-sm" onclick="woState={view:'list'};App.render()">← Back</button><span class="wo-bar-title">${id?'Edit Chem Sheet':'New Chem Sheet'}</span><div style="display:flex;gap:8px">${id?`<button class="btn btn-secondary btn-sm" onclick="savePDFReport('${esc(id)}')">📄 Save PDF</button>`:''}<button class="btn btn-primary btn-sm" onclick="saveWorkOrder(${id?`'${esc(id)}'`:'null'})">💾 Save</button></div></div>
+  <div class="wo-bar"><button class="btn btn-secondary btn-sm" onclick="woState={view:'list'};App.render()">← Back</button><span class="wo-bar-title">${id?'Edit Chem Sheet':'New Chem Sheet'}</span><div style="display:flex;gap:8px">${id?`<button class="btn btn-secondary btn-sm" onclick="savePDFReport('${esc(id)}')">📄 Save PDF</button><button class="btn btn-secondary btn-sm" onclick="sharePDFReport('${esc(id)}')">📲 Share</button>`:''}<button class="btn btn-primary btn-sm" onclick="saveWorkOrder(${id?`'${esc(id)}'`:'null'})">💾 Save</button></div></div>
   <div class="wo-sec"><div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>📋  Job Info</span><span class="wo-chev">▼</span></div>
   <div class="wo-sec-bd">
     <div class="form-row">
