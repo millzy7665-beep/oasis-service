@@ -1,7 +1,7 @@
 'use strict';
 
 /* ── Version / localStorage reset ─────────────────────────────── */
-const APP_VERSION = 'v11-oasis-2026-photo-picker';
+const APP_VERSION = 'v12-oasis-2026-photo-pdf-fix';
 (function() {
   if (localStorage.getItem('psp_version') !== APP_VERSION) {
     ['psp_customers','psp_technicians','psp_routes','psp_workOrders','psp_session'].forEach(k => localStorage.removeItem(k));
@@ -231,14 +231,29 @@ function handlePhotoUpload(key,input) {
   const file=input.files[0];if(!file)return;
   compressImage(file).then(d=>{
     WO_PHOTOS[key]=d;
+    if(woState.view==='form' && woState.id){
+      const current=DB.getWorkOrder(woState.id);
+      if(current) DB.updateWorkOrder(woState.id,{photos:{...(current.photos||{}),...WO_PHOTOS}});
+    }
     const p=document.getElementById(`photo-preview-${key}`);
     if(p)p.innerHTML=`<img src="${d}" class="photo-thumb" onclick="viewPhoto('${key}')"><button class="photo-remove" onclick="removePhoto('${key}')">&times;</button>`;
+    input.value='';
+    showToast('Photo attached ✓');
   });
 }
 function removePhoto(key) {
   WO_PHOTOS[key]=null;
+  if(woState.view==='form' && woState.id){
+    const current=DB.getWorkOrder(woState.id);
+    if(current){
+      const updatedPhotos={...(current.photos||{})};
+      delete updatedPhotos[key];
+      DB.updateWorkOrder(woState.id,{photos:updatedPhotos});
+    }
+  }
   const p=document.getElementById(`photo-preview-${key}`);if(p)p.innerHTML=photoPlaceholder(key);
   const i=document.getElementById(`photo-input-${key}`);if(i)i.value='';
+  const c=document.getElementById(`photo-camera-${key}`);if(c)c.value='';
 }
 function viewPhoto(key) {
   const src=WO_PHOTOS[key];if(!src)return;
@@ -248,8 +263,8 @@ function viewPhoto(key) {
   ov.innerHTML=`<img src="${src}" style="max-width:100%;max-height:100%;object-fit:contain;">`;
   document.body.appendChild(ov);
 }
-function photoPlaceholder(key){const l=key==='before'?'+ Before':key==='after'?'+ After':'+ Photo';return `<label class="photo-add-btn" for="photo-input-${key}">${l}<span style="display:block;font-size:11px;font-weight:500;margin-top:4px">Camera or Gallery</span></label>`;}
-function photoSlot(key,label){const d=WO_PHOTOS[key];return`<div class="photo-slot"><div class="photo-slot-lbl">${label}</div><div class="photo-preview-box" id="photo-preview-${key}">${d?`<img src="${d}" class="photo-thumb" onclick="viewPhoto('${key}')"><button class="photo-remove" onclick="removePhoto('${key}')">&times;</button>`:photoPlaceholder(key)}</div><input type="file" accept="image/*" id="photo-input-${key}" class="photo-file-inp" onchange="handlePhotoUpload('${key}',this)"></div>`;}
+function photoPlaceholder(key){const l=key==='before'?'Before':key==='after'?'After':'Photo';return `<div class="photo-picker-options"><div class="photo-picker-title">${l}</div><div class="photo-picker-actions"><label class="photo-source-btn" for="photo-camera-${key}">📷 Camera</label><label class="photo-source-btn" for="photo-input-${key}">🖼️ Gallery</label></div></div>`;}
+function photoSlot(key,label){const d=WO_PHOTOS[key];return`<div class="photo-slot"><div class="photo-slot-lbl">${label}</div><div class="photo-preview-box" id="photo-preview-${key}">${d?`<img src="${d}" class="photo-thumb" onclick="viewPhoto('${key}')"><button class="photo-remove" onclick="removePhoto('${key}')">&times;</button>`:photoPlaceholder(key)}</div><input type="file" accept="image/*" capture="environment" id="photo-camera-${key}" class="photo-file-inp" onchange="handlePhotoUpload('${key}',this)"><input type="file" accept="image/*" id="photo-input-${key}" class="photo-file-inp" onchange="handlePhotoUpload('${key}',this)"></div>`;}
 
 /* ── PDF DOWNLOAD ────────────────────────────────────────────── */
 function presentPDFBlob(blob, fileName) {
@@ -293,6 +308,9 @@ async function savePDFReport(id, mode = 'save') {
   const cust = DB.getCustomer(wo.customerId);
   const tech = DB.getTechnician(wo.technicianId);
   const p = wo.pool || {}, s = wo.spa || {};
+  const activePhotos = (woState.view === 'form' && woState.id === id)
+    ? { ...(wo.photos || {}), ...WO_PHOTOS }
+    : (wo.photos || {});
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
@@ -416,6 +434,67 @@ async function savePDFReport(id, mode = 'save') {
   const noteLines = doc.splitTextToSize(wo.notes || 'No notes recorded.', 175);
   doc.text(noteLines, 15, y);
   y += noteLines.length * 5 + 6;
+
+  const getImageSize = (dataUrl) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth || img.width || 1, height: img.naturalHeight || img.height || 1 });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+
+  const photoEntries = PHOTO_KEYS.filter(key => activePhotos[key]);
+  if (photoEntries.length) {
+    writeSection('SITE PHOTOS');
+    let col = 0;
+    const boxW = 82;
+    const boxH = 58;
+
+    for (const key of photoEntries) {
+      const x = col === 0 ? 15 : 108;
+      if (col === 0 && y + boxH + 16 > 280) {
+        doc.addPage();
+        y = 20;
+      }
+
+      const label = key === 'before' ? 'Before' : key === 'after' ? 'After' : `Photo ${key.replace('extra', '')}`;
+      doc.setTextColor(80, 80, 80);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.text(label, x, y);
+
+      const imgY = y + 4;
+      doc.setFillColor(248, 245, 241);
+      doc.rect(x, imgY, boxW, boxH, 'F');
+      doc.setDrawColor(220, 220, 220);
+      doc.rect(x, imgY, boxW, boxH);
+
+      try {
+        const dataUrl = activePhotos[key];
+        const format = dataUrl.includes('image/png') ? 'PNG' : 'JPEG';
+        const { width, height } = await getImageSize(dataUrl);
+        const scale = Math.min(boxW / width, boxH / height);
+        const drawW = Math.max(10, width * scale);
+        const drawH = Math.max(10, height * scale);
+        const drawX = x + (boxW - drawW) / 2;
+        const drawY = imgY + (boxH - drawH) / 2;
+        doc.addImage(dataUrl, format, drawX, drawY, drawW, drawH);
+      } catch (err) {
+        console.warn('Photo skipped in PDF:', err);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.text('Photo unavailable', x + 16, imgY + 30);
+      }
+
+      if (col === 1) {
+        y += boxH + 14;
+        col = 0;
+      } else {
+        col = 1;
+      }
+    }
+
+    if (col === 1) y += boxH + 14;
+  }
 
   const fileName = `OASIS_${(cust ? cust.name : 'Client').replace(/[^a-z0-9]+/gi, '-')}_${wo.date || todayStr()}.pdf`;
   const pdfBlob = doc.output('blob');
