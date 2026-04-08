@@ -6,8 +6,8 @@ const STORAGE_PREFIX = window.APP_STORAGE_PREFIX || 'psp_';
 const STORAGE_VERSION_KEY = `${STORAGE_PREFIX}version`;
 const SESSION_KEY = `${STORAGE_PREFIX}session`;
 const APP_VERSION = APP_MODE === 'tech'
-  ? 'v15-oasis-2026-tech-separate'
-  : 'v15-oasis-2026-pool-separate';
+  ? 'v16-oasis-2026-tech-separate'
+  : 'v16-oasis-2026-pool-separate';
 (function() {
   const storedVersion = localStorage.getItem(STORAGE_VERSION_KEY);
   if (!storedVersion || storedVersion !== APP_VERSION) {
@@ -1232,6 +1232,18 @@ function updateTechOrderTotal() {
   const el = document.getElementById('two-total');
   if (el) el.value = money(total);
 }
+function techLaborRow(entry = {}, idx, techName = '') {
+  return `<div class="card" style="margin-bottom:10px"><div class="card-body"><div class="form-row"><div class="form-group"><label class="form-label">Date</label><input class="form-control" id="two-labor-date-${idx}" type="date" value="${esc(entry.date || '')}"></div><div class="form-group"><label class="form-label">Tech Name</label><input class="form-control" id="two-labor-tech-${idx}" value="${esc(entry.techName || techName)}"></div></div><div class="form-row" style="grid-template-columns:1fr 1fr 1fr"><div class="form-group"><label class="form-label">Time In</label><input class="form-control" id="two-labor-timein-${idx}" type="time" value="${esc(entry.timeIn || '')}"></div><div class="form-group"><label class="form-label">Time Out</label><input class="form-control" id="two-labor-timeout-${idx}" type="time" value="${esc(entry.timeOut || '')}"></div><div class="form-group"><label class="form-label">Total Hrs</label><input class="form-control" id="two-labor-hrs-${idx}" type="number" min="0" step="0.25" value="${esc(entry.totalHrs || '')}" placeholder="0.0"></div></div></div></div>`;
+}
+function getTechLaborEntries() {
+  return [0,1,2,3].map(idx => ({
+    date: document.getElementById(`two-labor-date-${idx}`)?.value || '',
+    techName: document.getElementById(`two-labor-tech-${idx}`)?.value.trim() || '',
+    timeIn: document.getElementById(`two-labor-timein-${idx}`)?.value || '',
+    timeOut: document.getElementById(`two-labor-timeout-${idx}`)?.value || '',
+    totalHrs: document.getElementById(`two-labor-hrs-${idx}`)?.value.trim() || ''
+  })).filter(entry => entry.date || entry.techName || entry.timeIn || entry.timeOut || entry.totalHrs);
+}
 function onTechOrderCustChange() {
   const sel = document.getElementById('two-customer');
   const cust = sel?.value ? DB.getCustomer(sel.value) : null;
@@ -1245,6 +1257,7 @@ function renderTechOrderForm(id) {
   const today = todayStr();
   const tech = DB.getTechnician(Auth.techId);
   const items = (order.items && order.items.length ? order.items : [defaultTechItem()]);
+  const laborEntries = Array.from({ length: 4 }, (_, idx) => (order.laborEntries && order.laborEntries[idx]) || { date: order.date || today, techName: tech ? tech.name : '', timeIn: '', timeOut: '', totalHrs: '' });
   techItemRowCounter = items.length;
   return `<div class="wo-form">
     <div class="wo-bar">
@@ -1277,6 +1290,14 @@ function renderTechOrderForm(id) {
           <div class="form-group"><label class="form-label">Time In</label><input class="form-control" id="two-timein" type="time" value="${esc(order.timeIn || '')}"></div>
           <div class="form-group"><label class="form-label">Time Out</label><input class="form-control" id="two-timeout" type="time" value="${esc(order.timeOut || '')}"></div>
         </div>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>⏱️  Labour Log</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <p class="wo-hint">Matches the workbook labour entry rows for date, tech name, time in/out, and total hours.</p>
+        ${laborEntries.map((entry, idx) => techLaborRow(entry, idx, tech ? tech.name : '')).join('')}
       </div>
     </div>
 
@@ -1347,6 +1368,7 @@ function saveTechOrder(id) {
     summary: v('two-summary'),
     billingNotes: v('two-billing-notes'),
     techNotes: v('two-tech-notes'),
+    laborEntries: getTechLaborEntries(),
     performed: v('two-performed'),
     approval: document.getElementById('two-approval')?.value || 'N/A',
     followUp: document.getElementById('two-followup')?.value || 'No',
@@ -1438,6 +1460,26 @@ async function saveTechOrderPDF(id, mode = 'save') {
   writeDetail('Priority', order.priority || '—');
   writeDetail('Status', order.status || '—');
   writeDetail('Time', `${fmtTime(order.timeIn) || '—'} → ${fmtTime(order.timeOut) || '—'}`);
+
+  writeSection('LABOUR LOG');
+  if (order.laborEntries && order.laborEntries.length) {
+    order.laborEntries.forEach((entry, idx) => {
+      doc.setTextColor(80,80,80);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(9);
+      doc.text(`Entry ${idx + 1}: ${entry.techName || '—'}`, 15, y);
+      nextLine(5);
+      doc.setFont('helvetica','normal');
+      doc.text(`Date: ${entry.date ? fmtDate(entry.date) : '—'} · Time: ${fmtTime(entry.timeIn) || '—'} → ${fmtTime(entry.timeOut) || '—'} · Total Hrs: ${entry.totalHrs || '—'}`, 18, y);
+      nextLine(6);
+    });
+  } else {
+    doc.setTextColor(80,80,80);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9);
+    doc.text('No labour entries recorded.', 15, y);
+    nextLine();
+  }
 
   writeSection('WORK DESCRIPTION');
   doc.setTextColor(80,80,80);
