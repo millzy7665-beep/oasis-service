@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a1e2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OASIS Service">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="manifest" href="manifest.json">
+  <title>OASIS &mdash; Service</title>
+  <link rel="icon" type="image/png" href="https://oasis.ky/wp-content/uploads/2024/08/Site-Icon-Oasis-150x150.png">
+  <link rel="stylesheet" href="styles.css?v=7">
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════
+       LOGIN SCREEN — outside #app so position:fixed is full-viewport
+       ═══════════════════════════════════════════════════════ -->
+  <div id="login-screen" class="lsn">
+    <img class="lsn-logo"
+      src="https://oasis.ky/wp-content/uploads/2024/08/Oasis_Logo_Icon_White-300x267.png"
+      alt="OASIS">
+    <div class="lsn-brand">OASIS</div>
+    <div class="lsn-tag">Luxury Pool &amp; Watershape Service</div>
+
+    <div class="lsn-form">
+      <label class="lsn-lbl">Select Your Name</label>
+      <select id="login-tech" class="lsn-fld" onchange="document.getElementById('login-error').style.display='none'">
+        <option value="">&#8212; Select your name &#8212;</option>
+        <option value="t1">Ace</option>
+        <option value="t2">Ariel</option>
+        <option value="t3">Donald</option>
+        <option value="t4">Elvin</option>
+        <option value="t5">Jermaine</option>
+        <option value="t6">Kadeem</option>
+        <option value="t7">Kingsley</option>
+        <option value="t8">Malik</option>
+        <option value="admin">Chris Mills (Admin)</option>
+      </select>
+
+      <button class="lsn-btn" onclick="doLogin()">Sign In</button>
+      <div id="login-error" class="lsn-err" style="display:none">Please select your name.</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       MAIN APP
+       ═══════════════════════════════════════════════════════ -->
+  <div id="app" style="display:none">
+
+    <div id="app-shell">
+
+      <header class="app-header">
+        <div class="header-left">
+          <img class="header-logo-icon"
+            src="https://oasis.ky/wp-content/uploads/2024/08/Oasis_Logo_Icon_White-300x267.png"
+            alt="OASIS">
+          <div class="header-sub">Elevate Your Outdoor Living Space</div>
+        </div>
+        <div id="header-actions" class="header-actions">
+          <button class="signout-btn" onclick="signOut()">Sign Out</button>
+        </div>
+      </header>
+
+      <main id="main" class="main-content"></main>
+
+      <nav class="bottom-nav">
+        <button class="nav-item active" data-view="dashboard">
+          <span class="nav-icon">&#9961;</span>
+          <span class="nav-label">Home</span>
+        </button>
+        <button class="nav-item" data-view="route">
+          <span class="nav-icon">&#128205;</span>
+          <span class="nav-label">My Route</span>
+        </button>
+        <button class="nav-item" data-view="customers">
+          <span class="nav-icon">&#128101;</span>
+          <span class="nav-label">Clients</span>
+        </button>
+        <button class="nav-item" data-view="logs">
+          <span class="nav-icon">&#128203;</span>
+          <span class="nav-label">Chem Sheet</span>
+        </button>
+        <button class="nav-item admin-only" style="display:none" data-view="admin">
+          <span class="nav-icon">&#9881;</span>
+          <span class="nav-label">Admin</span>
+        </button>
+      </nav>
+
+    </div><!-- /app-shell -->
+
+    <!-- Modal -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 id="modal-title"></h2>
+          <button class="modal-close" id="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
+          <button class="btn btn-primary" id="modal-save-btn">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirm -->
+    <div id="confirm-overlay" class="modal-overlay hidden">
+      <div class="modal modal-sm">
+        <div class="modal-header"><h2 id="confirm-title">Confirm</h2></div>
+        <div class="modal-body"><p id="confirm-message"></p></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="confirm-cancel-btn">Cancel</button>
+          <button class="btn btn-danger" id="confirm-ok-btn">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+  </div><!-- /app -->
+
+  <script src="app.js?v=9"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .catch(function(e){ console.warn('SW registration failed:', e); });
+    }
+  </script>
+</body>
+</html>
