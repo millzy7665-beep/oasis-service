@@ -259,30 +259,36 @@ function sendReport(id) {
   const tech = DB.getTechnician(wo.technicianId);
   const p = wo.pool || {}, s = wo.spa || {};
 
-  // Value formatter — returns value+unit or em-dash
+  // Box layout — all lines exactly 46 chars: 1(border) + 44(inner) + 1(border)
+  const IW    = 44;
+  const LINE  = '\u2500'.repeat(IW);   // ─ × 44
+  const DLINE = '\u2550'.repeat(IW);   // ═ × 44
+
+  // Value with unit, or em-dash for empty
   const fv = (val, unit) => (val && String(val).trim()) ? String(val) + (unit||'') : '\u2014';
 
-  // Box dimensions: inner width = 44 chars, full row = │ + 44 + │ = 46
-  const IW   = 44;
-  const LINE  = '\u2500'.repeat(IW);   // ────────────────────────────────────────────
-  const DLINE = '\u2550'.repeat(IW);   // ════════════════════════════════════════════
+  // Double-border content row  ║ space text(43) ║  = 46
+  const hrow = (text) => '\u2551 ' + String(text).slice(0, IW-1).padEnd(IW-1) + '\u2551';
 
-  // Standard content row — text padded to fill inner width exactly
-  const row = (text) => '\u2502 ' + text.padEnd(IW - 1) + '\u2502';
+  // Single-border content row  │ space text(43) │  = 46
+  const row  = (text) => '\u2502 ' + String(text).slice(0, IW-1).padEnd(IW-1) + '\u2502';
 
-  // Key-value row inside a box — label 14 chars, value fills rest
-  const kv = (label, value) => row(' ' + label.padEnd(13) + value.slice(0, IW - 15));
+  // Key-value row: label(14) fills with value
+  const kv = (label, val) => {
+    const inner = (' ' + label).padEnd(14) + String(val == null ? '\u2014' : val);
+    return '\u2502 ' + inner.slice(0, IW-1).padEnd(IW-1) + '\u2502';
+  };
 
-  // Chemical reading row — label 14 + pool 14 + spa fill
+  // Chemical reading row: │ label(14) pool(15) spa(15) │  = 46
   const chemRow = (lbl, pv, pu, sv) => {
-    const label = (' ' + lbl).padEnd(14);
-    const pool  = fv(pv, pu).padEnd(14);
-    const spa   = fv(sv, pu).padEnd(IW - 30);   // 14+14 = 28 used, 1 prefix = 29, IW-29 for spa
+    const label = (' ' + lbl).padEnd(14).slice(0, 14);
+    const pool  = fv(pv, pu).padEnd(15).slice(0, 15);
+    const spa   = fv(sv, pu).padEnd(15).slice(0, 15);
     return '\u2502' + label + pool + spa + '\u2502';
   };
 
-  // Chemicals added bulleted list
-  const addedList = (o) => {
+  // Bulleted list of chemicals added, each line boxed
+  const addedRows = (o) => {
     const items = [];
     if (o.tabs)        items.push('  \u2022 Tabs              ' + o.tabs + ' ea');
     if (o.hypo)        items.push('  \u2022 Hypo-Chlorite     ' + o.hypo + ' lbs');
@@ -295,14 +301,15 @@ function sendReport(id) {
     if (o.saltBag)     items.push('  \u2022 Salt              ' + o.saltBag + ' bag');
     if (o.algaecide)   items.push('  \u2022 Algaecide         ' + o.algaecide + ' oz');
     if (o.clarifier)   items.push('  \u2022 Clarifier         ' + o.clarifier + ' oz');
-    return items.length ? items.join('\n') : '  None added';
+    const src = items.length ? items : ['  None added'];
+    return src.map(l => '\u2502 ' + l.slice(0, IW-1).padEnd(IW-1) + '\u2502').join('\n');
   };
 
   const body = [
     '',
     '\u2554' + DLINE + '\u2557',
-    '\u2551' + '  O A S I S  \u2014  S E R V I C E  R E P O R T'.padEnd(IW) + '\u2551',
-    '\u2551' + '  Luxury Pool & Watershape Design, Cayman Islands'.padEnd(IW) + '\u2551',
+    hrow(' O A S I S  \u2014  S E R V I C E  R E P O R T'),
+    hrow(' Luxury Pool & Watershape Design'),
     '\u255a' + DLINE + '\u255d',
     '',
     '\u250c' + LINE + '\u2510',
@@ -321,7 +328,7 @@ function sendReport(id) {
     '\u250c' + LINE + '\u2510',
     row('  CHEMICAL READINGS'),
     '\u251c' + LINE + '\u2524',
-    '\u2502' + ' Parameter    '.padEnd(14) + 'Pool          '.padEnd(14) + 'Spa           '.padEnd(IW - 28) + '\u2502',
+    '\u2502' + ' Parameter    '.padEnd(14) + 'Pool'.padEnd(15) + 'Spa'.padEnd(15) + '\u2502',
     '\u251c' + LINE + '\u2524',
     chemRow('Chlorine',   p.chlorine,  ' ppm', s.chlorine),
     chemRow('pH',         p.pH,        '',     s.pH),
@@ -339,17 +346,17 @@ function sendReport(id) {
     '\u251c' + LINE + '\u2524',
     row('  POOL'),
     '\u251c' + LINE + '\u2524',
-    addedList(p).split('\n').map(l => '\u2502 ' + l.padEnd(IW - 1) + '\u2502').join('\n'),
+    addedRows(p),
     '\u251c' + LINE + '\u2524',
     row('  SPA'),
     '\u251c' + LINE + '\u2524',
-    addedList(s).split('\n').map(l => '\u2502 ' + l.padEnd(IW - 1) + '\u2502').join('\n'),
+    addedRows(s),
     '\u2514' + LINE + '\u2518',
     '',
     '\u250c' + LINE + '\u2510',
     row('  SERVICE NOTES'),
     '\u251c' + LINE + '\u2524',
-    '\u2502 ' + (wo.notes || 'None').padEnd(IW - 1) + '\u2502',
+    '\u2502 ' + (wo.notes || 'None').slice(0, IW-1).padEnd(IW-1) + '\u2502',
     '\u2514' + LINE + '\u2518',
     '',
     '\u2550'.repeat(IW + 2),
@@ -357,6 +364,7 @@ function sendReport(id) {
     '\u2550'.repeat(IW + 2),
     '',
   ].join('\n');
+
 
   const subject = encodeURIComponent(
     'OASIS Service Report \u2014 ' + (cust ? cust.name : 'Client') + ' \u2014 ' + fmtDate(wo.date)
