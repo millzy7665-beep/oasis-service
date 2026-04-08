@@ -3,7 +3,7 @@
    Caches all app assets for full offline support
    ============================================================ */
 
-const CACHE = 'oasis-service-v3';
+const CACHE = 'oasis-service-v4';
 
 const ASSETS = [
   '/',
