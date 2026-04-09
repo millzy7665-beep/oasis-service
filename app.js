@@ -397,6 +397,7 @@ class Router {
   renderSettings() {
     const content = document.getElementById('main-content');
     const shareUrl = 'https://millzy7665-beep.github.io/oasis-service/';
+    const isAdmin = auth.isAdmin();
 
     content.innerHTML = `
       <div class="section-header">
@@ -417,8 +418,9 @@ class Router {
         </div>
       </div>
 
+      ${isAdmin ? `
       <div class="section-header" style="margin-top: 20px;">
-        <div class="section-title">Share App</div>
+        <div class="section-title">Share App (Admin Only)</div>
       </div>
 
       <div class="card">
@@ -440,6 +442,7 @@ class Router {
           <button class="btn btn-primary" style="width: 100%; margin-top: 15px;" onclick="shareAppLink()">Share Link</button>
         </div>
       </div>
+      ` : ''}
     `;
   }
 
