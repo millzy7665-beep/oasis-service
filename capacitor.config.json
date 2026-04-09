@@ -1,0 +1,6 @@
+{
+  "appId": "com.oasis.serviceandrepair",
+  "appName": "OASIS Service",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}

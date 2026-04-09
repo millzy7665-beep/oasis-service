@@ -1,11 +1,13 @@
-const CACHE_NAME = 'oasis-tech-v4';
+const CACHE_NAME = 'oasis-technician-v1';
 const urlsToCache = [
   './',
   'index.html',
-  'styles.css?v=1',
-  '../tech-catalog.js?v=1',
-  '../app.js?v=30',
+  'styles.css?v=2',
+  'app.js?v=1',
   'manifest.json',
+  'icon-180.png',
+  'icon-192.png',
+  'icon-512.png',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js'
 ];

@@ -7,9 +7,16 @@ cd "$(dirname "$0")"
 
 # Find local IP
 IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | head -1)
+URL="http://$IP:8080"
 
 # Kill any existing server on port 8080
 lsof -ti:8080 | xargs kill -9 2>/dev/null
+
+# Remove old QR codes
+rm -f oasis-service-qr.png
+
+# Generate fresh QR code using Python
+python3 -c "import qrcode; img = qrcode.make('$URL'); img.save('oasis-service-qr.png')"
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -20,11 +27,10 @@ echo "║  Server is RUNNING                       ║"
 echo "║                                          ║"
 echo "║  Share this URL with your team:          ║"
 echo "║                                          ║"
-echo "║  http://$IP:8080          ║"
+echo "║  $URL          ║"
 echo "║                                          ║"
-echo "║  On Android: open Chrome, go to the      ║"
-echo "║  URL above, then tap the menu (⋮) and   ║"
-echo "║  'Add to Home Screen' to install.        ║"
+echo "║  1. Connect to the SAME Wi-Fi            ║"
+echo "║  2. Scan the QR code that just opened    ║"
 echo "║                                          ║"
 echo "║  Keep this window open while working.   ║"
 echo "║  Close it to stop the server.            ║"
@@ -32,8 +38,9 @@ echo "║                                          ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 
-# Open the app in the Mac browser too
-open "http://$IP:8080"
+# Open the QR code and the app
+open "oasis-service-qr.png"
+open "$URL"
 
-# Start server (keeps running until window is closed)
+# Start server
 python3 -m http.server 8080

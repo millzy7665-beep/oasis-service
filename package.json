@@ -4,7 +4,11 @@
   "description": "",
   "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build:web": "mkdir -p www && cp index.html app.js tech-catalog.js styles.css sw.js manifest.json icon-180.png icon-192.png icon-512.png oasis-logo.png oasis-service-qr.png www/",
+    "cap:sync": "npm run build:web && npx cap sync android",
+    "android": "npm run cap:sync && npx cap open android",
+    "apk:debug": "npm run cap:sync && cd android && ./gradlew assembleDebug"
   },
   "repository": {
     "type": "git",
@@ -17,5 +21,18 @@
   "bugs": {
     "url": "https://github.com/millzy7665-beep/oasis-service/issues"
   },
-  "homepage": "https://github.com/millzy7665-beep/oasis-service#readme"
+  "homepage": "https://github.com/millzy7665-beep/oasis-service#readme",
+  "dependencies": {
+    "@capacitor/android": "^8.3.0",
+    "@capacitor/camera": "^8.0.2",
+    "@capacitor/cli": "^8.3.0",
+    "@capacitor/core": "^8.3.0",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/ios": "^8.3.0",
+    "@capacitor/share": "^8.0.1",
+    "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5"
+  }
 }

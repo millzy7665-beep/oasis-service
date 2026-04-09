@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#000000">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OASIS Service and Repair">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+  <link rel="manifest" href="manifest.json?v=13">
+  <title>OASIS &mdash; Service and Repair</title>
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css?v=10">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════
+       LOGIN SCREEN — outside #app so position:fixed is full-viewport
+       ═══════════════════════════════════════════════════════ -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-bg"></div>
+    <div class="login-card">
+      <img class="login-logo"
+        src="icon-192.png"
+        alt="OASIS">
+      <div class="login-brand">OASIS</div>
+      <div class="login-tagline">Service &amp; Repair</div>
+
+      <form id="login-form" class="login-form">
+        <div class="login-field-group">
+          <label class="login-label">Select Your Name</label>
+          <select id="login-tech" required>
+            <option value="">— Select your name —</option>
+            <option value="t1">Ace</option>
+            <option value="t2">Ariel</option>
+            <option value="t3">Donald</option>
+            <option value="t4">Elvin</option>
+            <option value="t5">Jermaine</option>
+            <option value="t6">Kadeem</option>
+            <option value="t7">Kingsley</option>
+            <option value="t8">Malik</option>
+            <option value="t9">Jet</option>
+            <option value="t10">Mark</option>
+            <option value="t11">Tech 3</option>
+            <option value="admin">Chris Mills (Admin)</option>
+          </select>
+        </div>
+
+        <button type="submit" class="btn-login">Sign In</button>
+        <div id="login-error" class="login-error" style="display:none">Please select your name.</div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       MAIN APP
+       ═══════════════════════════════════════════════════════ -->
+  <div id="app" class="hidden">
+
+    <div id="app-shell">
+
+      <header class="app-header">
+        <div class="header-left">
+          <img class="header-logo-icon"
+            src="icon-192.png"
+            alt="OASIS">
+          <div class="header-sub">OASIS Service &amp; Repair</div>
+        </div>
+        <div id="header-actions" class="header-actions">
+          <button class="signout-btn" onclick="signOut()">Sign Out</button>
+        </div>
+      </header>
+
+      <main id="main-content" class="main-content"></main>
+
+      <nav class="bottom-nav">
+        <button class="nav-item active" data-view="dashboard">
+          <span class="nav-icon">🏠</span>
+          <span class="nav-label">Home</span>
+        </button>
+        <button class="nav-item" data-view="routes">
+          <span class="nav-icon">🗺️</span>
+          <span class="nav-label">Routes</span>
+        </button>
+        <button class="nav-item" data-view="clients">
+          <span class="nav-icon">👥</span>
+          <span class="nav-label">Clients</span>
+        </button>
+        <button class="nav-item" data-view="workorders">
+          <span class="nav-icon">�</span>
+          <span class="nav-label">Jobs</span>
+        </button>
+        <button class="nav-item" data-view="settings">
+          <span class="nav-icon">⚙️</span>
+          <span class="nav-label">Settings</span>
+        </button>
+      </nav>
+
+    </div><!-- /app-shell -->
+
+    <!-- Modal -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 id="modal-title"></h2>
+          <button class="modal-close" id="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
+          <button class="btn btn-primary" id="modal-save-btn">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirm -->
+    <div id="confirm-overlay" class="modal-overlay hidden">
+      <div class="modal modal-sm">
+        <div class="modal-header"><h2 id="confirm-title">Confirm</h2></div>
+        <div class="modal-body"><p id="confirm-message"></p></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="confirm-cancel-btn">Cancel</button>
+          <button class="btn btn-danger" id="confirm-ok-btn">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+  </div><!-- /app -->
+
+  <script src="tech-catalog.js?v=1"></script>
+  <script src="app.js?v=18"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js?v=14')
+        .catch(function(e){ console.warn('SW registration failed:', e); });
+    }
+  </script>
+</body>
+</html>
