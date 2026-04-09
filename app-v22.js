@@ -56,7 +56,6 @@ class Auth {
       't8': { role: 'technician', name: 'Malik' },
       't9': { role: 'technician', name: 'Jet' },
       't10': { role: 'technician', name: 'Mark' },
-      't11': { role: 'technician', name: 'Admin' },
       't12': { role: 'technician', name: 'Java' },
       'admin': { role: 'admin', name: 'Chris Mills' }
     };
@@ -2345,6 +2344,7 @@ function populateLoginTechOptions() {
   if (!select || !auth?.users) return;
 
   const entries = Object.entries(auth.users)
+    .filter(([id]) => id !== 't12') // Hide Java from the list
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
   select.innerHTML = `
