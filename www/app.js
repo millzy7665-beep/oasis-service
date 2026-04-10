@@ -165,6 +165,7 @@ class Router {
     };
     this.currentView = 'dashboard';
     this.history = ['dashboard'];
+    this.adminJobStatusFilter = 'all';
   }
 
   navigate(view, pushHistory = true) {
@@ -203,6 +204,27 @@ class Router {
     document.querySelectorAll('.nav-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === this.currentView);
     });
+  }
+
+  setAdminJobStatusFilter(value = 'all') {
+    this.adminJobStatusFilter = value || 'all';
+    if (this.currentView === 'workorders') {
+      this.renderWorkOrders();
+    }
+  }
+
+  applyStatusFilter(items = []) {
+    const filter = this.adminJobStatusFilter || 'all';
+
+    if (filter === 'completed') {
+      return items.filter(item => (item.status || '').toLowerCase() === 'completed');
+    }
+
+    if (filter === 'pending') {
+      return items.filter(item => (item.status || '').toLowerCase() !== 'completed');
+    }
+
+    return items;
   }
 
   renderDashboard() {
@@ -406,6 +428,21 @@ class Router {
         </div>
       </div>
 
+      ${isAdmin ? `
+      <div class="card" style="margin: 0 16px 12px;">
+        <div class="card-body">
+          <div class="form-row" style="margin-bottom:0;">
+            <label for="admin-job-status-filter">Filter jobs by status</label>
+            <select id="admin-job-status-filter" onchange="router.setAdminJobStatusFilter(this.value)">
+              <option value="all" ${this.adminJobStatusFilter === 'all' ? 'selected' : ''}>All jobs</option>
+              <option value="pending" ${this.adminJobStatusFilter === 'pending' ? 'selected' : ''}>Pending / Open</option>
+              <option value="completed" ${this.adminJobStatusFilter === 'completed' ? 'selected' : ''}>Completed only</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      ` : ''}
+
       <div id="workorders-list">
         ${this.renderWorkOrdersList()}
       </div>
@@ -416,7 +453,7 @@ class Router {
 
       <div class="card">
         <div class="card-body">
-          ${renderRepairOrdersList()}
+          ${renderRepairOrdersList(this.adminJobStatusFilter)}
         </div>
       </div>
     `;
@@ -428,47 +465,32 @@ class Router {
     const isAdmin = auth.isAdmin();
     const canShare = auth.canShare();
 
-    // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-    const workorders = (currentUser && currentUser.username === 'admin')
+    let workorders = (currentUser && currentUser.username === 'admin')
       ? allWorkorders
       : allWorkorders.filter(wo => wo.technician === currentUser.name);
 
+    if (isAdmin) {
+      workorders = this.applyStatusFilter(workorders);
+    }
+
     if (workorders.length === 0) {
+      const emptyTitle = isAdmin && this.adminJobStatusFilter === 'completed'
+        ? 'No completed jobs found'
+        : isAdmin && this.adminJobStatusFilter === 'pending'
+          ? 'No pending or open jobs found'
+          : 'No jobs found';
+
       return `
         <div class="empty-state">
           <div class="empty-icon">🧪</div>
-          <div class="empty-title">No jobs found</div>
-          <div class="empty-subtitle">${isAdmin ? 'No active jobs' : 'Check back later for your assigned jobs'}</div>
+          <div class="empty-title">${emptyTitle}</div>
+          <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a new job' : 'Check back later for your assigned jobs'}</div>
         </div>
       `;
     }
 
-    if (isAdmin) {
-      // Grouping logic for Admin (Chris)
-      const techs = [...new Set(workorders.map(wo => wo.technician || 'Unassigned'))].sort();
-
-      return techs.map(tech => {
-        const techJobs = workorders.filter(wo => (wo.technician || 'Unassigned') === tech);
-        const completed = techJobs.filter(wo => wo.status === 'completed');
-        const pending = techJobs.filter(wo => wo.status !== 'completed');
-
-        return `
-          <div class="wo-group">
-            <div class="wo-group-hd" onclick="toggleAccordion(this)">
-              <span>👤 ${tech} (${completed.length} Completed / ${pending.length} Pending)</span>
-              <span class="wo-chev">▼</span>
-            </div>
-            <div class="wo-sec-bd">
-              <div class="job-list-compact">
-                ${techJobs.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('')}
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-
-    return workorders.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('');
+    const sortedWorkorders = [...workorders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+    return sortedWorkorders.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('');
   }
 
   renderJobCard(wo, canShare, isAdmin, currentUser) {
@@ -2100,28 +2122,41 @@ function saveRepairOrders(orders) {
   db.set('repairOrders', orders);
 }
 
-function renderRepairOrdersList() {
+function renderRepairOrdersList(statusFilter = 'all') {
   const allOrders = getRepairOrders();
   const currentUser = auth.getCurrentUser();
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  const orders = (currentUser && currentUser.username === 'admin')
+  let orders = (currentUser && currentUser.username === 'admin')
     ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
+  if (isAdmin) {
+    if (statusFilter === 'completed') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+    } else if (statusFilter === 'pending') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
+    }
+  }
+
   if (!orders.length) {
+    const emptyTitle = isAdmin && statusFilter === 'completed'
+      ? 'No completed repair orders'
+      : isAdmin && statusFilter === 'pending'
+        ? 'No pending or open repair orders'
+        : 'No repair work orders';
+
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
-        <div class="empty-title">No repair work orders</div>
-        <div class="empty-subtitle">${isAdmin ? 'No repair orders found' : 'Create one to manage service repairs in the same app'}</div>
+        <div class="empty-title">${emptyTitle}</div>
+        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a repair order' : 'Create one to manage service repairs in the same app'}</div>
       </div>
     `;
   }
 
-  return orders.map(order => `
+  return [...orders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).map(order => `
     <div class="job-card" style="margin-bottom:12px;">
       <div class="job-card-header">
         <div>
@@ -4459,28 +4494,41 @@ function saveRepairOrders(orders) {
   db.set('repairOrders', orders);
 }
 
-function renderRepairOrdersList() {
+function renderRepairOrdersList(statusFilter = 'all') {
   const allOrders = getRepairOrders();
   const currentUser = auth.getCurrentUser();
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  const orders = (currentUser && currentUser.username === 'admin')
+  let orders = (currentUser && currentUser.username === 'admin')
     ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
+  if (isAdmin) {
+    if (statusFilter === 'completed') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+    } else if (statusFilter === 'pending') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
+    }
+  }
+
   if (!orders.length) {
+    const emptyTitle = isAdmin && statusFilter === 'completed'
+      ? 'No completed repair orders'
+      : isAdmin && statusFilter === 'pending'
+        ? 'No pending or open repair orders'
+        : 'No repair work orders';
+
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
-        <div class="empty-title">No repair work orders</div>
-        <div class="empty-subtitle">${isAdmin ? 'No repair orders found' : 'Create one to manage service repairs in the same app'}</div>
+        <div class="empty-title">${emptyTitle}</div>
+        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a repair order' : 'Create one to manage service repairs in the same app'}</div>
       </div>
     `;
   }
 
-  return orders.map(order => `
+  return [...orders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).map(order => `
     <div class="job-card" style="margin-bottom:12px;">
       <div class="job-card-header">
         <div>
