@@ -151,6 +151,197 @@ class Modal {
 
 const modal = new Modal();
 
+class NotificationManager {
+  constructor() {
+    this.storageKey = 'oasis_notifications';
+  }
+
+  getAll() {
+    return db.get(this.storageKey, []);
+  }
+
+  saveAll(items = []) {
+    db.set(this.storageKey, items.slice(0, 250));
+  }
+
+  getForUser(user = auth.getCurrentUser()) {
+    const userName = user?.name || '';
+    return this.getAll().filter(item => item.recipient === userName || item.recipient === 'all');
+  }
+
+  getUnreadForUser(user = auth.getCurrentUser()) {
+    return this.getForUser(user).filter(item => !item.read);
+  }
+
+  async requestPermission() {
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        await Notification.requestPermission();
+      }
+    } catch (error) {
+      console.warn('Browser notification permission request failed', error);
+    }
+
+    try {
+      const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
+      if (localNotifications?.requestPermissions) {
+        await localNotifications.requestPermissions();
+      }
+    } catch (error) {
+      console.warn('Local notification permission request failed', error);
+    }
+  }
+
+  async presentLiveNotification(item) {
+    const currentUser = auth.getCurrentUser();
+    if (!currentUser || item.recipient !== currentUser.name) return;
+
+    try {
+      const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
+      if (localNotifications?.schedule) {
+        await localNotifications.schedule({
+          notifications: [{
+            id: Number(String(Date.now()).slice(-8)),
+            title: item.title,
+            body: item.message,
+            schedule: { at: new Date(Date.now() + 500) }
+          }]
+        });
+        return;
+      }
+    } catch (error) {
+      console.warn('Capacitor local notification failed', error);
+    }
+
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        new Notification(item.title, { body: item.message });
+        return;
+      }
+    } catch (error) {
+      console.warn('Browser notification failed', error);
+    }
+
+    showToast(item.title);
+  }
+
+  async create({ type = 'update', title = 'New update', message = '', recipients = [] }) {
+    const list = this.getAll();
+    const createdAt = new Date().toISOString();
+    const targetRecipients = [...new Set((Array.isArray(recipients) ? recipients : [recipients]).filter(Boolean))];
+
+    for (const recipient of targetRecipients) {
+      const item = {
+        id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        type,
+        title,
+        message,
+        recipient,
+        createdAt,
+        read: false
+      };
+
+      list.unshift(item);
+      await this.presentLiveNotification(item);
+    }
+
+    this.saveAll(list);
+  }
+
+  markAllRead(user = auth.getCurrentUser()) {
+    const userName = user?.name || '';
+    const updated = this.getAll().map(item => (
+      item.recipient === userName ? { ...item, read: true } : item
+    ));
+    this.saveAll(updated);
+  }
+
+  showUnreadToast(user = auth.getCurrentUser()) {
+    const unreadCount = this.getUnreadForUser(user).length;
+    if (unreadCount) {
+      showToast(`${unreadCount} new notification${unreadCount === 1 ? '' : 's'}`);
+    }
+  }
+
+  renderDashboardPanel() {
+    const notes = this.getForUser().slice(0, 4);
+
+    if (!notes.length) {
+      return `
+        <div class="card" style="margin: 0 16px 12px;">
+          <div class="card-body">
+            <div class="empty-title">No new notifications</div>
+            <div class="empty-subtitle">New clients, chem sheets, and repair orders from Admin will appear here offline on this device.</div>
+          </div>
+        </div>
+      `;
+    }
+
+    const iconMap = {
+      client: '👥',
+      chem: '🧪',
+      repair: '🛠️',
+      update: '🔔'
+    };
+
+    return `
+      <div class="card" style="margin: 0 16px 12px;">
+        <div class="card-body">
+          ${notes.map(note => {
+            const stamp = note.createdAt
+              ? new Date(note.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+              : '';
+
+            return `
+              <div class="detail-row" style="align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid var(--gray-200);">
+                <div style="font-size:18px; line-height:1;">${iconMap[note.type] || '🔔'}</div>
+                <div style="flex:1;">
+                  <div class="detail-value" style="font-weight:700;">${escapeHtml(note.title || 'Update')}</div>
+                  <div class="detail-label" style="margin-top:3px;">${escapeHtml(note.message || '')}</div>
+                  <div class="detail-label" style="margin-top:4px; font-size:11px;">${escapeHtml(stamp)}</div>
+                </div>
+                ${note.read ? '' : '<span class="badge badge-pending">New</span>'}
+              </div>
+            `;
+          }).join('')}
+          <div style="margin-top:10px;">
+            <button class="btn btn-secondary btn-sm" onclick="markNotificationsRead()">Mark Notifications Read</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+}
+
+const notificationManager = new NotificationManager();
+
+function getAdminName() {
+  return auth.users?.admin?.name || 'Chris Mills';
+}
+
+function getTechnicianNames() {
+  return Object.values(auth.users)
+    .filter(user => user.role === 'technician')
+    .map(user => user.name)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function normalizeTechnicianName(name = '') {
+  const value = String(name || '').trim();
+  if (!value) return '';
+
+  const match = getTechnicianNames().find(item => item.toLowerCase() === value.toLowerCase());
+  return match || value;
+}
+
+function markNotificationsRead() {
+  notificationManager.markAllRead();
+  showToast('Notifications marked as read');
+  if (router.currentView === 'dashboard') {
+    router.renderDashboard();
+  }
+}
+
 // ==========================================
 // ROUTER
 // ==========================================
@@ -267,6 +458,12 @@ class Router {
     const userName = user ? user.name : 'Technician';
     const visibleWorkorders = this.getVisibleJobs(db.get('workorders', []), 'technician');
     const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
+    const unreadNotifications = notificationManager.getUnreadForUser(user).length;
+
+    notificationManager.requestPermission();
+    if (unreadNotifications) {
+      setTimeout(() => notificationManager.showUnreadToast(user), 150);
+    }
 
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 
@@ -293,6 +490,14 @@ class Router {
           <div class="stat-value">${db.get('clients', []).length}</div>
           <div class="stat-label">Clients</div>
         </div>
+      </div>
+
+      <div class="section-header">
+        <div class="section-title">Notifications${unreadNotifications ? ` (${unreadNotifications} new)` : ''}</div>
+      </div>
+
+      <div id="dashboard-notifications">
+        ${notificationManager.renderDashboardPanel()}
       </div>
 
       <div class="section-header">
@@ -432,13 +637,17 @@ class Router {
   renderClientsList(query = '') {
     const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
+    const currentUser = auth.getCurrentUser();
+    const scopedClients = isAdmin
+      ? allClients
+      : allClients.filter(client => (client.technician || '') === (currentUser?.name || ''));
 
     const clients = query
-      ? allClients.filter(c =>
+      ? scopedClients.filter(c =>
           c.name.toLowerCase().includes(query.toLowerCase()) ||
           c.address.toLowerCase().includes(query.toLowerCase())
         )
-      : allClients;
+      : scopedClients;
 
     if (clients.length === 0) {
       return `
@@ -925,12 +1134,15 @@ class WorkOrderManager {
     const client = clients.find(c => c.id === clientId);
     if (!client) return null;
 
+    const currentUser = auth.getCurrentUser();
+    const assignedTechnician = client.technician || currentUser?.name || '';
+
     const order = {
       id: Date.now().toString(),
       clientId,
       clientName: client.name,
       address: client.address,
-      technician: auth.getCurrentUser()?.name || '',
+      technician: assignedTechnician,
       date: new Date().toISOString().split('T')[0],
       time: '',
       timeIn: '',
@@ -6382,4 +6594,178 @@ async function copyApkLink() {
       showToast('Could not copy link');
     }
   }
+}
+
+function quickAddClient() {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can add clients');
+    return;
+  }
+
+  const name = prompt('Client name');
+  if (!name) return;
+
+  const address = prompt('Client address') || '';
+  const contact = prompt('Contact name') || '';
+  const technicianInput = prompt(
+    `Assign this client to which technician?\n\n${getTechnicianNames().join(', ')}`,
+    getTechnicianNames()[0] || ''
+  );
+  const technician = normalizeTechnicianName(technicianInput);
+
+  if (!technician) {
+    showToast('Please select the technician for this client');
+    return;
+  }
+
+  const clients = db.get('clients', []);
+  clients.unshift({
+    id: `c${Date.now()}`,
+    name,
+    address,
+    contact,
+    technician
+  });
+
+  db.set('clients', clients);
+
+  notificationManager.create({
+    type: 'client',
+    title: 'New client from Admin',
+    message: `${name} has been added and sent to ${technician}.`,
+    recipients: [technician, getAdminName()]
+  });
+
+  showToast(`Client added and sent to ${technician}`);
+  router.renderClients();
+}
+
+function onChemClientChange() {
+  const select = document.getElementById('wo-client');
+  const addressField = document.getElementById('wo-address');
+  const title = document.getElementById('wo-client-name');
+  const techField = document.getElementById('wo-tech');
+  if (!select) return;
+
+  const client = db.get('clients', []).find(item => item.id === select.value);
+  if (client) {
+    if (addressField) addressField.value = client.address || '';
+    if (title) title.textContent = client.name || 'Chem Sheet';
+    if (techField && client.technician) techField.value = client.technician;
+  }
+}
+
+function saveWorkOrderForm(orderId) {
+  const previousOrder = workOrderManager.getOrder(orderId);
+  const order = collectWorkOrderForm(orderId);
+  if (!order) {
+    showToast('Work order not found');
+    return;
+  }
+
+  const currentUser = auth.getCurrentUser();
+  const previousStatus = (previousOrder?.status || '').toLowerCase();
+  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
+  order.updatedAt = new Date().toISOString();
+  order.updatedBy = currentUser?.name || '';
+
+  workOrderManager.saveOrder(order);
+
+  if (currentUser?.username === 'admin' && order.technician && order.technician !== currentUser.name) {
+    const assignmentChanged = !previousOrder || previousOrder.technician !== order.technician || previousStatus !== (order.status || '').toLowerCase();
+    if (assignmentChanged) {
+      notificationManager.create({
+        type: 'chem',
+        title: 'New chem sheet from Admin',
+        message: `${order.clientName || 'A chem sheet'} has been sent directly to you.`,
+        recipients: [order.technician, getAdminName()]
+      });
+    }
+  } else if (currentUser && currentUser.username !== 'admin') {
+    const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
+    if (shouldNotifyAdmin) {
+      notificationManager.create({
+        type: 'chem',
+        title: order.status === 'completed' ? 'Completed chem sheet received' : 'Chem sheet received from technician',
+        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a chem sheet'}.`,
+        recipients: [getAdminName()]
+      });
+    }
+  }
+
+  router.navigate('workorders');
+  showToast(order.status === 'completed'
+    ? 'Completed chem sheet saved for admin export'
+    : 'Chem sheet saved');
+}
+
+function onRepairClientChange() {
+  const select = document.getElementById('repair-client');
+  const address = document.getElementById('repair-address');
+  const title = document.getElementById('repair-bar-title');
+  const techField = document.getElementById('repair-tech');
+  if (!select || !address) return;
+
+  const client = db.get('clients', []).find(item => item.id === select.value);
+  if (client) {
+    address.value = client.address || '';
+    if (title) title.textContent = client.name || 'Repair Order';
+    if (techField && client.technician) techField.value = client.technician;
+  }
+}
+
+function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
+  const order = collectRepairOrderFromForm(orderId);
+  if (!order) return;
+
+  const currentUser = auth.getCurrentUser();
+  const orders = getRepairOrders();
+  const previousOrder = orders.find(item => item.id === order.id);
+  const previousStatus = (previousOrder?.status || '').toLowerCase();
+
+  order.status = document.getElementById('repair-status')?.value || order.status || 'open';
+  order.updatedAt = new Date().toISOString();
+  order.updatedBy = currentUser?.name || '';
+
+  const index = orders.findIndex(item => item.id === order.id);
+  if (index >= 0) {
+    orders[index] = order;
+  } else {
+    orders.unshift(order);
+  }
+
+  saveRepairOrders(orders);
+
+  if (currentUser?.username === 'admin' && order.assignedTo && order.assignedTo !== currentUser.name) {
+    const assignmentChanged = !previousOrder || previousOrder.assignedTo !== order.assignedTo || previousStatus !== (order.status || '').toLowerCase();
+    if (assignmentChanged) {
+      notificationManager.create({
+        type: 'repair',
+        title: 'New repair order from Admin',
+        message: `${order.clientName || 'A repair order'} has been sent directly to you.`,
+        recipients: [order.assignedTo, getAdminName()]
+      });
+    }
+  } else if (currentUser && currentUser.username !== 'admin') {
+    const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
+    if (shouldNotifyAdmin) {
+      notificationManager.create({
+        type: 'repair',
+        title: order.status === 'completed' ? 'Completed repair order received' : 'Repair order received from technician',
+        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a repair order'}.`,
+        recipients: [getAdminName()]
+      });
+    }
+  }
+
+  showToast(order.status === 'completed'
+    ? 'Completed repair order saved for admin export'
+    : 'Repair work order saved');
+
+  if (shareAfterSave) {
+    shareRepairPDF(order.id);
+    return;
+  }
+
+  router.renderWorkOrders();
 }
