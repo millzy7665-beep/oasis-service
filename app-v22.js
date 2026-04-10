@@ -1372,8 +1372,8 @@ async function takeNativePhoto(type, orderId, slotIndex) {
 
       // Persist immediately
       const orders = getRepairOrders();
-      const idx = orders.findIndex(o \u003d\u003e o.id === order.id);
-      if (idx \u003e\u003d 0) {
+      const idx = orders.findIndex(o => o.id === order.id);
+      if (idx >= 0) {
         orders[idx] = order;
       } else {
         orders.unshift(order);
@@ -1381,13 +1381,13 @@ async function takeNativePhoto(type, orderId, slotIndex) {
       saveRepairOrders(orders);
 
       const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
-      if (slot \u0026\u0026 orderId) {
+      if (slot && orderId) {
         const label = REPAIR_PHOTO_LABELS[slotIndex];
         slot.outerHTML = renderRepairPhotoSlot(order.id, label, image.dataUrl, slotIndex);
-        showToast(\u0027Repair photo added\u0027);
+        showToast('Repair photo added');
       } else {
-        renderRepairOrderForm(order.id, \u0027\u0027, order);
-        showToast(\u0027Repair photo added\u0027);
+        renderRepairOrderForm(order.id, '', order);
+        showToast('Repair photo added');
       }
     }
   } catch (error) {
@@ -1705,40 +1705,40 @@ function renderRepairPartRow(orderId, part, index) {
       <div class="wo-grid" style="border-radius:var(--radius-sm); margin-bottom:6px;">
         <div class="wo-fld">
           <div class="wo-fld-lbl">Category</div>
-          <select class="repair-part-category" onchange="refreshRepairOrderBuilder(\u0027${orderId || \u0027\u0027}\u0027)">
+          <select class="repair-part-category" onchange="refreshRepairOrderBuilder('${orderId || ''}')">
             <option value="">— Select category —</option>
             ${categories.map(category => `
-              <option value="${escapeHtml(category)}" ${category === part.category ? \u0027selected\u0027 : \u0027\u0027}>${escapeHtml(category)}</option>
-            `).join(\u0027\u0027)}
+              <option value="${escapeHtml(category)}" ${category === part.category ? 'selected' : ''}>${escapeHtml(category)}</option>
+            `).join('')}
           </select>
         </div>
 
         <div class="wo-fld">
           <div class="wo-fld-lbl">Equipment / Part</div>
-          <select class="repair-part-product" onchange="refreshRepairOrderBuilder(\u0027${orderId || \u0027\u0027}\u0027)">
+          <select class="repair-part-product" onchange="refreshRepairOrderBuilder('${orderId || ''}')">
             <option value="">— Select equipment —</option>
             ${items.map(item => `
               <option value="${escapeHtml(item.partNumber)}"
                 data-product="${escapeHtml(item.product)}"
-                data-price="${escapeHtml(String(item.price ?? \u0027\u0027))}"
-                ${item.partNumber === part.partNumber ? \u0027selected\u0027 : \u0027\u0027}>
-                ${escapeHtml(item.product)}${item.partNumber ? ` — ${escapeHtml(item.partNumber)}` : \u0027\u0027}
+                data-price="${escapeHtml(String(item.price ?? ''))}"
+                ${item.partNumber === part.partNumber ? 'selected' : ''}>
+                ${escapeHtml(item.product)}${item.partNumber ? ` — ${escapeHtml(item.partNumber)}` : ''}
               </option>
-            `).join(\u0027\u0027)}
+            `).join('')}
           </select>
         </div>
 
         <div class="wo-fld">
           <div class="wo-fld-lbl">Quantity</div>
-          <input class="wo-fld-inp repair-part-qty" type="number" min="1" step="1" value="${escapeHtml(String(part.qty || \u00271\u0027))}" oninput="updateRepairPartRowDetails(this)">
+          <input class="wo-fld-inp repair-part-qty" type="number" min="1" step="1" value="${escapeHtml(String(part.qty || '1'))}" oninput="updateRepairPartRowDetails(this)">
         </div>
 
         <div class="wo-fld">
           <div class="wo-fld-lbl">Part Details</div>
           <div class="repair-part-details" style="font-size:12px; color:var(--gray-600); line-height:1.5; min-height:38px;">
-            ${selectedItem ? `${escapeHtml(selectedItem.partNumber || \u0027\u0027)}${selectedItem.price ? ` • $${Number(selectedItem.price).toFixed(2)}` : \u0027\u0027}` : \u0027Choose a category and equipment item.\u0027}
+            ${selectedItem ? `${escapeHtml(selectedItem.partNumber || '')}${selectedItem.price ? ` • $${Number(selectedItem.price).toFixed(2)}` : ''}` : 'Choose a category and equipment item.'}
           </div>
-          <button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="removeRepairPartRow(\u0027${orderId || \u0027\u0027}\u0027, ${index})">Remove</button>
+          <button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="removeRepairPartRow('${orderId || ''}', ${index})">Remove</button>
         </div>
       </div>
     </div>
@@ -1746,13 +1746,13 @@ function renderRepairPartRow(orderId, part, index) {
 }
 
 function updateRepairPartRowDetails(input) {
-  const row = input.closest(\u0027.repair-part-row\u0027);
-  const productSelect = row.querySelector(\u0027.repair-part-product\u0027);
-  const detailsDiv = row.querySelector(\u0027.repair-part-details\u0027);
+  const row = input.closest('.repair-part-row');
+  const productSelect = row.querySelector('.repair-part-product');
+  const detailsDiv = row.querySelector('.repair-part-details');
   const qty = parseInt(input.value) || 1;
 
   const selectedOption = productSelect.selectedOptions[0];
-  if (selectedOption \u0026\u0026 selectedOption.value) {
+  if (selectedOption && selectedOption.value) {
     const partNumber = selectedOption.value;
     const price = parseFloat(selectedOption.dataset.price);
     if (!isNaN(price)) {
@@ -1865,13 +1865,13 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
   try {
     const order = collectRepairOrderFromForm(orderId);
     if (!order) {
-      showToast(\u0027Repair work order not found\u0027);
+      showToast('Repair work order not found');
       return;
     }
 
-    showToast(\u0027Processing repair photo...\u0027);
+    showToast('Processing repair photo...');
     const dataUrl = await resizeImageForStorage(file);
-    if (!dataUrl) throw new Error(\u0027Photo processing failed\u0027);
+    if (!dataUrl) throw new Error('Photo processing failed');
 
     const photos = normalizeRepairPhotos(order.photos);
     photos[slotIndex] = dataUrl;
@@ -1879,8 +1879,8 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
 
     // Persist immediately
     const orders = getRepairOrders();
-    const idx = orders.findIndex(o \u003d\u003e o.id === order.id);
-    if (idx \u003e\u003d 0) {
+    const idx = orders.findIndex(o => o.id === order.id);
+    if (idx >= 0) {
       orders[idx] = order;
     } else {
       orders.unshift(order);
@@ -1888,50 +1888,50 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
     saveRepairOrders(orders);
 
     const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
-    if (slot \u0026\u0026 orderId) {
+    if (slot && orderId) {
       const label = REPAIR_PHOTO_LABELS[slotIndex];
       slot.outerHTML = renderRepairPhotoSlot(order.id, label, dataUrl, slotIndex);
-      showToast(\u0027Repair photo added\u0027);
+      showToast('Repair photo added');
     } else {
-      renderRepairOrderForm(order.id, \u0027\u0027, order);
-      showToast(\u0027Repair photo added\u0027);
+      renderRepairOrderForm(order.id, '', order);
+      showToast('Repair photo added');
     }
   } catch (error) {
-    console.error(\u0027Repair photo upload failed\u0027, error);
-    showToast(\u0027Unable to add repair photo\u0027);
+    console.error('Repair photo upload failed', error);
+    showToast('Unable to add repair photo');
   } finally {
-    if (event?.target) event.target.value = \u0027\u0027;
+    if (event?.target) event.target.value = '';
   }
 }
 
 function removeRepairPhoto(orderId, slotIndex) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) {
-    showToast(\u0027Repair work order not found\u0027);
+    showToast('Repair work order not found');
     return;
   }
 
   const photos = normalizeRepairPhotos(order.photos);
-  photos[slotIndex] = \u0027\u0027;
+  photos[slotIndex] = '';
   order.photos = photos;
 
   // Persist immediately
   const orders = getRepairOrders();
-  const idx = orders.findIndex(o \u003d\u003e o.id === order.id);
-  if (idx \u003e\u003d 0) {
+  const idx = orders.findIndex(o => o.id === order.id);
+  if (idx >= 0) {
     orders[idx] = order;
     saveRepairOrders(orders);
   }
 
   const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
-  if (slot \u0026\u0026 orderId) {
+  if (slot && orderId) {
     const label = REPAIR_PHOTO_LABELS[slotIndex];
-    slot.outerHTML = renderRepairPhotoSlot(order.id, label, \u0027\u0027, slotIndex);
+    slot.outerHTML = renderRepairPhotoSlot(order.id, label, '', slotIndex);
   } else {
-    renderRepairOrderForm(order.id, \u0027\u0027, order);
+    renderRepairOrderForm(order.id, '', order);
   }
 
-  showToast(\u0027Repair photo removed\u0027);
+  showToast('Repair photo removed');
 }
 
 function renderRepairOrdersList() {
@@ -1973,29 +1973,29 @@ function renderRepairOrdersList() {
   `).join('');
 }
 
-function renderRepairOrderForm(orderId = \u0027\u0027, presetClientId = \u0027\u0027, draftOrder = null) {
-  const content = document.getElementById(\u0027main-content\u0027);
-  const existing = !draftOrder \u0026\u0026 orderId ? getRepairOrders().find(order \u003d\u003e order.id === orderId) : null;
-  const clients = db.get(\u0027clients\u0027, []);
+function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = null) {
+  const content = document.getElementById('main-content');
+  const existing = !draftOrder && orderId ? getRepairOrders().find(order => order.id === orderId) : null;
+  const clients = db.get('clients', []);
   const order = draftOrder || existing || {
     id: orderId || `r${Date.now()}`,
     clientId: presetClientId,
-    clientName: \u0027\u0027,
-    address: \u0027\u0027,
-    date: new Date().toISOString().split(\u0027T\u0027)[0],
-    time: \u0027\u0027,
-    timeIn: \u0027\u0027,
-    timeOut: \u0027\u0027,
-    assignedTo: auth.getCurrentUser()?.name || \u0027\u0027,
-    status: \u0027open\u0027,
-    jobType: \u0027\u0027,
-    priority: \u0027Normal\u0027,
-    summary: \u0027\u0027,
-    materials: \u0027\u0027,
+    clientName: '',
+    address: '',
+    date: new Date().toISOString().split('T')[0],
+    time: '',
+    timeIn: '',
+    timeOut: '',
+    assignedTo: auth.getCurrentUser()?.name || '',
+    status: 'open',
+    jobType: '',
+    priority: 'Normal',
+    summary: '',
+    materials: '',
     partsItems: [],
-    partsSummary: \u0027\u0027,
-    labourHours: \u0027\u0027,
-    notes: \u0027\u0027,
+    partsSummary: '',
+    labourHours: '',
+    notes: '',
     photos: []
   };
 
@@ -2123,54 +2123,54 @@ function onRepairClientChange() {
   }
 }
 
-function collectRepairOrderFromForm(orderId = \u0027\u0027) {
-  const existing = orderId ? getRepairOrders().find(item \u003d\u003e item.id === orderId) : null;
+function collectRepairOrderFromForm(orderId = '') {
+  const existing = orderId ? getRepairOrders().find(item => item.id === orderId) : null;
   const finalId = orderId || existing?.id || `r${Date.now()}`;
 
-  const clientId = document.getElementById(\u0027repair-client\u0027)?.value || \u0027\u0027;
-  const client = db.get(\u0027clients\u0027, []).find(item \u003d\u003e item.id === clientId);
-  const partItems = Array.from(document.querySelectorAll(\u0027.repair-part-row\u0027)).map(row \u003d\u003e {
-    const category = row.querySelector(\u0027.repair-part-category\u0027)?.value || \u0027\u0027;
-    const productSelect = row.querySelector(\u0027.repair-part-product\u0027);
+  const clientId = document.getElementById('repair-client')?.value || '';
+  const client = db.get('clients', []).find(item => item.id === clientId);
+  const partItems = Array.from(document.querySelectorAll('.repair-part-row')).map(row => {
+    const category = row.querySelector('.repair-part-category')?.value || '';
+    const productSelect = row.querySelector('.repair-part-product');
     const selectedOption = productSelect?.selectedOptions?.[0] || null;
-    const qty = row.querySelector(\u0027.repair-part-qty\u0027)?.value || \u00271\u0027;
+    const qty = row.querySelector('.repair-part-qty')?.value || '1';
 
     return {
       category,
-      partNumber: productSelect?.value || \u0027\u0027,
-      product: selectedOption?.dataset.product || selectedOption?.textContent?.split(\u0027 — \u0027)[0] || \u0027\u0027,
+      partNumber: productSelect?.value || '',
+      product: selectedOption?.dataset.product || selectedOption?.textContent?.split(' — ')[0] || '',
       qty,
-      unitPrice: selectedOption?.dataset.price || \u0027\u0027
+      unitPrice: selectedOption?.dataset.price || ''
     };
-  }).filter(part \u003d\u003e part.category || part.partNumber || part.product);
+  }).filter(part => part.category || part.partNumber || part.product);
 
-  const timeIn = document.getElementById(\u0027repair-time-in\u0027)?.value || \u0027\u0027;
-  const timeOut = document.getElementById(\u0027repair-time-out\u0027)?.value || \u0027\u0027;
+  const timeIn = document.getElementById('repair-time-in')?.value || '';
+  const timeOut = document.getElementById('repair-time-out')?.value || '';
 
-  const photos = REPAIR_PHOTO_LABELS.map((_, index) \u003d\u003e {
+  const photos = REPAIR_PHOTO_LABELS.map((_, index) => {
     const preview = document.querySelector(`[data-repair-photo-index="${index}"]`);
-    return preview?.getAttribute(\u0027src\u0027) || existing?.photos?.[index] || \u0027\u0027;
+    return preview?.getAttribute('src') || existing?.photos?.[index] || '';
   });
 
   return {
     id: finalId,
     clientId,
-    clientName: client?.name || existing?.clientName || \u0027Unassigned Client\u0027,
-    address: document.getElementById(\u0027repair-address\u0027)?.value || \u0027\u0027,
-    date: document.getElementById(\u0027repair-date\u0027)?.value || \u0027\u0027,
+    clientName: client?.name || existing?.clientName || 'Unassigned Client',
+    address: document.getElementById('repair-address')?.value || '',
+    date: document.getElementById('repair-date')?.value || '',
     time: timeIn,
     timeIn,
     timeOut,
-    assignedTo: document.getElementById(\u0027repair-tech\u0027)?.value || \u0027\u0027,
-    status: document.getElementById(\u0027repair-status\u0027)?.value || \u0027open\u0027,
-    jobType: document.getElementById(\u0027repair-type\u0027)?.value || \u0027\u0027,
-    priority: document.getElementById(\u0027repair-priority\u0027)?.value || \u0027Normal\u0027,
-    summary: document.getElementById(\u0027repair-summary\u0027)?.value || \u0027\u0027,
-    materials: document.getElementById(\u0027repair-materials\u0027)?.value || \u0027\u0027,
+    assignedTo: document.getElementById('repair-tech')?.value || '',
+    status: document.getElementById('repair-status')?.value || 'open',
+    jobType: document.getElementById('repair-type')?.value || '',
+    priority: document.getElementById('repair-priority')?.value || 'Normal',
+    summary: document.getElementById('repair-summary')?.value || '',
+    materials: document.getElementById('repair-materials')?.value || '',
     partsItems: partItems,
     partsSummary: buildRepairPartsSummary(partItems),
-    labourHours: document.getElementById(\u0027repair-labour\u0027)?.value || \u0027\u0027,
-    notes: document.getElementById(\u0027repair-notes\u0027)?.value || \u0027\u0027,
+    labourHours: document.getElementById('repair-labour')?.value || '',
+    notes: document.getElementById('repair-notes')?.value || '',
     photos
   };
 }
@@ -2385,12 +2385,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       console.error('Initial navigation error:', err);
     }
-  } else {
-        router.navigate('dashboard');
-      } catch (err) {
-        console.error('Initial navigation error:', err);
-      }
-    }, 100);
   } else {
     console.log('No user logged in');
     if (loginScreen) {

@@ -587,7 +587,7 @@ class Router {
         <input type="text" id="admin-search-completed" class="form-control" placeholder="Search by client or tech..." oninput="router.filterCompletedJobs(this.value)">
       </div>
       <div id="completed-jobs-results" style="padding: 0 15px; margin-top: 15px;">
-        \${this.generateCompletedJobsHtml('')}
+        ${this.generateCompletedJobsHtml('')}
       </div>
     `;
   }
@@ -634,25 +634,25 @@ class Router {
         const shareCmd = isRepair ? `shareRepairPDF('${escapeHtml(job.id)}')` : `shareReport('${job.id}')`;
         const deleteCmd = isRepair ? `deleteRepairOrder('${escapeHtml(job.id)}')` : `deleteWorkOrder('${job.id}')`;
 
-        return \`
+        return `
         <div class="job-card job-card-completed" style="margin-bottom:12px;">
             <div class="job-card-header">
                 <div>
-                    <div class="job-card-title">\${title}</div>
-                    <div class="job-card-customer">\${subtitle}</div>
+                    <div class="job-card-title">${title}</div>
+                    <div class="job-card-customer">${subtitle}</div>
                     <div class="job-meta">
-                        <div class="job-meta-item">📅 \${date}</div>
-                        <div class="job-meta-item">👤 \${tech}</div>
+                        <div class="job-meta-item">📅 ${date}</div>
+                        <div class="job-meta-item">👤 ${tech}</div>
                     </div>
                 </div>
             </div>
             <div class="job-card-footer">
-                <button class="btn btn-secondary btn-sm" onclick="\${openCmd}">Open</button>
-                <button class="btn btn-primary btn-sm" onclick="\${shareCmd}">Share</button>
-                <button class="btn btn-danger btn-sm" onclick="\${deleteCmd}">Delete</button>
+                <button class="btn btn-secondary btn-sm" onclick="${openCmd}">Open</button>
+                <button class="btn btn-primary btn-sm" onclick="${shareCmd}">Share</button>
+                <button class="btn btn-danger btn-sm" onclick="${deleteCmd}">Delete</button>
             </div>
         </div>
-        \`;
+        `;
     };
 
     return completedJobs.map(jobToCard).join('');
@@ -4830,19 +4830,6 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   } else {
     router.renderWorkOrders();
   }
-} else {
-    orders.unshift(order);
-  }
-
-  saveRepairOrders(orders);
-  showToast('Repair work order saved');
-
-  if (shareAfterSave) {
-    shareRepairPDF(order.id);
-    return;
-  }
-
-  router.renderWorkOrders();
 }
 
 
