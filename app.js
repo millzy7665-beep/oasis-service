@@ -3,11 +3,69 @@
 // PDF generation with local save instead of email
 
 // ==========================================
-// DATA MANAGEMENT (DB)
+// FIREBASE & DATA MANAGEMENT (DB)
 // ==========================================
+const firebaseConfig = {
+  apiKey: "AIzaSyAo3vP7Myf08Q8KqoFlcgGNOZp2mX2R-38",
+  authDomain: "oasis-service-app-69def.firebaseapp.com",
+  projectId: "oasis-service-app-69def",
+  storageBucket: "oasis-service-app-69def.firebasestorage.app",
+  messagingSenderId: "156557428291",
+  appId: "1:156557428291:web:243524f03403d05c65f6f6",
+  measurementId: "G-THQ9YGZ0B5"
+};
+
+// Initialize Firebase if not already initialized
+if (typeof firebase !== 'undefined' && !firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+const firestore = typeof firebase !== 'undefined' ? firebase.firestore() : null;
+
 class DB {
   constructor() {
     this.storage = window.localStorage;
+    this.syncKeys = ['workorders', 'clients', 'repairOrders', 'apk_download_link'];
+    this.isSyncing = false;
+    this.initFirebaseSync();
+  }
+
+  initFirebaseSync() {
+    if (!firestore) return;
+
+    firestore.collection('app_data').doc('shared_state').onSnapshot((doc) => {
+      if (doc.exists) {
+        const data = doc.data();
+        this.isSyncing = true;
+        let requiresReRender = false;
+
+        for (const key of this.syncKeys) {
+          if (data[key] !== undefined) {
+            const currentVal = this.get(key);
+            const newValStr = JSON.stringify(data[key]);
+            if (JSON.stringify(currentVal) !== newValStr) {
+              this.storage.setItem(key, newValStr);
+              requiresReRender = true;
+
+              // Notify admin of new chem sheets if logged in
+              if (key === 'workorders' && typeof auth !== 'undefined' && auth.isAdmin()) {
+                if (currentVal && currentVal.length < data[key].length) {
+                  const latest = data[key][data[key].length - 1];
+                  if (typeof showToast === 'function') {
+                    showToast(`New Chem Sheet saved for ${latest.clientName}!`);
+                  }
+                }
+              }
+            }
+          }
+        }
+        this.isSyncing = false;
+
+        // Re-render UI to show new sync data
+        if (requiresReRender && typeof router !== 'undefined' && router.currentView) {
+          router.navigate(router.currentView, false);
+        }
+      }
+    });
   }
 
   get(key, defaultValue = null) {
@@ -22,6 +80,13 @@ class DB {
   set(key, value) {
     try {
       this.storage.setItem(key, JSON.stringify(value));
+
+      // Push to cloud if it's a shared key and we aren't currently receiving a sync
+      if (!this.isSyncing && this.syncKeys.includes(key) && firestore) {
+         firestore.collection('app_data').doc('shared_state').set({
+           [key]: value
+         }, { merge: true }).catch(err => console.error("Firebase sync error:", err));
+      }
       return true;
     } catch (e) {
       return false;
