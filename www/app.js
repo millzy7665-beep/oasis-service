@@ -225,7 +225,7 @@ class NotificationManager {
     showToast(item.title);
   }
 
-  async create({ type = 'update', title = 'New update', message = '', recipients = [] }) {
+  async create({ type = 'update', title = 'New update', message = '', recipients = [], targetView = '', targetId = '', actionLabel = 'Open' }) {
     const list = this.getAll();
     const createdAt = new Date().toISOString();
     const targetRecipients = [...new Set((Array.isArray(recipients) ? recipients : [recipients]).filter(Boolean))];
@@ -238,6 +238,9 @@ class NotificationManager {
         message,
         recipient,
         createdAt,
+        targetView,
+        targetId,
+        actionLabel,
         read: false
       };
 
@@ -246,6 +249,22 @@ class NotificationManager {
     }
 
     this.saveAll(list);
+  }
+
+  markRead(noteId, user = auth.getCurrentUser()) {
+    const userName = user?.name || '';
+    let updatedNote = null;
+
+    const updated = this.getAll().map(item => {
+      if (item.id === noteId && (!userName || item.recipient === userName || item.recipient === 'all')) {
+        updatedNote = { ...item, read: true };
+        return updatedNote;
+      }
+      return item;
+    });
+
+    this.saveAll(updated);
+    return updatedNote;
   }
 
   markAllRead(user = auth.getCurrentUser()) {
@@ -264,7 +283,7 @@ class NotificationManager {
   }
 
   renderDashboardPanel() {
-    const notes = this.getForUser().slice(0, 4);
+    const notes = this.getUnreadForUser().slice(0, 4);
 
     if (!notes.length) {
       return `
@@ -299,13 +318,16 @@ class NotificationManager {
                   <div class="detail-value" style="font-weight:700;">${escapeHtml(note.title || 'Update')}</div>
                   <div class="detail-label" style="margin-top:3px;">${escapeHtml(note.message || '')}</div>
                   <div class="detail-label" style="margin-top:4px; font-size:11px;">${escapeHtml(stamp)}</div>
+                  <div style="margin-top:8px;">
+                    <button class="btn btn-secondary btn-sm" onclick="openNotificationItem('${note.id}')">${escapeHtml(note.actionLabel || 'Acknowledge')}</button>
+                  </div>
                 </div>
-                ${note.read ? '' : '<span class="badge badge-pending">New</span>'}
+                <span class="badge badge-pending">New</span>
               </div>
             `;
           }).join('')}
           <div style="margin-top:10px;">
-            <button class="btn btn-secondary btn-sm" onclick="markNotificationsRead()">Mark Notifications Read</button>
+            <button class="btn btn-secondary btn-sm" onclick="markNotificationsRead()">Clear All Notifications</button>
           </div>
         </div>
       </div>
@@ -336,10 +358,37 @@ function normalizeTechnicianName(name = '') {
 
 function markNotificationsRead() {
   notificationManager.markAllRead();
-  showToast('Notifications marked as read');
+  showToast('Notifications cleared');
   if (router.currentView === 'dashboard') {
     router.renderDashboard();
   }
+}
+
+function openNotificationItem(noteId) {
+  const note = notificationManager.markRead(noteId);
+  if (!note) return;
+
+  if (note.targetView === 'chem' && note.targetId) {
+    router.viewWorkOrder(note.targetId);
+    return;
+  }
+
+  if (note.targetView === 'repair' && note.targetId) {
+    renderRepairOrderForm(note.targetId);
+    return;
+  }
+
+  if (note.targetView === 'clients') {
+    router.renderClients();
+    return;
+  }
+
+  if (note.targetView === 'workorders') {
+    router.renderWorkOrders();
+    return;
+  }
+
+  router.renderDashboard();
 }
 
 // ==========================================
@@ -3465,8 +3514,9 @@ async function shareFile(base64Data, filename, contentType = 'application/octet-
     return;
   }
 
+  const isPdf = filename.toLowerCase().endsWith('.pdf');
   const shareTitle = filename.toLowerCase().endsWith('.xlsx') ? 'OASIS Bulk Export' : 'OASIS Report';
-  const shareText = `OASIS file ready: ${filename}`;
+  const shareText = isPdf ? `OASIS PDF attached: ${filename}` : `OASIS file ready: ${filename}`;
 
   try {
     const plugins = (typeof Capacitor !== 'undefined' && Capacitor.Plugins) ? Capacitor.Plugins : {};
@@ -3483,14 +3533,15 @@ async function shareFile(base64Data, filename, contentType = 'application/octet-
         title: shareTitle,
         text: shareText,
         url: saveResult.uri,
+        files: [saveResult.uri],
         dialogTitle: shareChoice === 'whatsapp'
           ? 'Choose WhatsApp to send this file'
-          : 'Choose Email to send this file'
+          : 'Choose Email to send this file with the PDF attached'
       });
 
       showToast(shareChoice === 'whatsapp'
         ? 'Choose WhatsApp in the share list'
-        : 'Choose Email in the share list');
+        : 'Choose Email in the share list — the PDF will be attached');
       return;
     }
   } catch (error) {
@@ -6629,8 +6680,9 @@ function quickAddClient() {
   }
 
   const clients = db.get('clients', []);
+  const clientId = `c${Date.now()}`;
   clients.unshift({
-    id: `c${Date.now()}`,
+    id: clientId,
     name,
     address,
     contact,
@@ -6643,7 +6695,10 @@ function quickAddClient() {
     type: 'client',
     title: 'New client from Admin',
     message: `${name} has been added and sent to ${technician}.`,
-    recipients: [technician, getAdminName()]
+    recipients: [technician, getAdminName()],
+    targetView: 'clients',
+    targetId: clientId,
+    actionLabel: 'Open Clients'
   });
 
   showToast(`Client added and sent to ${technician}`);
@@ -6688,7 +6743,10 @@ function saveWorkOrderForm(orderId) {
         type: 'chem',
         title: 'New chem sheet from Admin',
         message: `${order.clientName || 'A chem sheet'} has been sent directly to you.`,
-        recipients: [order.technician, getAdminName()]
+        recipients: [order.technician, getAdminName()],
+        targetView: 'chem',
+        targetId: order.id,
+        actionLabel: 'Open Chem Sheet'
       });
     }
   } else if (currentUser && currentUser.username !== 'admin') {
@@ -6698,7 +6756,10 @@ function saveWorkOrderForm(orderId) {
         type: 'chem',
         title: order.status === 'completed' ? 'Completed chem sheet received' : 'Chem sheet received from technician',
         message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a chem sheet'}.`,
-        recipients: [getAdminName()]
+        recipients: [getAdminName()],
+        targetView: 'chem',
+        targetId: order.id,
+        actionLabel: 'Open Chem Sheet'
       });
     }
   }
@@ -6753,7 +6814,10 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
         type: 'repair',
         title: 'New repair order from Admin',
         message: `${order.clientName || 'A repair order'} has been sent directly to you.`,
-        recipients: [order.assignedTo, getAdminName()]
+        recipients: [order.assignedTo, getAdminName()],
+        targetView: 'repair',
+        targetId: order.id,
+        actionLabel: 'Open Repair Order'
       });
     }
   } else if (currentUser && currentUser.username !== 'admin') {
@@ -6763,7 +6827,10 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
         type: 'repair',
         title: order.status === 'completed' ? 'Completed repair order received' : 'Repair order received from technician',
         message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a repair order'}.`,
-        recipients: [getAdminName()]
+        recipients: [getAdminName()],
+        targetView: 'repair',
+        targetId: order.id,
+        actionLabel: 'Open Repair Order'
       });
     }
   }
