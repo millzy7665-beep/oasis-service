@@ -733,7 +733,7 @@ class Router {
       <div class="section-header">
         <div class="section-title">Service & Repair Jobs</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${canShare ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download / Share Excel</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download Excel</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
           <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Repair Order</button>
         </div>
