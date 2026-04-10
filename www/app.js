@@ -1369,10 +1369,6 @@ class WorkOrderManager {
     let y = renderHeader();
 
     // Info Grid
-    doc.setFillColor(255, 255, 255);
-    doc.setDrawColor(225, 225, 225);
-    doc.setLineWidth(0.4);
-    doc.roundedRect(10, y, 190, 22, 2, 2, 'FD');
 
     let gridY = y + 7;
     const col1 = 15;
@@ -2857,10 +2853,6 @@ async function shareRepairPDF(orderId) {
   y = renderHeader();
 
   // Info Grid
-  doc.setFillColor(255, 255, 255);
-  doc.setDrawColor(225, 225, 225);
-  doc.setLineWidth(0.4);
-  doc.roundedRect(10, y, 190, 42, 2, 2, 'FD');
 
   let gridY = y + 7;
   const col1 = 15;
@@ -5300,10 +5292,6 @@ async function shareRepairPDF(orderId) {
   y = renderHeader();
 
   // Info Grid
-  doc.setFillColor(255, 255, 255);
-  doc.setDrawColor(225, 225, 225);
-  doc.setLineWidth(0.4);
-  doc.roundedRect(10, y, 190, 42, 2, 2, 'FD');
 
   let gridY = y + 7;
   const col1 = 15;
