@@ -3,72 +3,11 @@
 // PDF generation with local save instead of email
 
 // ==========================================
-// FIREBASE & DATA MANAGEMENT (DB)
+// DATA MANAGEMENT (DB)
 // ==========================================
-const firebaseConfig = {
-  apiKey: "AIzaSyAo3vP7Myf08Q8KqoFlcgGNOZp2mX2R-38",
-  authDomain: "oasis-service-app-69def.firebaseapp.com",
-  projectId: "oasis-service-app-69def",
-  storageBucket: "oasis-service-app-69def.firebasestorage.app",
-  messagingSenderId: "156557428291",
-  appId: "1:156557428291:web:243524f03403d05c65f6f6",
-  measurementId: "G-THQ9YGZ0B5"
-};
-
-// Initialize Firebase if not already initialized
-if (typeof firebase !== 'undefined' && !firebase.apps.length) {
-  firebase.initializeApp(firebaseConfig);
-}
-const firestore = typeof firebase !== 'undefined' ? firebase.firestore() : null;
-
 class DB {
   constructor() {
     this.storage = window.localStorage;
-    this.syncKeys = ['workorders', 'clients', 'repairOrders', 'apk_download_link'];
-    this.isSyncing = false;
-    this.initFirebaseSync();
-  }
-
-  initFirebaseSync() {
-    if (!firestore) return;
-
-    firestore.collection('app_data').doc('shared_state').onSnapshot((doc) => {
-      if (doc.exists) {
-        const data = doc.data();
-        this.isSyncing = true;
-        let requiresReRender = false;
-
-        for (const key of this.syncKeys) {
-          if (data[key] !== undefined) {
-            const currentVal = this.get(key);
-            const newValStr = JSON.stringify(data[key]);
-            if (JSON.stringify(currentVal) !== newValStr) {
-              this.storage.setItem(key, newValStr);
-              requiresReRender = true;
-
-              // Notify admin of completed chem sheets or repair orders if logged in
-              if ((key === 'workorders' || key === 'repairOrders') && typeof auth !== 'undefined' && auth.isAdmin()) {
-                const typeName = key === 'workorders' ? 'Chem Sheet' : 'Repair Order';
-                const oldCompleted = (currentVal || []).filter(o => o.status === 'completed').length;
-                const newCompleted = (data[key] || []).filter(o => o.status === 'completed').length;
-                if (newCompleted > oldCompleted) {
-                  const latest = data[key].filter(o => o.status === 'completed').pop();
-                  if (typeof showToast === 'function') {
-                    showToast(`Completed ${typeName} saved for ${latest.clientName || 'Client'}!`);
-                  }
-                }
-              }
-            }
-          }
-        }
-        this.isSyncing = false;
-
-        // Re-render UI to show new sync data
-        if (requiresReRender && typeof router !== 'undefined' && router.currentView) {
-          router.navigate(router.currentView, false);
-        }
-      }
-    });
   }
 
   get(key, defaultValue = null) {
@@ -83,13 +22,6 @@ class DB {
   set(key, value) {
     try {
       this.storage.setItem(key, JSON.stringify(value));
-
-      // Push to cloud if it's a shared key and we aren't currently receiving a sync
-      if (!this.isSyncing && this.syncKeys.includes(key) && firestore) {
-         firestore.collection('app_data').doc('shared_state').set({
-           [key]: value
-         }, { merge: true }).catch(err => console.error("Firebase sync error:", err));
-      }
       return true;
     } catch (e) {
       return false;
@@ -122,8 +54,8 @@ class Auth {
       't6': { role: 'technician', name: 'Kadeem' },
       't7': { role: 'technician', name: 'Kingsley' },
       't8': { role: 'technician', name: 'Malik' },
-      't9': { role: 'technician', name: 'Jet' },
-      't10': { role: 'technician', name: 'Mark' },
+      't9': { role: 'admin', name: 'Jet' },
+      't10': { role: 'admin', name: 'Mark' },
       'admin': { role: 'admin', name: 'Chris Mills' }
     };
   }
@@ -229,8 +161,7 @@ class Router {
       'routes': this.renderRoutes.bind(this),
       'clients': this.renderClients.bind(this),
       'workorders': this.renderWorkOrders.bind(this),
-      'settings': this.renderSettings.bind(this),
-      'completed_jobs': this.renderCompletedJobs.bind(this)
+      'settings': this.renderSettings.bind(this)
     };
     this.currentView = 'dashboard';
     this.history = ['dashboard'];
@@ -324,7 +255,7 @@ class Router {
     const currentUser = auth.getCurrentUser();
 
     // Filter by tech unless admin
-    const workorders = (auth.isAdmin())
+    const workorders = (currentUser && currentUser.username === 'admin')
       ? allWorkorders
       : allWorkorders.filter(wo => wo.technician === currentUser.name);
 
@@ -469,8 +400,7 @@ class Router {
       <div class="section-header">
         <div class="section-title">Service & Repair Jobs</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Download Completed Orders</button>
-          <button class="btn btn-secondary btn-sm" onclick="router.navigate(\'completed_jobs\')">🔍 Search Completed Jobs</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Download Completed Orders</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
           <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Repair Order</button>
         </div>
@@ -499,7 +429,7 @@ class Router {
     const canShare = auth.canShare();
 
     // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-    const workorders = (auth.isAdmin())
+    const workorders = (currentUser && currentUser.username === 'admin')
       ? allWorkorders
       : allWorkorders.filter(wo => wo.technician === currentUser.name);
 
@@ -567,99 +497,6 @@ class Router {
         </div>
       </div>
     `;
-  }
-
-
-  renderCompletedJobs() {
-    const content = document.getElementById('main-content');
-    const isAdmin = auth.isAdmin();
-    if (!isAdmin) {
-       this.navigate('dashboard');
-       return;
-    }
-
-    content.innerHTML = `
-      <div class="section-header">
-        <div class="section-title">Completed Jobs History</div>
-        <button class="btn btn-secondary btn-sm" onclick="router.goBack()">← Back</button>
-      </div>
-      <div style="padding: 15px 15px 0;">
-        <input type="text" id="admin-search-completed" class="form-control" placeholder="Search by client or tech..." oninput="router.filterCompletedJobs(this.value)">
-      </div>
-      <div id="completed-jobs-results" style="padding: 0 15px; margin-top: 15px;">
-        ${this.generateCompletedJobsHtml('')}
-      </div>
-    `;
-  }
-
-  filterCompletedJobs(term) {
-    const container = document.getElementById('completed-jobs-results');
-    if (container) {
-      container.innerHTML = this.generateCompletedJobsHtml(term);
-    }
-  }
-
-  generateCompletedJobsHtml(term) {
-    term = (term || '').toLowerCase().trim();
-    const allWorkorders = db.get('workorders', []);
-    const allRepairOrders = db.get('repairOrders', []);
-    const currentUser = auth.getCurrentUser();
-    
-    let completedJobs = [
-      ...allWorkorders.filter(j => j.status === 'completed'),
-      ...allRepairOrders.filter(j => j.status === 'completed')
-    ];
-
-    if (term) {
-      completedJobs = completedJobs.filter(j => 
-        (j.clientName && j.clientName.toLowerCase().includes(term)) || 
-        ((j.technician || j.assignedTo) && (j.technician || j.assignedTo).toLowerCase().includes(term)) ||
-        (j.date && j.date.includes(term))
-      );
-    }
-    
-    completedJobs.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-    if (completedJobs.length === 0) {
-      return `<div class="empty-state"><div class="empty-title">No completed jobs found for '${term}'</div></div>`;
-    }
-
-    const jobToCard = (job) => {
-        const isRepair = !!job.jobType;
-        const title = escapeHtml(job.clientName || 'Job');
-        const subtitle = escapeHtml(isRepair ? job.jobType : job.address);
-        const tech = escapeHtml(job.technician || job.assignedTo || '');
-        const date = escapeHtml(job.date || '');
-        const openCmd = isRepair ? `renderRepairOrderForm('${escapeHtml(job.id)}')` : `router.viewWorkOrder('${job.id}')`;
-        const shareCmd = isRepair ? `shareRepairPDF('${escapeHtml(job.id)}')` : `shareReport('${job.id}')`;
-        const deleteCmd = isRepair ? `deleteRepairOrder('${escapeHtml(job.id)}')` : `deleteWorkOrder('${job.id}')`;
-
-        return `
-        <div class="job-card job-card-completed" style="margin-bottom:12px;">
-            <div class="job-card-header">
-                <div>
-                    <div class="job-card-title">${title}</div>
-                    <div class="job-card-customer">${subtitle}</div>
-                    <div class="job-meta">
-                        <div class="job-meta-item">📅 ${date}</div>
-                        <div class="job-meta-item">👤 ${tech}</div>
-                    </div>
-                </div>
-            </div>
-            <div class="job-card-footer">
-                <button class="btn btn-secondary btn-sm" onclick="${openCmd}">Open</button>
-                <button class="btn btn-secondary btn-sm" onclick="${shareCmd}">PDF</button>
-                <button class="btn btn-secondary btn-sm btn-outline-danger" onclick="${deleteCmd}">Delete</button>
-            </div>
-        </div>`;
-                <button class="btn btn-primary btn-sm" onclick="${shareCmd}">Share</button>
-                <button class="btn btn-danger btn-sm" onclick="${deleteCmd}">Delete</button>
-            </div>
-        </div>
-        ;
-    };
-
-    return completedJobs.map(jobToCard).join('');
   }
 
   renderSettings() {
@@ -1884,21 +1721,12 @@ function populateLoginTechOptions() {
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
-  let options = `<option value="" disabled selected>— Select your name —</option>`;
-
-  // Explicitly add Admin first
-  if (auth.users['admin']) {
-    options += `<option value="admin">Chris Mills (Admin)</option>`;
-  }
-
-  // Add the rest of the users, skipping admin since we added it first
-  entries.forEach(([id, user]) => {
-    if (id !== 'admin') {
-      options += `<option value="${id}">${user.name}</option>`;
-    }
-  });
-
-  select.innerHTML = options;
+  select.innerHTML = `
+    <option value="" disabled selected>— Select your name —</option>
+    ${entries.map(([id, user]) => `
+      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
+    `).join('')}
+  `;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2234,12 +2062,9 @@ function renderRepairOrdersList() {
   const canShare = auth.canShare();
 
   // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  let orders = isAdmin 
-    ? allOrders 
+  const orders = (currentUser && currentUser.username === 'admin')
+    ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
-
-  // Hide completed repair orders from the main active list for everyone
-  orders = orders.filter(o => o.status !== 'completed');
 
   if (!orders.length) {
     return `
@@ -4205,21 +4030,12 @@ function populateLoginTechOptions() {
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
-  let options = `<option value="" disabled selected>— Select your name —</option>`;
-
-  // Explicitly add Admin first
-  if (auth.users['admin']) {
-    options += `<option value="admin">Chris Mills (Admin)</option>`;
-  }
-
-  // Add the rest of the users, skipping admin since we added it first
-  entries.forEach(([id, user]) => {
-    if (id !== 'admin') {
-      options += `<option value="${id}">${user.name}</option>`;
-    }
-  });
-
-  select.innerHTML = options;
+  select.innerHTML = `
+    <option value="" disabled selected>— Select your name —</option>
+    ${entries.map(([id, user]) => `
+      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
+    `).join('')}
+  `;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -4555,12 +4371,9 @@ function renderRepairOrdersList() {
   const canShare = auth.canShare();
 
   // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  let orders = isAdmin 
-    ? allOrders 
+  const orders = (currentUser && currentUser.username === 'admin')
+    ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
-
-  // Hide completed repair orders from the main active list for everyone
-  orders = orders.filter(o => o.status !== 'completed');
 
   if (!orders.length) {
     return `
@@ -4832,27 +4645,12 @@ function collectRepairOrderFromForm(orderId = '') {
 
 function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   const order = collectRepairOrderFromForm(orderId);
-  if (!order) return;
-  order.status = document.getElementById('repair-status')?.value || order.status;
-  
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
 
   if (index >= 0) {
     orders[index] = order;
   } else {
-    orders.unshift(order);
-  }
-
-  saveRepairOrders(orders);
-  showToast('Repair work order saved');
-
-  if (shareAfterSave) {
-    shareRepairPDF(order.id);
-  } else {
-    router.renderWorkOrders();
-  }
-} else {
     orders.unshift(order);
   }
 
@@ -5873,21 +5671,12 @@ function populateLoginTechOptions() {
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
-  let options = `<option value="" disabled selected>— Select your name —</option>`;
-
-  // Explicitly add Admin first
-  if (auth.users['admin']) {
-    options += `<option value="admin">Chris Mills (Admin)</option>`;
-  }
-
-  // Add the rest of the users, skipping admin since we added it first
-  entries.forEach(([id, user]) => {
-    if (id !== 'admin') {
-      options += `<option value="${id}">${user.name}</option>`;
-    }
-  });
-
-  select.innerHTML = options;
+  select.innerHTML = `
+    <option value="" disabled selected>— Select your name —</option>
+    ${entries.map(([id, user]) => `
+      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
+    `).join('')}
+  `;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -6187,8 +5976,7 @@ function saveWorkOrderForm(orderId) {
     showToast('Work order not found');
     return;
   }
-  
-  order.status = document.getElementById('wo-status')?.value || order.status;
+
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
   showToast('Chem sheet saved');
