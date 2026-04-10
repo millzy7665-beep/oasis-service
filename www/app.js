@@ -6843,3 +6843,24 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   router.renderWorkOrders();
 }
+
+function renderRepairPhotoSlot(orderId, label, photo, index) {
+  const safeLabel = escapeHtml(label);
+  return `
+    <div class="photo-slot" id="repair-photo-slot-${index}">
+      <div class="photo-slot-lbl">${safeLabel}</div>
+      <div class="photo-preview-box">
+        ${photo ? `
+          <img class="photo-thumb" data-repair-photo-index="${index}" src="${photo}" alt="${safeLabel}">
+          <button type="button" class="photo-remove" onclick="removeRepairPhoto('${orderId || ''}', ${index})" aria-label="Remove ${safeLabel} photo">&times;</button>
+        ` : `<div class="photo-add-btn">Add ${safeLabel} photo</div>`}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('repair', '${orderId || ''}', ${index}, 'CAMERA')">Camera</button>
+        <label class="btn btn-secondary btn-sm" for="repair-photo-gallery-${index}">Gallery</label>
+      </div>
+      <input id="repair-photo-camera-${index}" name="repair-photo-camera-${index}" class="photo-file-inp" type="file" accept="image/*" capture="environment" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
+      <input id="repair-photo-gallery-${index}" name="repair-photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
+    </div>
+  `;
+}
