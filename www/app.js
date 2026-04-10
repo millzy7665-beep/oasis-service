@@ -2223,9 +2223,12 @@ function renderRepairOrdersList() {
   const canShare = auth.canShare();
 
   // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  const orders = (auth.isAdmin())
-    ? allOrders
+  let orders = isAdmin 
+    ? allOrders 
     : allOrders.filter(o => o.assignedTo === currentUser.name);
+
+  // Hide completed repair orders from the main active list for everyone
+  orders = orders.filter(o => o.status !== 'completed');
 
   if (!orders.length) {
     return `
@@ -4532,9 +4535,12 @@ function renderRepairOrdersList() {
   const canShare = auth.canShare();
 
   // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  const orders = (auth.isAdmin())
-    ? allOrders
+  let orders = isAdmin 
+    ? allOrders 
     : allOrders.filter(o => o.assignedTo === currentUser.name);
+
+  // Hide completed repair orders from the main active list for everyone
+  orders = orders.filter(o => o.status !== 'completed');
 
   if (!orders.length) {
     return `
