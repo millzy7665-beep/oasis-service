@@ -3208,9 +3208,10 @@ function renderChemPhotoSlot(orderId, label, photo, index) {
         ` : `<div class="photo-add-btn">Add ${safeLabel} photo</div>`}
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('chem', '${orderId}', ${index})">Take Photo</button>
-        <label class="btn btn-secondary btn-sm" for="photo-gallery-${index}">Choose Photo</label>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('chem', '${orderId}', ${index}, 'CAMERA')">Camera</button>
+        <label class="btn btn-secondary btn-sm" for="photo-gallery-${index}">Gallery</label>
       </div>
+      <input id="photo-camera-${index}" name="photo-camera-${index}" class="photo-file-inp" type="file" accept="image/*" capture="environment" onchange="handleChemPhotoUpload('${orderId}', ${index}, event)">
       <input id="photo-gallery-${index}" name="photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleChemPhotoUpload('${orderId}', ${index}, event)">
     </div>
   `;
@@ -3243,10 +3244,19 @@ function renderChemPhotoSection(order) {
  * Native Camera Implementation
  * Bypasses HTML inputs to force camera launch on Android
  */
-async function takeNativePhoto(type, orderId, slotIndex) {
+async function takeNativePhoto(type, orderId, slotIndex, preferredSource = 'CAMERA') {
   try {
     if (typeof Capacitor === 'undefined' || !Capacitor.Plugins.Camera) {
-      showToast('Camera plugin not available');
+      const fallbackInputId = type === 'repair'
+        ? (preferredSource === 'PHOTOS' ? `repair-photo-gallery-${slotIndex}` : `repair-photo-camera-${slotIndex}`)
+        : (preferredSource === 'PHOTOS' ? `photo-gallery-${slotIndex}` : `photo-camera-${slotIndex}`);
+      const fallbackInput = document.getElementById(fallbackInputId);
+      if (fallbackInput) {
+        fallbackInput.click();
+        return;
+      }
+
+      showToast(preferredSource === 'CAMERA' ? 'Camera not available' : 'Photo library not available');
       return;
     }
 
@@ -3254,7 +3264,7 @@ async function takeNativePhoto(type, orderId, slotIndex) {
       quality: 80,
       allowEditing: false,
       resultType: 'dataUrl',
-      source: 'CAMERA' // Forces camera specifically
+      source: preferredSource
     });
 
     if (!image || !image.dataUrl) return;
