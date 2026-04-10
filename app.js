@@ -54,18 +54,29 @@ class Auth {
       't6': { role: 'technician', name: 'Kadeem' },
       't7': { role: 'technician', name: 'Kingsley' },
       't8': { role: 'technician', name: 'Malik' },
-      't9': { role: 'technician', name: 'Jet' },
-      't10': { role: 'technician', name: 'Mark' },
-      't12': { role: 'technician', name: 'Java' },
+      't9': { role: 'admin', name: 'Jet' },
+      't10': { role: 'admin', name: 'Mark' },
       'admin': { role: 'admin', name: 'Chris Mills' }
     };
   }
 
-  login(username) {
-    if (this.users[username]) {
-      this.currentUser = { ...this.users[username], username };
-      db.set('currentUser', this.currentUser);
-      return true;
+  login(username, pin) {
+    const user = this.users[username];
+    if (user) {
+      // Jet and Mark specific PIN
+      if ((username === 't9' || username === 't10') && pin === '1234') {
+        this.currentUser = { ...user, username };
+        db.set('currentUser', this.currentUser);
+        return true;
+      }
+
+      // Default PINs
+      const requiredPin = (user.role === 'admin') ? '0000' : '1111';
+      if (pin === requiredPin) {
+        this.currentUser = { ...user, username };
+        db.set('currentUser', this.currentUser);
+        return true;
+      }
     }
     return false;
   }
@@ -96,6 +107,13 @@ class Auth {
   isAdmin() {
     const user = this.getCurrentUser();
     return user && user.role === 'admin';
+  }
+
+  canShare() {
+    const user = this.getCurrentUser();
+    if (!user) return false;
+    // Chris (admin), Jet (t9), Mark (t10)
+    return user.username === 'admin' || user.username === 't9' || user.username === 't10';
   }
 }
 
@@ -146,11 +164,15 @@ class Router {
       'settings': this.renderSettings.bind(this)
     };
     this.currentView = 'dashboard';
+    this.history = ['dashboard'];
   }
 
-  navigate(view) {
+  navigate(view, pushHistory = true) {
     console.log('Navigating to:', view);
     this.currentView = view;
+    if (pushHistory && this.history[this.history.length - 1] !== view) {
+      this.history.push(view);
+    }
     if (this.routes[view]) {
       try {
         this.routes[view]();
@@ -167,6 +189,14 @@ class Router {
       }
     }
     this.updateNav();
+  }
+
+  goBack() {
+    if (this.history.length > 1) {
+      this.history.pop(); // Remove current view
+      const prevView = this.history[this.history.length - 1];
+      this.navigate(prevView, false);
+    }
   }
 
   updateNav() {
@@ -219,7 +249,14 @@ class Router {
   }
 
   renderTodaySchedule() {
-    const workorders = db.get('workorders', []);
+    const allWorkorders = db.get('workorders', []);
+    const currentUser = auth.getCurrentUser();
+
+    // Filter by tech unless admin
+    const workorders = (currentUser && currentUser.username === 'admin')
+      ? allWorkorders
+      : allWorkorders.filter(wo => wo.technician === currentUser.name);
+
     const today = new Date().toDateString();
     const todayOrders = workorders.filter(wo => new Date(wo.date).toDateString() === today);
 
@@ -287,11 +324,21 @@ class Router {
 
   renderClients() {
     const content = document.getElementById('main-content');
+    const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
+    const isMainAdmin = user && user.username === 'admin';
+
     content.innerHTML = `
       <div class="section-header">
         <div class="section-title">Clients</div>
-        ${isAdmin ? '<button class="btn btn-primary btn-sm" onclick="quickAddClient()">+ Add Client</button>' : ''}
+        <div style="display:flex; gap:8px;">
+          ${isMainAdmin ? '<button class="btn btn-secondary btn-sm" onclick="bulkImportClients()">Bulk Import</button>' : ''}
+          ${isAdmin ? '<button class="btn btn-primary btn-sm" onclick="quickAddClient()">+ Add Client</button>' : ''}
+        </div>
+      </div>
+
+      <div class="search-bar" style="margin: 0 16px 12px;">
+        <input type="text" id="client-search" placeholder="Search 280+ clients..." oninput="router.filterClients(this.value)" class="form-control">
       </div>
 
       <div id="clients-list">
@@ -300,15 +347,29 @@ class Router {
     `;
   }
 
-  renderClientsList() {
-    const clients = db.get('clients', []);
+  filterClients(query) {
+    const list = document.getElementById('clients-list');
+    if (!list) return;
+    list.innerHTML = this.renderClientsList(query);
+  }
+
+  renderClientsList(query = '') {
+    const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
+
+    const clients = query
+      ? allClients.filter(c =>
+          c.name.toLowerCase().includes(query.toLowerCase()) ||
+          c.address.toLowerCase().includes(query.toLowerCase())
+        )
+      : allClients;
+
     if (clients.length === 0) {
       return `
         <div class="empty-state">
           <div class="empty-icon">👥</div>
-          <div class="empty-title">No clients yet</div>
-          <div class="empty-subtitle">${isAdmin ? 'Add your first client' : 'Check back later for client list'}</div>
+          <div class="empty-title">No clients found</div>
+          <div class="empty-subtitle">${isAdmin ? 'Try a different search or add a client' : 'Check back later for client list'}</div>
         </div>
       `;
     }
@@ -321,6 +382,7 @@ class Router {
           <div class="list-item-sub">${client.address}</div>
         </div>
         <div class="list-item-actions">
+          <button class="btn btn-icon" onclick="openMap('${client.address}')" title="View on Map">📍</button>
           ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
           ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${client.id}')">Delete</button>` : ''}
         </div>
@@ -330,10 +392,13 @@ class Router {
 
   renderWorkOrders() {
     const content = document.getElementById('main-content');
+    const isAdmin = auth.isAdmin();
+
     content.innerHTML = `
       <div class="section-header">
         <div class="section-title">Service & Repair Jobs</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Download Completed Orders</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
           <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Repair Order</button>
         </div>
@@ -356,21 +421,58 @@ class Router {
   }
 
   renderWorkOrdersList() {
-    const workorders = db.get('workorders', []);
+    const allWorkorders = db.get('workorders', []);
+    const currentUser = auth.getCurrentUser();
+    const isAdmin = auth.isAdmin();
+    const canShare = auth.canShare();
+
+    // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
+    const workorders = (currentUser && currentUser.username === 'admin')
+      ? allWorkorders
+      : allWorkorders.filter(wo => wo.technician === currentUser.name);
+
     if (workorders.length === 0) {
       return `
         <div class="empty-state">
           <div class="empty-icon">🧪</div>
-          <div class="empty-title">No chem sheets</div>
-          <div class="empty-subtitle">Create your first chem sheet</div>
+          <div class="empty-title">No jobs found</div>
+          <div class="empty-subtitle">${isAdmin ? 'No active jobs' : 'Check back later for your assigned jobs'}</div>
         </div>
       `;
     }
 
-  return workorders.map(wo => {
-    const isAdmin = auth.isAdmin();
+    if (isAdmin) {
+      // Grouping logic for Admin (Chris)
+      const techs = [...new Set(workorders.map(wo => wo.technician || 'Unassigned'))].sort();
+
+      return techs.map(tech => {
+        const techJobs = workorders.filter(wo => (wo.technician || 'Unassigned') === tech);
+        const completed = techJobs.filter(wo => wo.status === 'completed');
+        const pending = techJobs.filter(wo => wo.status !== 'completed');
+
+        return `
+          <div class="wo-group">
+            <div class="wo-group-hd" onclick="toggleAccordion(this)">
+              <span>👤 ${tech} (${completed.length} Completed / ${pending.length} Pending)</span>
+              <span class="wo-chev">▼</span>
+            </div>
+            <div class="wo-sec-bd">
+              <div class="job-list-compact">
+                ${techJobs.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    return workorders.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('');
+  }
+
+  renderJobCard(wo, canShare, isAdmin, currentUser) {
+    const isCompleted = wo.status === 'completed';
     return `
-      <div class="job-card">
+      <div class="job-card ${isCompleted ? 'job-card-completed' : ''}">
         <div class="job-card-header">
           <div>
             <div class="job-card-title">${wo.clientName}</div>
@@ -378,26 +480,28 @@ class Router {
             <div class="job-meta">
               <div class="job-meta-item">📅 ${wo.date}</div>
               <div class="job-meta-item">⏰ ${wo.time || 'TBD'}</div>
+              ${currentUser.username === 'admin' ? `<div class="job-meta-item">👤 ${wo.technician || 'Unknown'}</div>` : ''}
             </div>
           </div>
+          <button class="btn btn-icon" onclick="openMap('${wo.address}')" title="View on Map">📍</button>
         </div>
         <div class="job-card-body">
           <div class="badge badge-${wo.status || 'pending'}">${wo.status || 'pending'}</div>
         </div>
         <div class="job-card-footer">
           <button class="btn btn-secondary btn-sm" onclick="router.viewWorkOrder('${wo.id}')">Open</button>
-          <button class="btn btn-primary btn-sm" onclick="shareReport('${wo.id}')">Share</button>
-          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteWorkOrder('${wo.id}')">Delete</button>` : ''}
+          ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareReport('${wo.id}')">Share</button>` : ''}
+          ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteWorkOrder('${wo.id}')">Delete</button>` : ''}
         </div>
       </div>
     `;
-  }).join('');
-}
+  }
 
   renderSettings() {
     const content = document.getElementById('main-content');
-    const shareUrl = 'https://millzy7665-beep.github.io/oasis-service/';
+    const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
+    const isMainAdmin = user && user.username === 'admin';
 
     content.innerHTML = `
       <div class="section-header">
@@ -408,38 +512,43 @@ class Router {
         <div class="card-body">
           <div class="detail-row">
             <div class="detail-label">Current User</div>
-            <div class="detail-value">${auth.getCurrentUser().name}</div>
+            <div class="detail-value">${user.name}</div>
           </div>
           <div class="detail-row">
             <div class="detail-label">Role</div>
-            <div class="detail-value">${auth.getCurrentUser().role}</div>
+            <div class="detail-value" style="text-transform: capitalize;">${user.role}</div>
           </div>
           <button class="btn btn-danger" onclick="auth.logout(); location.reload()" style="width: 100%; margin-top: 10px;">Sign Out</button>
         </div>
       </div>
 
-      ${isAdmin ? `
+      ${isMainAdmin ? `
       <div class="section-header" style="margin-top: 20px;">
-        <div class="section-title">Share App (Admin Only)</div>
+        <div class="section-title">Team Distribution</div>
       </div>
-
       <div class="card">
-        <div class="card-body" style="text-align: center;">
-          <p style="margin-bottom: 15px; color: var(--gray-600); font-size: 14px;">Share the OASIS Service app with your team.</p>
-
-          <div style="background: white; padding: 15px; border-radius: 8px; display: inline-block; margin-bottom: 15px; border: 1px solid var(--gray-200);">
-            <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(shareUrl)}" alt="App QR Code" style="width: 200px; height: 200px; display: block;">
+        <div class="card-body">
+          <p style="font-size: 13px; color: var(--gray-600); margin-bottom: 12px;">
+            To share the app with your team, copy the link below or scan the QR code.
+          </p>
+          <div class="form-group" style="padding:0; margin-bottom:12px; display:none;">
+            <label class="form-label">APK Download Link</label>
+            <input type="text" id="apk-link-input" class="form-control" placeholder="Paste your Drive link here..." value="https://millzy7665-beep.github.io/oasis-service/">
           </div>
 
-          <div class="form-row" style="text-align: left;">
-            <label>App Link</label>
-            <div style="display: flex; gap: 8px;">
-              <input type="text" readonly value="${shareUrl}" id="share-url-input" style="flex: 1; font-size: 13px;">
-              <button class="btn btn-secondary btn-sm" onclick="copyShareLink()">Copy</button>
+          <div id="qr-container" style="text-align: center; margin-top: 15px;">
+            <div style="background: white; padding: 10px; display: inline-block; border-radius: 8px;">
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https%3A%2F%2Fmillzy7665-beep.github.io%2Foasis-service%2F" alt="Scan to Download">
+            </div>
+            <p style="font-size: 11px; margin-top: 8px; color: var(--champagne-dk);">Scan with technician phone to download App</p>
+            <div style="margin-top: 12px; display: flex; justify-content: center; gap: 8px;">
+              <input type="text" id="apk-link-display" class="form-control form-control-sm" value="https://millzy7665-beep.github.io/oasis-service/" readonly>
+              <button class="btn btn-secondary btn-sm" onclick="copyApkLink()">Copy</button>
+            </div>
+            <div style="margin-top: 10px;">
+              <button class="btn btn-secondary btn-sm" onclick="shareAppLink()">Share Link</button>
             </div>
           </div>
-
-          <button class="btn btn-primary" style="width: 100%; margin-top: 15px;" onclick="shareAppLink()">Share Link</button>
         </div>
       </div>
       ` : ''}
@@ -512,6 +621,14 @@ class Router {
               <label for="wo-address">Address</label>
               <input id="wo-address" type="text" value="${order.address || ''}">
             </div>
+
+            <div class="form-row">
+              <label for="wo-status">Job Status</label>
+              <select id="wo-status">
+                <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Pending</option>
+                <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -553,31 +670,31 @@ class Router {
           <div class="wo-sec-bd">
             <div class="wo-blk-lbl">Pool Additions</div>
             <div class="wo-grid">
-              <div class="wo-fld"><div class="wo-fld-lbl">Tabs</div><input id="pool-add-tabs" class="wo-fld-inp" type="text" value="${poolAdded.tabs || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Shock / Oxidizer</div><input id="pool-add-shock" class="wo-fld-inp" type="text" value="${poolAdded.shock || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Muriatic Acid</div><input id="pool-add-muriaticAcid" class="wo-fld-inp" type="text" value="${poolAdded.muriaticAcid || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Soda Ash</div><input id="pool-add-sodaAsh" class="wo-fld-inp" type="text" value="${poolAdded.sodaAsh || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Sodium Bicarb</div><input id="pool-add-sodiumBicarb" class="wo-fld-inp" type="text" value="${poolAdded.sodiumBicarb || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Calcium Increaser</div><input id="pool-add-calcium" class="wo-fld-inp" type="text" value="${poolAdded.calcium || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Stabilizer</div><input id="pool-add-stabilizer" class="wo-fld-inp" type="text" value="${poolAdded.stabilizer || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Salt</div><input id="pool-add-salt" class="wo-fld-inp" type="text" value="${poolAdded.salt || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Phosphate Remover</div><input id="pool-add-phosphateRemover" class="wo-fld-inp" type="text" value="${poolAdded.phosphateRemover || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Algaecide</div><input id="pool-add-algaecide" class="wo-fld-inp" type="text" value="${poolAdded.algaecide || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Tabs</div><input id="pool-add-tabs" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.tabs || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Shock / Oxidizer</div><input id="pool-add-shock" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.shock || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Muriatic Acid</div><input id="pool-add-muriaticAcid" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.muriaticAcid || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Soda Ash</div><input id="pool-add-sodaAsh" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.sodaAsh || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Sodium Bicarb</div><input id="pool-add-sodiumBicarb" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.sodiumBicarb || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Calcium Increaser</div><input id="pool-add-calcium" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.calcium || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Stabilizer</div><input id="pool-add-stabilizer" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.stabilizer || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Salt</div><input id="pool-add-salt" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.salt || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Phosphate Remover</div><input id="pool-add-phosphateRemover" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.phosphateRemover || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Algaecide</div><input id="pool-add-algaecide" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.algaecide || ''}"></div>
               <div class="wo-fld" style="grid-column:1 / -1"><div class="wo-fld-lbl">Other / Notes</div><input id="pool-add-other" class="wo-fld-inp" type="text" value="${poolAdded.other || ''}"></div>
             </div>
 
             <div class="wo-blk-lbl" style="margin-top:10px;">Spa Additions</div>
             <div class="wo-grid">
-              <div class="wo-fld"><div class="wo-fld-lbl">Tabs</div><input id="spa-add-tabs" class="wo-fld-inp" type="text" value="${spaAdded.tabs || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Shock / Oxidizer</div><input id="spa-add-shock" class="wo-fld-inp" type="text" value="${spaAdded.shock || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Muriatic Acid</div><input id="spa-add-muriaticAcid" class="wo-fld-inp" type="text" value="${spaAdded.muriaticAcid || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Soda Ash</div><input id="spa-add-sodaAsh" class="wo-fld-inp" type="text" value="${spaAdded.sodaAsh || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Sodium Bicarb</div><input id="spa-add-sodiumBicarb" class="wo-fld-inp" type="text" value="${spaAdded.sodiumBicarb || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Calcium Increaser</div><input id="spa-add-calcium" class="wo-fld-inp" type="text" value="${spaAdded.calcium || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Stabilizer</div><input id="spa-add-stabilizer" class="wo-fld-inp" type="text" value="${spaAdded.stabilizer || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Salt</div><input id="spa-add-salt" class="wo-fld-inp" type="text" value="${spaAdded.salt || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Phosphate Remover</div><input id="spa-add-phosphateRemover" class="wo-fld-inp" type="text" value="${spaAdded.phosphateRemover || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Algaecide</div><input id="spa-add-algaecide" class="wo-fld-inp" type="text" value="${spaAdded.algaecide || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Tabs</div><input id="spa-add-tabs" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.tabs || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Shock / Oxidizer</div><input id="spa-add-shock" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.shock || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Muriatic Acid</div><input id="spa-add-muriaticAcid" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.muriaticAcid || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Soda Ash</div><input id="spa-add-sodaAsh" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.sodaAsh || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Sodium Bicarb</div><input id="spa-add-sodiumBicarb" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.sodiumBicarb || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Calcium Increaser</div><input id="spa-add-calcium" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.calcium || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Stabilizer</div><input id="spa-add-stabilizer" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.stabilizer || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Salt</div><input id="spa-add-salt" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.salt || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Phosphate Remover</div><input id="spa-add-phosphateRemover" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.phosphateRemover || ''}"></div>
+              <div class="wo-fld"><div class="wo-fld-lbl">Algaecide</div><input id="spa-add-algaecide" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.algaecide || ''}"></div>
               <div class="wo-fld" style="grid-column:1 / -1"><div class="wo-fld-lbl">Other / Notes</div><input id="spa-add-other" class="wo-fld-inp" type="text" value="${spaAdded.other || ''}"></div>
             </div>
           </div>
@@ -610,7 +727,7 @@ class Router {
         <div class="card" style="margin:12px;">
           <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
             <button class="btn btn-secondary" onclick="saveWorkOrderForm('${order.id}')">Save Changes</button>
-            <button class="btn send-report-btn" onclick="shareReport('${order.id}')">Share Report</button>
+            ${auth.canShare() ? `<button class="btn send-report-btn" onclick="shareReport('${order.id}')">Share Report</button>` : ''}
           </div>
         </div>
       </div>
@@ -664,17 +781,55 @@ class Router {
       showToast('Client not found');
       return;
     }
+    this.renderClientDetail(client);
+  }
 
-    const name = prompt('Client name', client.name);
-    if (!name) return;
-    const address = prompt('Client address', client.address || '');
-    if (address === null) return;
+  renderClientDetail(client) {
+    const content = document.getElementById('main-content');
+    content.innerHTML = `
+      <div class="wo-form">
+        <div class="wo-bar">
+          <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">← Back</button>
+          <div class="wo-bar-title">Client Profile</div>
+          <button class="btn btn-primary btn-sm" onclick="saveClientDetails('${client.id}')">Save</button>
+        </div>
 
-    client.name = name;
-    client.address = address;
-    db.set('clients', clients);
-    showToast('Client updated');
-    this.renderClients();
+        <div class="wo-sec">
+          <div class="wo-sec-hd">Individual Client Details</div>
+          <div class="wo-sec-bd">
+            <div class="form-group">
+              <label class="form-label">Client Name</label>
+              <input type="text" id="edit-client-name" class="form-control" value="${escapeHtml(client.name)}">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Service Address</label>
+              <div style="display:flex; gap:8px;">
+                <input type="text" id="edit-client-address" class="form-control" value="${escapeHtml(client.address)}">
+                <button class="btn btn-icon" onclick="openMap(document.getElementById('edit-client-address').value)">📍</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Contact / Email</label>
+              <input type="email" id="edit-client-contact" class="form-control" value="${escapeHtml(client.contact || '')}">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Preferred Technician</label>
+              <input type="text" id="edit-client-tech" class="form-control" value="${escapeHtml(client.technician || '')}">
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin:16px;">
+          <div class="card-body" style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="btn btn-primary" style="flex:1" onclick="saveClientDetails('${client.id}')">Save Changes</button>
+            <button class="btn btn-secondary" style="flex:1" onclick="shareClientDetails('${client.id}')">Share Profile</button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 }
 
@@ -799,7 +954,7 @@ class WorkOrderManager {
     return recommendations;
   }
 
-  generateReport(order) {
+  async generateReport(order) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     const filename = `OASIS_Service_Report_${(order.clientName || 'Client').replace(/[^a-z0-9]/gi, '_')}_${order.date || 'Date'}.pdf`;
@@ -809,184 +964,209 @@ class WorkOrderManager {
     const teal = [34, 102, 131];
     const lightBeige = [248, 245, 241];
 
-    let y = 0;
+    let logoData = null;
+    try {
+      logoData = await getImageDataUrl('oasis-logo.png');
+    } catch (e) {
+      console.warn('Logo load failed', e);
+    }
 
-    const renderPage = (isNewPage = false) => {
-      if (isNewPage) doc.addPage();
-      y = applyOasisPdfBranding(doc, 'Service Report');
-
-      // Info Grid Background
-      doc.setFillColor(...lightBeige);
-      doc.rect(0, y - 10, 210, 50, 'F');
-
-      const col1 = 20;
-      const col2 = 110;
-      let gridY = y;
-
-      const addGridItem = (label, value, x, currentY) => {
-        doc.setFontSize(7);
-        doc.setTextColor(100, 100, 100);
-        doc.setFont('helvetica', 'normal');
-        doc.text(label.toUpperCase(), x, currentY);
-        doc.setFontSize(10);
-        doc.setTextColor(...navy);
-        doc.setFont('helvetica', 'bold');
-        doc.text(String(value || '—'), x, currentY + 5);
-      };
-
-      addGridItem('Client', order.clientName, col1, gridY);
-      addGridItem('Date', order.date, col2, gridY);
-      gridY += 12;
-      addGridItem('Address', order.address, col1, gridY);
-      addGridItem('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col2, gridY);
-      gridY += 12;
-      addGridItem('Technician', order.technician, col1, gridY);
-      addGridItem('Route & Pool Size', `Route — ${order.poolSize || '—'}`, col2, gridY);
-      gridY += 12;
-      addGridItem('Surface', order.surfaceType || '—', col1, gridY);
-      addGridItem('Condition', order.condition || '—', col2, gridY);
-
-      y = gridY + 15;
-      applyOasisPdfFooter(doc);
-    };
-
-    renderPage();
-
-    const ensureSpace = (needed = 20) => {
-      if (y + needed > 260) {
-        renderPage(true);
-      }
-    };
-
-    const addSectionHeader = (title) => {
-      ensureSpace(12);
+    const renderHeader = () => {
       doc.setFillColor(...navy);
-      doc.rect(10, y, 190, 7, 'F');
+      doc.rect(0, 0, 210, 25, 'F');
+      doc.setFillColor(...gold);
+      doc.rect(0, 25, 210, 1, 'F');
+
+      if (logoData) {
+        doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
+      }
+
       doc.setTextColor(255, 255, 255);
-      doc.setFontSize(8);
+      doc.setFont('times', 'bold');
+      doc.setFontSize(22);
+      doc.text('O A S I S', 32, 17);
+
+      doc.setFontSize(12);
       doc.setFont('helvetica', 'bold');
-      doc.text(title.toUpperCase(), 15, y + 5);
-      y += 10;
+      doc.text('SERVICE REPORT', 195, 14, { align: 'right' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(...gold);
+      doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
+
+      return 35;
     };
 
-    const addReadingsTable = (title, readings) => {
-      const labels = {
-        chlorine: 'Chlorine',
-        ph: 'pH',
-        alkalinity: 'Alkalinity',
-        cya: 'CYA',
-        calcium: 'Calcium',
-        salt: 'Salt',
-        phosphates: 'Phosphate',
-        tds: 'TDS'
-      };
+    const renderFooter = () => {
+      const footerY = 278;
+      doc.setFillColor(...navy);
+      doc.rect(0, footerY, 210, 20, 'F');
+      doc.setFillColor(...gold);
+      doc.rect(0, footerY, 210, 0.5, 'F');
 
-      addSectionHeader(title);
+      if (logoData) {
+        doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
+      }
 
-      // Table Header
-      doc.setFillColor(...teal);
-      doc.rect(10, y, 190, 7, 'F');
       doc.setTextColor(255, 255, 255);
-      doc.text('PARAMETER', 15, y + 5);
-      doc.text('POOL', 110, y + 5);
-      doc.text('SPA', 160, y + 5);
-      y += 7;
+      doc.setFontSize(12);
+      doc.setFont('times', 'bold');
+      doc.text('O A S I S', 30, footerY + 12);
 
-      Object.entries(labels).forEach(([key, label], index) => {
-        ensureSpace(8);
-        if (index % 2 === 0) {
-          doc.setFillColor(245, 245, 245);
-          doc.rect(10, y, 190, 7, 'F');
-        }
-        doc.setTextColor(...navy);
-        doc.setFont('helvetica', 'normal');
-        doc.text(label, 15, y + 5);
-        doc.text(String(order.readings?.pool?.[key] || '—'), 110, y + 5);
-        doc.text(String(order.readings?.spa?.[key] || '—'), 160, y + 5);
-        y += 7;
-      });
+      doc.setFontSize(7);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(180, 180, 180);
+      doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
 
-      doc.setFontSize(6);
-      doc.setTextColor(150, 150, 150);
-      doc.text('Ideal: Chlorine 1-3 ppm · pH 7.2-7.6 · Alkalinity 80-120 ppm · CYA 30-50 ppm · Calcium 200-400 ppm', 15, y + 4);
-      y += 8;
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
+      doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
     };
 
-    addReadingsTable('Chemical Readings', order.readings || {});
+    let y = renderHeader();
 
-    addSectionHeader('Chemicals Added');
-    doc.setFontSize(9);
+    // Info Grid
+    doc.setFillColor(...lightBeige);
+    doc.rect(10, y, 190, 22, 'F');
+
+    let gridY = y + 7;
+    const col1 = 15;
+    const col2 = 110;
+
+    const addField = (label, value, x, currentY) => {
+      doc.setFontSize(6);
+      doc.setTextColor(120, 120, 120);
+      doc.setFont('helvetica', 'bold');
+      doc.text(label.toUpperCase(), x, currentY);
+      doc.setFontSize(9);
+      doc.setTextColor(...navy);
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(value || '—'), x, currentY + 5);
+    };
+
+    addField('Customer', order.clientName, col1, gridY);
+    addField('Date', order.date, col2, gridY);
+    gridY += 12;
+    addField('Service Address', order.address, col1, gridY);
+    addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col2, gridY);
+
+    y += 28;
+
+    // Readings Table
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CHEMICAL READINGS', 15, y + 5);
+    doc.text('POOL', 115, y + 5);
+    doc.text('SPA', 165, y + 5);
+    y += 7;
+
+    const params = [
+      { key: 'ph', label: 'pH Level' },
+      { key: 'chlorine', label: 'Free Chlorine' },
+      { key: 'alkalinity', label: 'Total Alkalinity' },
+      { key: 'cya', label: 'Cyanuric Acid' },
+      { key: 'calcium', label: 'Calcium Hardness' },
+      { key: 'salt', label: 'Salt Content' },
+      { key: 'temp', label: 'Water Temperature' }
+    ];
+
+    params.forEach((p, i) => {
+      if (i % 2 === 0) {
+        doc.setFillColor(248, 248, 248);
+        doc.rect(10, y, 190, 5, 'F');
+      }
+      doc.setTextColor(...navy);
+      doc.setFontSize(7);
+      doc.setFont('helvetica', 'normal');
+      doc.text(p.label, 15, y + 3.5);
+      doc.text(String(order.readings?.pool?.[p.key] || '—'), 115, y + 3.5);
+      doc.text(String(order.readings?.spa?.[p.key] || '—'), 165, y + 3.5);
+      y += 5;
+    });
+
+    y += 4;
+
+    // Chemicals Added
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('CHEMICALS ADDED', 15, y + 5);
+    y += 10;
+
+    doc.setFontSize(7);
     doc.setTextColor(...navy);
     doc.setFont('helvetica', 'bold');
-    doc.text('POOL', 15, y + 5);
-    doc.text('SPA', 110, y + 5);
-    y += 7;
+    doc.text('POOL', 15, y);
+    doc.text('SPA', 110, y);
+    y += 2;
     doc.setDrawColor(...gold);
     doc.line(15, y, 100, y);
     doc.line(110, y, 195, y);
-    y += 5;
+    y += 4;
 
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(80, 80, 80);
     const poolChems = getChemicalAdditionEntries(order.chemicalsAdded?.pool || []);
     const spaChems = getChemicalAdditionEntries(order.chemicalsAdded?.spa || []);
+    const maxLines = Math.max(poolChems.length, spaChems.length, 1);
 
-    const maxChems = Math.max(poolChems.length, spaChems.length, 1);
-    for (let i = 0; i < maxChems; i++) {
-      ensureSpace(6);
-      doc.text(poolChems[i] || (i === 0 ? 'None added' : ''), 15, y);
-      doc.text(spaChems[i] || (i === 0 ? 'None added' : ''), 110, y);
-      y += 6;
-    }
-    y += 5;
-
-    if (order.workPerformed || order.notes || order.followUpNotes) {
-      addSectionHeader('Service Notes');
-      doc.setFillColor(252, 250, 247);
-      const notes = `${order.workPerformed || ''}\n${order.followUpNotes || order.notes || ''}`.trim();
-      const lines = doc.splitTextToSize(notes || 'No notes recorded.', 180);
-      doc.rect(15, y, 185, lines.length * 5 + 6, 'F');
-      doc.setDrawColor(...gold);
-      doc.line(15, y, 15, y + lines.length * 5 + 6);
-      doc.setTextColor(100, 100, 100);
-      doc.text(lines, 20, y + 5);
-      y += lines.length * 5 + 15;
+    for(let i=0; i<maxLines; i++) {
+      if (y > 220) break;
+      doc.text(poolChems[i] || (i===0 ? 'None recorded' : ''), 15, y);
+      doc.text(spaChems[i] || (i===0 ? 'None recorded' : ''), 110, y);
+      y += 4.5;
     }
 
-    // Add Photo section
+    y += 4;
+
+    // Notes
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('SERVICE NOTES', 15, y + 5);
+    y += 10;
+
+    doc.setTextColor(60, 60, 60);
+    doc.setFontSize(7);
+    const notesStr = `${order.workPerformed || ''} ${order.followUpNotes || order.notes || ''}`.trim();
+    const splitNotes = doc.splitTextToSize(notesStr || 'No additional notes for this visit.', 180);
+    doc.text(splitNotes, 15, y);
+    y += (splitNotes.length * 4.5) + 5;
+
+    // Photos (Compact)
     const photos = normalizeChemPhotos(order.photos || []);
     if (photos.some(p => p)) {
-      addSectionHeader('Service Photos');
-      const photoWidth = 55;
-      const photoHeight = 40;
-      let x = 15;
+      if (y > 230) {
+        // Skip photos if no room
+      } else {
+        doc.setFillColor(...navy);
+        doc.rect(10, y, 190, 7, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.text('SERVICE PHOTOS', 15, y + 5);
+        y += 10;
 
-      photos.forEach((src, idx) => {
-        if (!src) return;
-
-        // Before adding, ensure we don't start a photo at the bottom of the page
-        if (y + photoHeight + 10 > 280) {
-            doc.addPage();
-            y = 20; // reset y
-        }
-
-        try {
-          doc.addImage(src, 'JPEG', x, y, photoWidth, photoHeight);
-          doc.setFontSize(7);
-          doc.setTextColor(150, 150, 150);
-          doc.text(CHEM_PHOTO_LABELS[idx], x, y + photoHeight + 4);
-        } catch (e) {
-          console.error("PDF Image add failed", e);
-        }
-
-        x += 60;
-        if (x > 150) {
-          x = 15;
-          y += photoHeight + 8;
-        }
-      });
+        const pW = 40;
+        const pH = 30;
+        let pX = 15;
+        photos.forEach((p, i) => {
+          if (p && i < 4 && pX < 180) {
+            try {
+              doc.addImage(p, 'JPEG', pX, y, pW, pH);
+              doc.setFontSize(5);
+              doc.setTextColor(150, 150, 150);
+              doc.text(CHEM_PHOTO_LABELS[i], pX, y + pH + 3);
+            } catch(e) {}
+            pX += 45;
+          }
+        });
+      }
     }
 
+    renderFooter();
     sharePDF(doc, filename);
   }
 
@@ -1026,36 +1206,843 @@ function migrateLegacyRepairData() {
   }
 }
 
-function seedTestClients() {
-  const existingClients = db.get('clients', []);
-  if (existingClients.length) return;
-
-  db.set('clients', [
-    {
-      id: 'c101',
-      name: 'Villa Azure',
-      address: 'Seven Mile Beach',
-      contact: 'Property Manager'
-    },
-    {
-      id: 'c102',
-      name: 'Harbour Point',
-      address: 'West Bay Road',
-      contact: 'Maintenance Office'
-    },
-    {
-      id: 'c103',
-      name: 'Palm Bay Retreat',
-      address: 'Rum Point',
-      contact: 'Site Supervisor'
-    },
-    {
-      id: 'c104',
-      name: 'Ocean Crest Residence',
-      address: 'South Sound',
-      contact: 'Homeowner'
+function bulkImportClients() {
+  const data = prompt("Paste clients JSON here (Array of objects with name and address)");
+  if (!data) return;
+  try {
+    const newClients = JSON.parse(data);
+    if (!Array.isArray(newClients)) {
+      alert("Invalid format. Expected an array.");
+      return;
     }
-  ]);
+    const clients = db.get('clients', []);
+    newClients.forEach(c => {
+      clients.unshift({
+        id: `c${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        name: c.name || 'New Client',
+        address: c.address || '',
+        contact: c.contact || ''
+      });
+    });
+    db.set('clients', clients);
+    showToast(`${newClients.length} clients imported`);
+    router.renderClients();
+  } catch (e) {
+    alert("Error parsing JSON: " + e.message);
+  }
+}
+
+function cleanupTestClients() {
+  const testIds = ['c101', 'c102', 'c103', 'c104'];
+  const clients = db.get('clients', []);
+  const filtered = clients.filter(c => !testIds.includes(c.id));
+  if (filtered.length !== clients.length) {
+    db.set('clients', filtered);
+  }
+}
+
+async function exportCompletedToExcel() {
+  const allWorkorders = db.get('workorders', []);
+  const completed = allWorkorders.filter(wo => wo.status === 'completed');
+
+  if (completed.length === 0) {
+    showToast('No completed work orders to export');
+    return;
+  }
+
+  showToast('Generating Excel report...');
+
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet('OASIS Service Records');
+
+    const chemKeys = [
+      { key: 'tabs', label: 'Tabs' },
+      { key: 'shock', label: 'Shock/Oxidizer' },
+      { key: 'muriaticAcid', label: 'Muriatic Acid' },
+      { key: 'sodaAsh', label: 'Soda Ash' },
+      { key: 'sodiumBicarb', label: 'Sodium Bicarb' },
+      { key: 'calcium', label: 'Calcium Increaser' },
+      { key: 'stabilizer', label: 'Stabilizer' },
+      { key: 'salt', label: 'Salt' },
+      { key: 'phosphateRemover', label: 'Phosphate Remover' },
+      { key: 'algaecide', label: 'Algaecide' }
+    ];
+
+    // Define Columns
+    const columns = [
+      { header: 'Date', key: 'date', width: 12 },
+      { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 },
+      { header: 'Technician', key: 'tech', width: 15 },
+      { header: 'Time In', key: 'timeIn', width: 10 },
+      { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Pool Chlorine', key: 'pCl', width: 12 },
+      { header: 'Pool pH', key: 'pph', width: 10 },
+      { header: 'Pool Alk', key: 'palk', width: 10 }
+    ];
+
+    // Add columns for each pool chemical
+    chemKeys.forEach(ck => {
+      columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
+    });
+
+    columns.push(
+      { header: 'Spa Chlorine', key: 'sCl', width: 12 },
+      { header: 'Spa pH', key: 'sph', width: 10 },
+      { header: 'Spa Alk', key: 'salk', width: 10 }
+    );
+
+    // Add columns for each spa chemical
+    chemKeys.forEach(ck => {
+      columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
+    });
+
+    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+
+    ws.columns = columns;
+
+    // Style Header
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+
+    completed.forEach(wo => {
+      const rowData = {
+        date: wo.date,
+        client: wo.clientName,
+        address: wo.address,
+        tech: wo.technician,
+        timeIn: wo.timeIn || wo.time || '',
+        timeOut: wo.timeOut || '',
+        pCl: wo.readings?.pool?.chlorine || '',
+        pph: wo.readings?.pool?.ph || '',
+        palk: wo.readings?.pool?.alkalinity || '',
+        sCl: wo.readings?.spa?.chlorine || '',
+        sph: wo.readings?.spa?.ph || '',
+        salk: wo.readings?.spa?.alkalinity || '',
+        notes: (wo.workPerformed || '') + ' ' + (wo.followUpNotes || wo.notes || '')
+      };
+
+      // Populate pool chemical values
+      chemKeys.forEach(ck => {
+        rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || '';
+      });
+
+      // Populate spa chemical values
+      chemKeys.forEach(ck => {
+        rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || '';
+      });
+
+      ws.addRow(rowData);
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    // Robust binary to base64 conversion
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+    const filename = `OASIS_Service_Records_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast('Excel export ready');
+  } catch (error) {
+    console.error('Excel export failed:', error);
+    showToast('Excel export failed');
+  }
+}
+
+function openMap(address) {
+  if (!address) return;
+  let query = address;
+  if (!query.toLowerCase().includes('grand cayman')) {
+    query += ', Grand Cayman';
+  }
+  const encodedAddress = encodeURIComponent(query);
+  const url = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+  window.open(url, '_blank');
+}
+
+function saveClientDetails(clientId) {
+  const name = document.getElementById('edit-client-name').value;
+  const address = document.getElementById('edit-client-address').value;
+  const contact = document.getElementById('edit-client-contact').value;
+  const tech = document.getElementById('edit-client-tech').value;
+
+  if (!name) {
+    alert('Name is required');
+    return;
+  }
+
+  const clients = db.get('clients', []);
+  const index = clients.findIndex(c => c.id === clientId);
+  if (index >= 0) {
+    clients[index] = { ...clients[index], name, address, contact, technician: tech };
+    db.set('clients', clients);
+
+    // Also update any matching workorders
+    const workorders = db.get('workorders', []);
+    workorders.forEach(wo => {
+      if (wo.clientId === clientId) {
+        wo.clientName = name;
+        wo.address = address;
+        wo.technician = tech;
+      }
+    });
+    db.set('workorders', workorders);
+
+    showToast('Client profile updated');
+    router.renderClients();
+  }
+}
+
+async function shareClientDetails(clientId) {
+  const clients = db.get('clients', []);
+  const client = clients.find(c => c.id === clientId);
+  if (!client) return;
+
+  const text = `Client: ${client.name}\nAddress: ${client.address}\nContact: ${client.contact || 'None'}\nTech: ${client.technician || 'None'}`;
+
+  try {
+    if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.Share) {
+      await Capacitor.Plugins.Share.share({
+        title: `Client Profile: ${client.name}`,
+        text: text,
+        dialogTitle: 'Share Client Details'
+      });
+    } else {
+      await navigator.clipboard.writeText(text);
+      showToast('Client details copied to clipboard');
+    }
+  } catch (err) {
+    console.error('Sharing failed:', err);
+    showToast('Manual copy required');
+  }
+}
+
+function initMasterSchedule() {
+  if (db.get('masterScheduleLoaded')) return;
+
+  const clients = [
+    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem" },
+    { name: "Jeey Bomford", address: "49 Mary Read Crescent", tech: "Kadeem" },
+    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem" },
+    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem" },
+    { name: "Gcpsl Sea View", address: "South Church Street", tech: "Kadeem" },
+    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem" },
+    { name: "Sunrise Phase 3", address: "Old Crewe Rd", tech: "Kadeem" },
+    { name: "Vivi Townhomes", address: "275 Fairbanks Rd", tech: "Kadeem" },
+    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin" },
+    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin" },
+    { name: "Caribbean Courts", address: "Bcqs, South Sound", tech: "Elvin" },
+    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin" },
+    { name: "Fin South Church Street", address: "Fin Strata", tech: "Elvin" },
+    { name: "Lakeland Villas #1", address: "Old Crewe Rd", tech: "Elvin" },
+    { name: "Point Of View", address: "South Sound", tech: "Elvin" },
+    { name: "South Palms #1", address: "Glen Eden Rd", tech: "Elvin" },
+    { name: "Southern Skies", address: "South Sound", tech: "Elvin" },
+    { name: "Correy Williams", address: "16 Cypress Point", tech: "Jermaine" },
+    { name: "Andy Albray", address: "17 The Deck House", tech: "Jermaine" },
+    { name: "Joanne Akdeniz", address: "42 Hoya Quay", tech: "Jermaine" },
+    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine" },
+    { name: "Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine" },
+    { name: "Mike Stroh", address: "64 Waterford Quay", tech: "Jermaine" },
+    { name: "Tim Bradley", address: "66 Baquarat Quay", tech: "Jermaine" },
+    { name: "Plum Mandalay", address: "Seven Mile", tech: "Jermaine" },
+    { name: "Ocean Pointe Villas", address: "West Bay", tech: "Jermaine" },
+    { name: "Snug Harbour Villas", address: "Snug Harbour", tech: "Jermaine" },
+    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace" },
+    { name: "John Ferarri", address: "30 Orchid Drive", tech: "Ace" },
+    { name: "Gary Gibbs", address: "306 Yacht Club dr", tech: "Ace" },
+    { name: "Andrew Muir", address: "318 Yacht Drive", tech: "Ace" },
+    { name: "Scott Somerville", address: "40 Orchid Drive", tech: "Ace" },
+    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace" },
+    { name: "Vlad Aldea", address: "474 Yacht Club Dr", tech: "Ace" },
+    { name: "Abraham Burak", address: "Salt Creek", tech: "Ace" },
+    { name: "Sunset Point Condos", address: "North West Point Rd", tech: "Ace" },
+    { name: "Villa Mare", address: "Vista Del Mar", tech: "Ace" },
+    { name: "Jenny Frizzle", address: "302 Windswept Drive", tech: "Donald" },
+    { name: "Anthoney Reid", address: "88 Mallard Drive", tech: "Donald" },
+    { name: "Coral Bay Village", address: "Shamrock Rd", tech: "Donald" },
+    { name: "Harbor Walk", address: "Grand Harbour", tech: "Donald" },
+    { name: "Indigo Bay", address: "Shamrock Rd", tech: "Donald" },
+    { name: "Periwinkle", address: "Edgewater Way", tech: "Donald" },
+    { name: "Savannah Grand", address: "Savannah", tech: "Donald" },
+    { name: "South Shore", address: "Shamrock Rd", tech: "Donald" },
+    { name: "The Palms At Patricks", address: "Patricks Island", tech: "Donald" },
+    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley" },
+    { name: "One Canal Point", address: "Canal Point", tech: "Kingsley" },
+    { name: "Poinsettia", address: "Seven Mile Beach", tech: "Kingsley" },
+    { name: "The Beachcomber", address: "Seven Mile Beach", tech: "Kingsley" },
+    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel" },
+    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel" },
+    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel" },
+    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel" },
+    { name: "Plymouth", address: "Canal Point Dr", tech: "Ariel" },
+    { name: "Glen Kennedy", address: "Salt Creek", tech: "Ariel" },
+    { name: "Mark Vandevelde", address: "Salt Creek", tech: "Ariel" },
+    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel" },
+    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik" },
+    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik" },
+    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik" },
+    { name: "Jason Butcher", address: "44 Grand Estates", tech: "Malik" },
+    { name: "Julie O'Hara", address: "56 Grand Estates", tech: "Malik" },
+    { name: "Mike Gibbs", address: "78 Grand Estates", tech: "Malik" },
+    { name: "Grapetree Condos", address: "Seven Mile Beach", tech: "Malik" },
+    { name: "The Colonial Club", address: "Seven Mile Beach", tech: "Malik" },
+    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem" },
+    { name: "Caribbean Paradise", address: "South Sound", tech: "Kadeem" },
+    { name: "L'Ambience", address: "Fairbanks Rd", tech: "Kadeem" },
+    { name: "Mystic Retreat", address: "John Greer Boulavard", tech: "Kadeem" },
+    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin" },
+    { name: "South Bay Estates", address: "Bel Air Dr", tech: "Elvin" },
+    { name: "Andy Marcher", address: "234 Drake Quay", tech: "Jermaine" },
+    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine" },
+    { name: "Dolce Vita", address: "Govenors Harbour", tech: "Jermaine" },
+    { name: "Amber Stewart", address: "Dolce Vita 4", tech: "Jermaine" },
+    { name: "Pleasant View", address: "West Bay", tech: "Jermaine" },
+    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace" },
+    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace" },
+    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace" },
+    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace" },
+    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace" },
+    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace" },
+    { name: "Charles Ebanks", address: "Bonnieview Av", tech: "Donald" },
+    { name: "One Canal Point Gym", address: "Canal Point", tech: "Kingsley" },
+    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik" },
+    { name: "Moon Bay", address: "Shamrock Rd", tech: "Malik" },
+    { name: "Cayman Coves", address: "South Church Street", tech: "Kadeem" },
+    { name: "Venetia", address: "South Sound", tech: "Kadeem" },
+    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin" },
+    { name: "Tim Dailyey", address: "North Webster Dr", tech: "Elvin" },
+    { name: "Nicholas Lynn", address: "Sandlewood Crescent", tech: "Elvin" },
+    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin" },
+    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin" },
+    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin" },
+    { name: "Riyaz Norrudin", address: "63 Langton Way", tech: "Elvin" },
+    { name: "Mangrove", address: "Bcqs", tech: "Elvin" },
+    { name: "Quentin Creegan", address: "Villa Aramone", tech: "Elvin" },
+    { name: "Jodie O'Mahony", address: "12 El Nathan", tech: "Jermaine" },
+    { name: "Charles Motsinger", address: "124 Hillard", tech: "Jermaine" },
+    { name: "Steve Daker", address: "33 Spurgeon Cr", tech: "Jermaine" },
+    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine" },
+    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine" },
+    { name: "Albert Schimdberger", address: "55 Elnathan Rd", tech: "Jermaine" },
+    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine" },
+    { name: "Blair Ebanks", address: "71 Spurgeon Crescent", tech: "Jermaine" },
+    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine" },
+    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine" },
+    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace" },
+    { name: "Mitchell Demeter", address: "19 Whirlaway Close", tech: "Ace" },
+    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace" },
+    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace" },
+    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace" },
+    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace" },
+    { name: "Coastal Escape", address: "Omega Bay", tech: "Ace" },
+    { name: "Inity Ridge", address: "Prospect Point Rd", tech: "Ace" },
+    { name: "Ocean Reach", address: "Old Crewe Rd", tech: "Ace" },
+    { name: "Scott Somerville", address: "Rum Point Rd", tech: "Donald" },
+    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald" },
+    { name: "67 On The Bay", address: "Queens Highway", tech: "Donald" },
+    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald" },
+    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald" },
+    { name: "Paradise Sur Mar", address: "Sand Cay Rd", tech: "Donald" },
+    { name: "Rip Kai", address: "Rum Point Drive", tech: "Donald" },
+    { name: "Sunrays", address: "Sand Cay Rd", tech: "Donald" },
+    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley" },
+    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley" },
+    { name: "Regant Court", address: "Brittania", tech: "Kingsley" },
+    { name: "Solara Main", address: "Crystal Harbour", tech: "Kingsley" },
+    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel" },
+    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel" },
+    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel" },
+    { name: "Chad Horwitz", address: "49 Calico Quay", tech: "Ariel" },
+    { name: "Malcom Swift", address: "Miramar", tech: "Ariel" },
+    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel" },
+    { name: "Strata #70", address: "Boggy Sands rd", tech: "Ariel" },
+    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik" },
+    { name: "Debbie Ebanks", address: "Fischers Reef", tech: "Malik" },
+    { name: "John Corallo", address: "3A Seahven", tech: "Malik" },
+    { name: "Encompass", address: "3B Seahven", tech: "Malik" },
+    { name: "Joseph Hurlston", address: "42 Monumnet Rd", tech: "Malik" },
+    { name: "George McKenzie", address: "534 Rum Point Dr", tech: "Malik" },
+    { name: "Twin Palms", address: "Rum Point Dr", tech: "Malik" },
+    { name: "Bernie Bako", address: "#4 Venetia", tech: "Kadeem" },
+    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem" },
+    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem" },
+    { name: "Park View Courts", address: "Spruce Lane", tech: "Kadeem" },
+    { name: "The Bentley", address: "Crewe rd", tech: "Kadeem" },
+    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin" },
+    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin" },
+    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin" },
+    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin" },
+    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin" },
+    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin" },
+    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin" },
+    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin" },
+    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin" },
+    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine" },
+    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine" },
+    { name: "Nigel Daily", address: "Snug Harbour", tech: "Jermaine" },
+    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine" },
+    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine" },
+    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine" },
+    { name: "Shoreway Townhomes", address: "Adonis Dr", tech: "Jermaine" },
+    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine" },
+    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine" },
+    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace" },
+    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace" },
+    { name: "Clive Harris", address: "516 Crighton Drive", tech: "Ace" },
+    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace" },
+    { name: "Ross Fortune", address: "90 Prince Charles", tech: "Ace" },
+    { name: "Simon Palmer", address: "Olivias Cove", tech: "Ace" },
+    { name: "Caroline Moran", address: "197 Bimini Dr", tech: "Donald" },
+    { name: "James Reeve", address: "215 Bimini Dr", tech: "Donald" },
+    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald" },
+    { name: "Sina Mirzale", address: "353 Bimini Dr", tech: "Donald" },
+    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald" },
+    { name: "Marlon Bispath", address: "519 Bimini Dr", tech: "Donald" },
+    { name: "Margaret Fantasia", address: "526 Bimini Dr", tech: "Donald" },
+    { name: "Kenny Rankin", address: "Grand Harbour", tech: "Donald" },
+    { name: "James Mendes", address: "106 Olea", tech: "Ariel" },
+    { name: "James O'Brien", address: "102 Olea", tech: "Ariel" },
+    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel" },
+    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel" },
+    { name: "Mr Holland", address: "107 Olea", tech: "Ariel" },
+    { name: "Nikki Harris", address: "213 olea", tech: "Ariel" },
+    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel" },
+    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel" },
+    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik" },
+    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik" },
+    { name: "Iman Shafiei", address: "53 Baquarat Quay", tech: "Malik" },
+    { name: "Enrique Tasende", address: "65 Baccarat Quay", tech: "Malik" },
+    { name: "David Wilson", address: "Boggy Sands", tech: "Malik" },
+    { name: "Nina Irani", address: "Casa Oasis", tech: "Malik" },
+    { name: "Sandy Lane Townhomes", address: "Boggy Sands Rd", tech: "Malik" },
+    { name: "Valencia Heights", address: "Strata #536", tech: "Kadeem" },
+    { name: "Jaime-Lee Eccles", address: "176 Conch Dr", tech: "Kadeem" },
+    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem" },
+    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem" },
+    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem" },
+    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem" },
+    { name: "Hilton Estates", address: "Fairbanks Rd", tech: "Kadeem" },
+    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin" },
+    { name: "Britni Strong", address: "150 Parkway Dr", tech: "Elvin" },
+    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin" },
+    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd", tech: "Elvin" },
+    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin" },
+    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin" },
+    { name: "Saphire", address: "Jec, Nwp Rd", tech: "Elvin" },
+    { name: "The Sands", address: "Boggy Sand Rd", tech: "Elvin" },
+    { name: "Turtle Breeze", address: "Conch Point Rd", tech: "Elvin" },
+    { name: "Francois Du Toit", address: "Snug Harbour", tech: "Jermaine" },
+    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine" },
+    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine" },
+    { name: "Johann Prinslo", address: "270 Jennifer Dr", tech: "Jermaine" },
+    { name: "Andre Slabbert", address: "7 Victoria Dr", tech: "Jermaine" },
+    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine" },
+    { name: "Palm Heights Residence", address: "Seven Mile Beach", tech: "Jermaine" },
+    { name: "Jean Mean", address: "211 Sea Spray Dr", tech: "Ace" },
+    { name: "Paul Rowan", address: "265 Sea Spray Dr", tech: "Ace" },
+    { name: "Charmaine Richter", address: "40 Natures Circle", tech: "Ace" },
+    { name: "Rory Andrews", address: "44 Country Road", tech: "Ace" },
+    { name: "Walker Romanica", address: "79 Riley Circle", tech: "Ace" },
+    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace" },
+    { name: "Grand Palmyra", address: "Seven Mile Beach", tech: "Ace" },
+    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace" },
+    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald" },
+    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald" },
+    { name: "Reg Williams", address: "Cliff House", tech: "Donald" },
+    { name: "Gypsy", address: "1514 Rum Point Dr", tech: "Donald" },
+    { name: "Kai Vista", address: "Rum Point Dr", tech: "Donald" },
+    { name: "Ocean Vista", address: "Rum Point", tech: "Donald" },
+    { name: "Stefan Marenzi", address: "Water Cay Rd", tech: "Donald" },
+    { name: "Bella Rocca", address: "Queens Highway", tech: "Donald" },
+    { name: "Sea 2 Inity", address: "Kiabo", tech: "Donald" },
+    { name: "Guy Manning", address: "Diamonds Edge", tech: "Kingsley" },
+    { name: "Kent Nickerson", address: "Salt Creek", tech: "Kingsley" },
+    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel" },
+    { name: "Suzanne Correy", address: "394 Canal Point Rd", tech: "Ariel" },
+    { name: "November Capitol", address: "One Canal Point", tech: "Ariel" },
+    { name: "Safe Harbor", address: "West Bay", tech: "Ariel" },
+    { name: "Bert Thacker", address: "West Bay", tech: "Ariel" },
+    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik" },
+    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik" },
+    { name: "Philip Smyres", address: "Conch Point Villas", tech: "Malik" },
+    { name: "Brandon Caruana", address: "Conch Point Villas", tech: "Malik" },
+    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik" },
+    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik" },
+    { name: "Phillip Cadien", address: "312 Cypres Point", tech: "Malik" }
+  ];
+
+  // Map to store unique clients by name
+  const uniqueClients = {};
+  clients.forEach(c => {
+    if (!uniqueClients[c.name]) {
+      uniqueClients[c.name] = {
+        id: `c_${Math.random().toString(36).substr(2, 9)}`,
+        name: c.name,
+        address: c.address,
+        technician: c.tech
+      };
+    }
+  });
+
+  const clientArray = Object.values(uniqueClients);
+  db.set('clients', clientArray);
+
+  // Generate pending workorders for each client assigned to their tech
+  const workorders = clientArray.map(c => ({
+    id: `wo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    clientId: c.id,
+    clientName: c.name,
+    address: c.address,
+    technician: c.technician,
+    date: new Date().toISOString().split('T')[0],
+    status: 'pending',
+    readings: { pool: defaultChemReadings(), spa: defaultChemReadings() },
+    chemicalsAdded: { pool: defaultChemicalAdditions(), spa: defaultChemicalAdditions() },
+    photos: []
+  }));
+
+  db.set('workorders', workorders);
+  db.set('masterScheduleLoaded', true);
+}
+
+function populateLoginTechOptions() {
+  const select = document.getElementById('login-tech');
+  if (!select) return;
+
+  const entries = Object.entries(auth.users)
+    .sort((a, b) => a[1].name.localeCompare(b[1].name));
+
+  select.innerHTML = `
+    <option value="" disabled selected>— Select your name —</option>
+    ${entries.map(([id, user]) => `
+      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
+    `).join('')}
+  `;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Always force login screen on startup
+  auth.logout();
+
+  cleanupTestClients();
+  initMasterSchedule();
+  migrateLegacyRepairData();
+  populateLoginTechOptions();
+
+  // Android Back Button Handling
+  if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
+    Capacitor.Plugins.App.addListener('backButton', () => {
+      if (router.currentView === 'dashboard') {
+        // Stop at home page, don't exit if logged in (though we force login above)
+        return;
+      }
+
+      if (!auth.isLoggedIn()) {
+        // If at login screen, maybe let it exit or do nothing
+        return;
+      }
+
+      router.goBack();
+    });
+  }
+
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      router.navigate(btn.dataset.view);
+    });
+  });
+
+  document.getElementById('login-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const select = document.getElementById('login-tech');
+    const pinInput = document.getElementById('login-pin');
+    const username = select ? select.value : '';
+    const pin = pinInput ? pinInput.value : '';
+    const loginScreen = document.getElementById('login-screen');
+    const appShell = document.getElementById('app');
+    const loginError = document.getElementById('login-error');
+
+    console.log('Attempting login for:', username);
+
+    if (auth.login(username, pin)) {
+      console.log('Login successful');
+      const loginScreen = document.getElementById('login-screen');
+      const appShell = document.getElementById('app');
+
+      if (loginScreen) {
+        loginScreen.style.setProperty('display', 'none', 'important');
+      }
+      if (appShell) {
+        appShell.classList.remove('hidden');
+        appShell.style.setProperty('display', 'flex', 'important');
+      }
+      if (loginError) loginError.style.display = 'none';
+
+      // Immediate navigation
+      try {
+        router.navigate('dashboard');
+      } catch (err) {
+        console.error('Navigation error:', err);
+        location.reload();
+      }
+    } else {
+      console.warn('Login failed: invalid username or PIN');
+      if (loginError) loginError.style.display = 'block';
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (e.target.classList.contains('modal-overlay')) {
+      modal.hide();
+    }
+  });
+});
+
+function signOut() {
+  auth.logout();
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('app').style.display = 'none';
+  const loginScreen = document.getElementById('login-screen');
+  loginScreen.classList.remove('hidden');
+  loginScreen.style.display = 'flex';
+  router.navigate('dashboard');
+}
+
+function quickAddClient() {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can add clients');
+    return;
+  }
+  const name = prompt('Client name');
+  if (!name) return;
+
+  const address = prompt('Client address') || '';
+  const contact = prompt('Contact name') || '';
+  const clients = db.get('clients', []);
+
+  clients.unshift({
+    id: `c${Date.now()}`,
+    name,
+    address,
+    contact
+  });
+
+  db.set('clients', clients);
+  showToast('Client added');
+  router.renderClients();
+}
+
+function deleteClient(clientId) {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can delete clients');
+    return;
+  }
+  if (!confirm('Delete this client and related service records?')) return;
+
+  db.set('clients', db.get('clients', []).filter(client => client.id !== clientId));
+  db.set('workorders', db.get('workorders', []).filter(order => order.clientId !== clientId));
+  db.set('repairOrders', getRepairOrders().filter(order => order.clientId !== clientId));
+
+  showToast('Client removed');
+  router.renderClients();
+}
+
+function onChemClientChange() {
+  const select = document.getElementById('wo-client');
+  const addressField = document.getElementById('wo-address');
+  const title = document.getElementById('wo-client-name');
+  if (!select) return;
+
+  const client = db.get('clients', []).find(item => item.id === select.value);
+  if (client) {
+    if (addressField) addressField.value = client.address || '';
+    if (title) title.textContent = client.name || 'Chem Sheet';
+  }
+}
+
+function updateChemGuidancePreview(orderId) {
+  const preview = document.getElementById('chem-guidance-preview');
+  if (!preview) return;
+
+  const order = collectWorkOrderForm(orderId);
+  if (order) {
+    preview.innerHTML = renderChemDosingSummary(order);
+  }
+}
+
+function updateTimeSpentHint() {
+  const hint = document.getElementById('wo-time-spent-hint');
+  const timeIn = document.getElementById('wo-time-in')?.value || '';
+  const timeOut = document.getElementById('wo-time-out')?.value || '';
+  if (!hint) return;
+
+  const spent = calculateTimeSpent(timeIn, timeOut);
+  hint.textContent = `Time on site: ${spent || 'Enter both times to calculate duration.'}`;
+}
+
+function attachChemFieldListeners(orderId) {
+  const form = document.querySelector('.wo-form');
+  if (!form) return;
+
+  form.querySelectorAll('input, select, textarea').forEach(field => {
+    if (field.id && (field.id.startsWith('pool-') || field.id.startsWith('spa-'))) {
+      field.addEventListener('input', () => updateChemGuidancePreview(orderId));
+      field.addEventListener('change', () => updateChemGuidancePreview(orderId));
+    }
+
+    if (field.id === 'wo-time-in' || field.id === 'wo-time-out') {
+      field.addEventListener('input', updateTimeSpentHint);
+      field.addEventListener('change', updateTimeSpentHint);
+    }
+  });
+
+  updateTimeSpentHint();
+}
+
+function collectWorkOrderForm(orderId) {
+  const order = workOrderManager.getOrder(orderId);
+  if (!order) return null;
+
+  const dateInput = document.getElementById('wo-date');
+  if (!dateInput) {
+    return order;
+  }
+
+  const getValue = (id, fallback = '') => {
+    const field = document.getElementById(id);
+    return field ? field.value : fallback;
+  };
+
+  const existingPool = { ...defaultChemReadings(), ...(order.readings?.pool || {}) };
+  const existingSpa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
+  const existingChemicalsAdded = order.chemicalsAdded || {};
+  const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
+  const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
+  const selectedClientId = getValue('wo-client', order.clientId || '');
+  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
+  const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
+
+  const updatedOrder = {
+    ...order,
+    clientId: selectedClientId || order.clientId,
+    clientName: selectedClient?.name || order.clientName,
+    technician: getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || ''),
+    date: getValue('wo-date', order.date),
+    time: getValue('wo-time-in', order.timeIn || order.time || ''),
+    timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
+    timeOut: getValue('wo-time-out', order.timeOut || ''),
+    status: getValue('wo-status', order.status || 'pending'),
+    address: selectedClient?.address || getValue('wo-address', order.address),
+    workPerformed: getValue('wo-work', order.workPerformed || ''),
+    followUpNotes,
+    notes: followUpNotes,
+    photos: normalizeChemPhotos(order.photos), // Ensure photos are preserved from the original order
+    readings: {
+      ...order.readings,
+      pool: {
+        ...existingPool,
+        ph: getValue('pool-ph', existingPool.ph || ''),
+        chlorine: getValue('pool-chlorine', existingPool.chlorine || ''),
+        alkalinity: getValue('pool-alkalinity', existingPool.alkalinity || ''),
+        calcium: getValue('pool-calcium', existingPool.calcium || ''),
+        cya: getValue('pool-cya', existingPool.cya || ''),
+        salt: getValue('pool-salt', existingPool.salt || ''),
+        temp: getValue('pool-temp', existingPool.temp || ''),
+        tds: getValue('pool-tds', existingPool.tds || ''),
+        phosphates: getValue('pool-phosphates', existingPool.phosphates || ''),
+        borates: getValue('pool-borates', existingPool.borates || '')
+      },
+      spa: {
+        ...existingSpa,
+        ph: getValue('spa-ph', existingSpa.ph || ''),
+        chlorine: getValue('spa-chlorine', existingSpa.chlorine || ''),
+        alkalinity: getValue('spa-alkalinity', existingSpa.alkalinity || ''),
+        calcium: getValue('spa-calcium', existingSpa.calcium || ''),
+        cya: getValue('spa-cya', existingSpa.cya || ''),
+        salt: getValue('spa-salt', existingSpa.salt || ''),
+        temp: getValue('spa-temp', existingSpa.temp || ''),
+        tds: getValue('spa-tds', existingSpa.tds || ''),
+        phosphates: getValue('spa-phosphates', existingSpa.phosphates || ''),
+        borates: getValue('spa-borates', existingSpa.borates || '')
+      }
+    },
+    chemicalsAdded: {
+      pool: {
+        ...existingPoolAdded,
+        tabs: getValue('pool-add-tabs', existingPoolAdded.tabs || ''),
+        shock: getValue('pool-add-shock', existingPoolAdded.shock || ''),
+        muriaticAcid: getValue('pool-add-muriaticAcid', existingPoolAdded.muriaticAcid || ''),
+        sodaAsh: getValue('pool-add-sodaAsh', existingPoolAdded.sodaAsh || ''),
+        sodiumBicarb: getValue('pool-add-sodiumBicarb', existingPoolAdded.sodiumBicarb || ''),
+        calcium: getValue('pool-add-calcium', existingPoolAdded.calcium || ''),
+        stabilizer: getValue('pool-add-stabilizer', existingPoolAdded.stabilizer || ''),
+        salt: getValue('pool-add-salt', existingPoolAdded.salt || ''),
+        phosphateRemover: getValue('pool-add-phosphateRemover', existingPoolAdded.phosphateRemover || ''),
+        algaecide: getValue('pool-add-algaecide', existingPoolAdded.algaecide || ''),
+        other: getValue('pool-add-other', existingPoolAdded.other || '')
+      },
+      spa: {
+        ...existingSpaAdded,
+        tabs: getValue('spa-add-tabs', existingSpaAdded.tabs || ''),
+        shock: getValue('spa-add-shock', existingSpaAdded.shock || ''),
+        muriaticAcid: getValue('spa-add-muriaticAcid', existingSpaAdded.muriaticAcid || ''),
+        sodaAsh: getValue('spa-add-sodaAsh', existingSpaAdded.sodaAsh || ''),
+        sodiumBicarb: getValue('spa-add-sodiumBicarb', existingSpaAdded.sodiumBicarb || ''),
+        calcium: getValue('spa-add-calcium', existingSpaAdded.calcium || ''),
+        stabilizer: getValue('spa-add-stabilizer', existingSpaAdded.stabilizer || ''),
+        salt: getValue('spa-add-salt', existingSpaAdded.salt || ''),
+        phosphateRemover: getValue('spa-add-phosphateRemover', existingSpaAdded.phosphateRemover || ''),
+        algaecide: getValue('spa-add-algaecide', existingSpaAdded.algaecide || ''),
+        other: getValue('spa-add-other', existingSpaAdded.other || '')
+      }
+    }
+  };
+
+  updatedOrder.lsi = {
+    pool: calculateLSI(updatedOrder.readings.pool),
+    spa: calculateLSI(updatedOrder.readings.spa)
+  };
+
+  const sourceReadings = Object.values(updatedOrder.readings.pool).some(value => value !== '' && value !== null && value !== undefined)
+    ? updatedOrder.readings.pool
+    : updatedOrder.readings.spa;
+  updatedOrder.chemicals = workOrderManager.calculateDosing(sourceReadings);
+
+  return updatedOrder;
+}
+
+function saveWorkOrderForm(orderId) {
+  const order = collectWorkOrderForm(orderId);
+  if (!order) {
+    showToast('Work order not found');
+    return;
+  }
+
+  workOrderManager.saveOrder(order);
+  router.navigate('workorders');
+  showToast('Chem sheet saved');
+}
+
+function shareReport(orderId) {
+  const order = collectWorkOrderForm(orderId);
+  if (!order) {
+    showToast('Work order not found');
+    return;
+  }
+
+  workOrderManager.saveOrder(order);
+  workOrderManager.generateReport(order);
+}
+
+function sendReport(orderId) {
+  shareReport(orderId);
 }
 
 function getRepairOrders() {
@@ -1064,6 +2051,555 @@ function getRepairOrders() {
 
 function saveRepairOrders(orders) {
   db.set('repairOrders', orders);
+}
+
+function renderRepairOrdersList() {
+  const allOrders = getRepairOrders();
+  const currentUser = auth.getCurrentUser();
+  const isAdmin = auth.isAdmin();
+  const canShare = auth.canShare();
+
+  // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
+  const orders = (currentUser && currentUser.username === 'admin')
+    ? allOrders
+    : allOrders.filter(o => o.assignedTo === currentUser.name);
+
+  if (!orders.length) {
+    return `
+      <div class="empty-state">
+        <div class="empty-icon">🛠️</div>
+        <div class="empty-title">No repair work orders</div>
+        <div class="empty-subtitle">${isAdmin ? 'No repair orders found' : 'Create one to manage service repairs in the same app'}</div>
+      </div>
+    `;
+  }
+
+  return orders.map(order => `
+    <div class="job-card" style="margin-bottom:12px;">
+      <div class="job-card-header">
+        <div>
+          <div class="job-card-title">${escapeHtml(order.clientName || 'Repair Job')}</div>
+          <div class="job-card-customer">${escapeHtml(order.jobType || 'General Repair')}</div>
+          <div class="job-meta">
+            <div class="job-meta-item">📅 ${escapeHtml(order.date || '')}</div>
+            <div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div>
+          </div>
+        </div>
+      </div>
+      <div class="job-card-body">
+        <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
+        <div class="detail-row"><div class="detail-label">Priority</div><div class="detail-value">${escapeHtml(order.priority || 'Normal')}</div></div>
+        <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
+      </div>
+      <div class="job-card-footer">
+        <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">Open</button>
+        ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
+        ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = null) {
+  const content = document.getElementById('main-content');
+  const existing = !draftOrder && orderId ? getRepairOrders().find(order => order.id === orderId) : null;
+  const clients = db.get('clients', []);
+  const order = draftOrder || existing || {
+    id: orderId || `r${Date.now()}`,
+    clientId: presetClientId,
+    clientName: '',
+    address: '',
+    date: new Date().toISOString().split('T')[0],
+    time: '',
+    timeIn: '',
+    timeOut: '',
+    assignedTo: auth.getCurrentUser()?.name || '',
+    status: 'open',
+    jobType: '',
+    priority: 'Normal',
+    summary: '',
+    materials: '',
+    partsItems: [],
+    partsSummary: '',
+    labourHours: '',
+    notes: '',
+    photos: []
+  };
+
+  const activeOrderId = order.id;
+  const timeIn = order.timeIn || order.time || '';
+  const timeOut = order.timeOut || '';
+  const timeSpent = calculateTimeSpent(timeIn, timeOut);
+
+  content.innerHTML = `
+    <div class="wo-form">
+      <div class="wo-bar">
+        <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
+        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Repair Order'}</div>
+        <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
+      </div>
+
+      <div class="wo-sec">
+        <div class="wo-sec-hd" onclick="toggleAccordion(this)">
+          <span>Customer & Job Details</span>
+          <span class="wo-chev">▼</span>
+        </div>
+        <div class="wo-sec-bd" data-active-repair-id="${activeOrderId}">
+          <div class="form-row">
+            <label for="repair-client">Client</label>
+            <select id="repair-client" onchange="onRepairClientChange()">
+              <option value="">— Select client —</option>
+              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+            </select>
+          </div>
+
+          <div class="form-row">
+            <label for="repair-address">Address</label>
+            <input id="repair-address" type="text" value="${escapeHtml(order.address || '')}">
+          </div>
+
+          <div class="wo-grid" style="margin-bottom:12px; border-radius:var(--radius-sm);">
+            <div class="wo-fld">
+              <div class="wo-fld-lbl">Date</div>
+              <input id="repair-date" class="wo-fld-inp" type="date" value="${escapeHtml(order.date || '')}">
+            </div>
+            <div class="wo-fld">
+              <div class="wo-fld-lbl">Assigned Tech</div>
+              <select id="repair-tech" class="wo-fld-inp">
+                ${Object.entries(auth.users)
+                  .sort((a, b) => a[1].name.localeCompare(b[1].name))
+                  .map(([id, user]) => `<option value="${user.name}" ${user.name === (order.assignedTo || '') ? 'selected' : ''}>${user.name}</option>`).join('')}
+              </select>
+            </div>
+            <div class="wo-fld">
+              <div class="wo-fld-lbl">Time In</div>
+              <input id="repair-time-in" class="wo-fld-inp" type="time" value="${escapeHtml(timeIn)}">
+            </div>
+            <div class="wo-fld">
+              <div class="wo-fld-lbl">Time Out</div>
+              <input id="repair-time-out" class="wo-fld-inp" type="time" value="${escapeHtml(timeOut)}">
+            </div>
+          </div>
+
+          <div id="repair-time-spent-hint" class="wo-hint">Time on site: ${escapeHtml(timeSpent || 'Enter both times to calculate duration.')}</div>
+
+          <div class="form-row">
+            <label for="repair-type">Work Order Type</label>
+            <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
+          </div>
+
+          <div class="form-row">
+            <label for="repair-priority">Priority</label>
+            <select id="repair-priority">
+              <option value="Low" ${order.priority === 'Low' ? 'selected' : ''}>Low</option>
+              <option value="Normal" ${order.priority === 'Normal' ? 'selected' : ''}>Normal</option>
+              <option value="High" ${order.priority === 'High' ? 'selected' : ''}>High</option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <label for="repair-status">Status</label>
+            <select id="repair-status">
+              <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
+              <option value="in-progress" ${order.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
+              <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="wo-sec">
+        <div class="wo-sec-hd" onclick="toggleAccordion(this)">
+          <span>Work Summary & Parts</span>
+          <span class="wo-chev">▼</span>
+        </div>
+        <div class="wo-sec-bd">
+          <div class="form-row">
+            <label for="repair-summary">Summary of Work</label>
+            <textarea id="repair-summary" placeholder="Describe the repair performed...">${escapeHtml(order.summary || '')}</textarea>
+          </div>
+
+          <div class="form-row">
+            <label>Parts & Equipment Installed</label>
+            ${renderRepairPartsBuilder(activeOrderId, order)}
+          </div>
+
+          <div class="form-row">
+            <label for="repair-materials">Additional Parts Notes</label>
+            <textarea id="repair-materials" placeholder="Materials used, part numbers not in catalog...">${escapeHtml(order.materials || '')}</textarea>
+          </div>
+
+          <div class="form-row">
+            <label for="repair-labour">Labour Hours</label>
+            <input id="repair-labour" type="number" step="0.25" value="${escapeHtml(order.labourHours || '')}">
+          </div>
+
+          <div class="form-row">
+            <label for="repair-notes">Internal Office Notes</label>
+            <textarea id="repair-notes" placeholder="Notes for billing or follow-up...">${escapeHtml(order.notes || '')}</textarea>
+          </div>
+        </div>
+      </div>
+
+      ${renderRepairPhotoSection(activeOrderId, order)}
+
+      <div class="card" style="margin:12px;">
+        <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save Changes</button>
+          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true)">Share Report</button>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+
+  onRepairClientChange();
+  attachRepairFormListeners();
+}
+
+function onRepairClientChange() {
+  const select = document.getElementById('repair-client');
+  const address = document.getElementById('repair-address');
+  const title = document.getElementById('repair-bar-title');
+  if (!select || !address) return;
+
+  const client = db.get('clients', []).find(item => item.id === select.value);
+  if (client) {
+    address.value = client.address || '';
+    if (title) title.textContent = client.name || 'Repair Order';
+  }
+}
+
+function collectRepairOrderFromForm(orderId = '') {
+  // Use a stable identifier if this is a brand new order being filled out
+  const formElement = document.getElementById('repair-client');
+  if (formElement && !orderId) {
+      // If we're in the form but don't have an ID yet, check if one was already assigned
+      // to the form session to avoid duplicates on every photo take/upload.
+      const existingIdField = document.querySelector('[data-active-repair-id]');
+      if (existingIdField) {
+          orderId = existingIdField.getAttribute('data-active-repair-id');
+      }
+  }
+
+  const existing = orderId ? getRepairOrders().find(item => item.id === orderId) : null;
+  const finalId = orderId || existing?.id || `r${Date.now()}`;
+
+  const clientId = document.getElementById('repair-client')?.value || '';
+  const client = db.get('clients', []).find(item => item.id === clientId);
+  const partItems = Array.from(document.querySelectorAll('.repair-part-row')).map(row => {
+    const category = row.querySelector('.repair-part-category')?.value || '';
+    const productSelect = row.querySelector('.repair-part-product');
+    const selectedOption = productSelect?.selectedOptions?.[0] || null;
+    const qty = row.querySelector('.repair-part-qty')?.value || '1';
+
+    return {
+      category,
+      partNumber: productSelect?.value || '',
+      product: selectedOption?.dataset.product || selectedOption?.textContent?.split(' — ')[0] || '',
+      qty,
+      unitPrice: selectedOption?.dataset.price || ''
+    };
+  }).filter(part => part.category || part.partNumber || part.product);
+
+  const timeIn = document.getElementById('repair-time-in')?.value || '';
+  const timeOut = document.getElementById('repair-time-out')?.value || '';
+
+  const photos = REPAIR_PHOTO_LABELS.map((_, index) => {
+    const preview = document.querySelector(`[data-repair-photo-index="${index}"]`);
+    return preview?.getAttribute('src') || existing?.photos?.[index] || '';
+  });
+
+  return {
+    id: finalId,
+    clientId,
+    clientName: client?.name || existing?.clientName || 'Unassigned Client',
+    address: document.getElementById('repair-address')?.value || '',
+    date: document.getElementById('repair-date')?.value || '',
+    time: timeIn,
+    timeIn,
+    timeOut,
+    assignedTo: document.getElementById('repair-tech')?.value || '',
+    status: document.getElementById('repair-status')?.value || 'open',
+    jobType: document.getElementById('repair-type')?.value || '',
+    priority: document.getElementById('repair-priority')?.value || 'Normal',
+    summary: document.getElementById('repair-summary')?.value || '',
+    materials: document.getElementById('repair-materials')?.value || '',
+    partsItems: partItems,
+    partsSummary: buildRepairPartsSummary(partItems),
+    labourHours: document.getElementById('repair-labour')?.value || '',
+    notes: document.getElementById('repair-notes')?.value || '',
+    photos
+  };
+}
+
+function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
+  const order = collectRepairOrderFromForm(orderId);
+  const orders = getRepairOrders();
+  const index = orders.findIndex(item => item.id === order.id);
+
+  if (index >= 0) {
+    orders[index] = order;
+  } else {
+    orders.unshift(order);
+  }
+
+  saveRepairOrders(orders);
+  showToast('Repair work order saved');
+
+  if (shareAfterSave) {
+    shareRepairPDF(order.id);
+    return;
+  }
+
+  router.renderWorkOrders();
+}
+
+
+function getImageDataUrl(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+async function shareRepairPDF(orderId) {
+  const order = getRepairOrders().find(item => item.id === orderId);
+  if (!order || !window.jspdf) {
+    showToast('Unable to generate PDF');
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const filename = `OASIS_Repair_Work_Order_${(order.clientName || 'Client').replace(/[^a-z0-9]/gi, '_')}_${order.date || 'Date'}.pdf`;
+
+  const navy = [13, 43, 69];
+  const gold = [201, 168, 124];
+  const lightBeige = [248, 245, 241];
+
+  let logoData = null;
+  try {
+    logoData = await getImageDataUrl('oasis-logo.png');
+  } catch (e) {
+    console.warn('Logo load failed', e);
+  }
+
+  let y = 0;
+
+  const renderHeader = () => {
+    doc.setFillColor(...navy);
+    doc.rect(0, 0, 210, 25, 'F');
+    doc.setFillColor(...gold);
+    doc.rect(0, 25, 210, 1, 'F');
+
+    if (logoData) {
+      doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
+    }
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('times', 'bold');
+    doc.setFontSize(22);
+    doc.text('O A S I S', 32, 17);
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text('REPAIR WORK ORDER', 195, 14, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(...gold);
+    doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
+
+    return 35;
+  };
+
+  const renderFooter = () => {
+    const footerY = 278;
+    doc.setFillColor(...navy);
+    doc.rect(0, footerY, 210, 20, 'F');
+    doc.setFillColor(...gold);
+    doc.rect(0, footerY, 210, 0.5, 'F');
+
+    if (logoData) {
+      doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
+    }
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(12);
+    doc.setFont('times', 'bold');
+    doc.text('O A S I S', 30, footerY + 12);
+
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(180, 180, 180);
+    doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
+    doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
+  };
+
+  y = renderHeader();
+
+  // Info Grid
+  doc.setFillColor(...lightBeige);
+  doc.rect(10, y, 190, 42, 'F');
+
+  let gridY = y + 7;
+  const col1 = 15;
+  const col2 = 110;
+
+  const addField = (label, value, x, currentY) => {
+    doc.setFontSize(6);
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'bold');
+    doc.text(label.toUpperCase(), x, currentY);
+    doc.setFontSize(9);
+    doc.setTextColor(...navy);
+    doc.setFont('helvetica', 'normal');
+    doc.text(String(value || '—'), x, currentY + 5);
+  };
+
+  addField('Customer', order.clientName, col1, gridY);
+  addField('Date', order.date, col2, gridY);
+  gridY += 12;
+  addField('Address', order.address, col1, gridY);
+  addField('Job Type', order.jobType, col2, gridY);
+  gridY += 12;
+  addField('Assigned Tech', order.assignedTo, col1, gridY);
+  addField('Status / Priority', `${order.status} / ${order.priority}`, col2, gridY);
+  gridY += 12;
+  addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
+  addField('Labour Hours', order.labourHours || '—', col2, gridY);
+
+  y += 50;
+
+  // Work Summary
+  doc.setFillColor(...navy);
+  doc.rect(10, y, 190, 7, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.text('WORK SUMMARY', 15, y + 5);
+  y += 10;
+
+  doc.setTextColor(60, 60, 60);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  const summaryLines = doc.splitTextToSize(order.summary || 'No summary provided.', 180);
+  doc.text(summaryLines, 15, y);
+  y += (summaryLines.length * 5) + 5;
+
+  // Parts Table
+  if (order.partsItems && order.partsItems.length > 0) {
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('PARTS & EQUIPMENT INSTALLED', 15, y + 5);
+    doc.text('QTY', 170, y + 5);
+    y += 7;
+
+    order.partsItems.forEach((item, i) => {
+      if (i % 2 === 0) {
+        doc.setFillColor(248, 248, 248);
+        doc.rect(10, y, 190, 6, 'F');
+      }
+      doc.setTextColor(...navy);
+      doc.text(`${item.category}: ${item.product}` || 'Unknown Part', 15, y + 4.5);
+      doc.text(String(item.qty || 1), 170, y + 4.5);
+      y += 6;
+    });
+    y += 5;
+  }
+
+  // Office Notes
+  if (order.notes) {
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('INTERNAL OFFICE NOTES', 15, y + 5);
+    y += 10;
+    doc.setTextColor(60, 60, 60);
+    const notesLines = doc.splitTextToSize(order.notes, 180);
+    doc.text(notesLines, 15, y);
+    y += (notesLines.length * 5) + 5;
+  }
+
+  // Photos (Compact)
+  const photos = normalizeRepairPhotos(order.photos || []);
+  if (photos.some(p => p)) {
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('REPAIR PHOTOS', 15, y + 5);
+    y += 10;
+
+    const pW = 42;
+    const pH = 32;
+    let pX = 15;
+    photos.forEach((p, i) => {
+      if (p && i < 4) { // Max 4 photos to fit on one page
+        try {
+          doc.addImage(p, 'JPEG', pX, y, pW, pH);
+          doc.setFontSize(6);
+          doc.setTextColor(150, 150, 150);
+          doc.text(REPAIR_PHOTO_LABELS[i], pX, y + pH + 4);
+        } catch(e) {}
+        pX += 48;
+      }
+    });
+  }
+
+  renderFooter();
+  sharePDF(doc, filename);
+}
+
+function toggleAccordion(header) {
+  const body = header.nextElementSibling;
+  const chev = header.querySelector('.wo-chev');
+  if (!body) return;
+
+  const isCollapsed = body.classList.contains('collapsed');
+  if (isCollapsed) {
+    body.classList.remove('collapsed');
+    if (chev) chev.textContent = '▼';
+  } else {
+    body.classList.add('collapsed');
+    if (chev) chev.textContent = '▶';
+  }
+}
+
+function deleteRepairOrder(orderId) {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can delete work orders');
+    return;
+  }
+  if (!confirm('Delete this repair work order?')) return;
+  saveRepairOrders(getRepairOrders().filter(order => order.id !== orderId));
+  showToast('Repair work order deleted');
+  router.renderWorkOrders();
+}
+
+function deleteWorkOrder(orderId) {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can delete chem sheets');
+    return;
+  }
+  if (!confirm('Delete this chem sheet?')) return;
+  const orders = db.get('workorders', []).filter(o => o.id !== orderId);
+  db.set('workorders', orders);
+  showToast('Chem sheet deleted');
+  router.renderWorkOrders();
 }
 
 // ==========================================
@@ -1301,6 +2837,7 @@ function renderChemDosingSummary(order) {
 }
 
 const CHEM_PHOTO_LABELS = ['Before', 'After', 'Photo 1', 'Photo 2', 'Photo 3', 'Photo 4', 'Photo 5'];
+const REPAIR_PHOTO_LABELS = ['Before', 'After', 'Equipment', 'Part', 'Repair Area', 'Photo 5', 'Photo 6'];
 
 function normalizeChemPhotos(photos = []) {
   const source = Array.isArray(photos) ? photos : [];
@@ -1554,39 +3091,6 @@ async function shareFile(base64Data, filename, contentType = 'application/octet-
     link.click();
     document.body.removeChild(link);
     showToast('Report downloaded to device');
-  }
-}
-
-async function shareAppLink() {
-  const shareUrl = 'https://millzy7665-beep.github.io/oasis-service/';
-  try {
-    if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.Share) {
-      await Capacitor.Plugins.Share.share({
-        title: 'OASIS Service App',
-        text: 'Access the OASIS Service & Repair App',
-        url: shareUrl,
-        dialogTitle: 'Share App Link'
-      });
-    } else {
-      copyShareLink();
-    }
-  } catch (err) {
-    console.error('Sharing failed:', err);
-    copyShareLink();
-  }
-}
-
-function copyShareLink() {
-  const urlInput = document.getElementById('share-url-input');
-  if (urlInput) {
-    urlInput.select();
-    urlInput.setSelectionRange(0, 99999);
-    navigator.clipboard.writeText(urlInput.value).then(() => {
-      showToast('App link copied to clipboard');
-    }).catch(err => {
-      console.error('Copy failed:', err);
-      showToast('Manual copy required');
-    });
   }
 }
 
@@ -1873,8 +3377,6 @@ function attachRepairFormListeners() {
   updateRepairTimeSpentHint();
 }
 
-const REPAIR_PHOTO_LABELS = ['Before', 'After', 'Equipment', 'Part', 'Repair Area', 'Photo 5', 'Photo 6'];
-
 function normalizeRepairPhotos(photos = []) {
   const source = Array.isArray(photos) ? photos : [];
   return REPAIR_PHOTO_LABELS.map((_, index) => source[index] || '');
@@ -2013,16 +3515,870 @@ function removeRepairPhoto(orderId, slotIndex) {
   showToast('Repair photo removed');
 }
 
+function bulkImportClients() {
+  const data = prompt("Paste clients JSON here (Array of objects with name and address)");
+  if (!data) return;
+  try {
+    const newClients = JSON.parse(data);
+    if (!Array.isArray(newClients)) {
+      alert("Invalid format. Expected an array.");
+      return;
+    }
+    const clients = db.get('clients', []);
+    newClients.forEach(c => {
+      clients.unshift({
+        id: `c${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        name: c.name || 'New Client',
+        address: c.address || '',
+        contact: c.contact || ''
+      });
+    });
+    db.set('clients', clients);
+    showToast(`${newClients.length} clients imported`);
+    router.renderClients();
+  } catch (e) {
+    alert("Error parsing JSON: " + e.message);
+  }
+}
+
+function cleanupTestClients() {
+  const testIds = ['c101', 'c102', 'c103', 'c104'];
+  const clients = db.get('clients', []);
+  const filtered = clients.filter(c => !testIds.includes(c.id));
+  if (filtered.length !== clients.length) {
+    db.set('clients', filtered);
+  }
+}
+
+async function exportCompletedToExcel() {
+  const allWorkorders = db.get('workorders', []);
+  const completed = allWorkorders.filter(wo => wo.status === 'completed');
+
+  if (completed.length === 0) {
+    showToast('No completed work orders to export');
+    return;
+  }
+
+  showToast('Generating Excel report...');
+
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet('OASIS Service Records');
+
+    const chemKeys = [
+      { key: 'tabs', label: 'Tabs' },
+      { key: 'shock', label: 'Shock/Oxidizer' },
+      { key: 'muriaticAcid', label: 'Muriatic Acid' },
+      { key: 'sodaAsh', label: 'Soda Ash' },
+      { key: 'sodiumBicarb', label: 'Sodium Bicarb' },
+      { key: 'calcium', label: 'Calcium Increaser' },
+      { key: 'stabilizer', label: 'Stabilizer' },
+      { key: 'salt', label: 'Salt' },
+      { key: 'phosphateRemover', label: 'Phosphate Remover' },
+      { key: 'algaecide', label: 'Algaecide' }
+    ];
+
+    // Define Columns
+    const columns = [
+      { header: 'Date', key: 'date', width: 12 },
+      { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 },
+      { header: 'Technician', key: 'tech', width: 15 },
+      { header: 'Time In', key: 'timeIn', width: 10 },
+      { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Pool Chlorine', key: 'pCl', width: 12 },
+      { header: 'Pool pH', key: 'pph', width: 10 },
+      { header: 'Pool Alk', key: 'palk', width: 10 }
+    ];
+
+    // Add columns for each pool chemical
+    chemKeys.forEach(ck => {
+      columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
+    });
+
+    columns.push(
+      { header: 'Spa Chlorine', key: 'sCl', width: 12 },
+      { header: 'Spa pH', key: 'sph', width: 10 },
+      { header: 'Spa Alk', key: 'salk', width: 10 }
+    );
+
+    // Add columns for each spa chemical
+    chemKeys.forEach(ck => {
+      columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
+    });
+
+    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+
+    ws.columns = columns;
+
+    // Style Header
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+
+    completed.forEach(wo => {
+      const rowData = {
+        date: wo.date,
+        client: wo.clientName,
+        address: wo.address,
+        tech: wo.technician,
+        timeIn: wo.timeIn || wo.time || '',
+        timeOut: wo.timeOut || '',
+        pCl: wo.readings?.pool?.chlorine || '',
+        pph: wo.readings?.pool?.ph || '',
+        palk: wo.readings?.pool?.alkalinity || '',
+        sCl: wo.readings?.spa?.chlorine || '',
+        sph: wo.readings?.spa?.ph || '',
+        salk: wo.readings?.spa?.alkalinity || '',
+        notes: (wo.workPerformed || '') + ' ' + (wo.followUpNotes || wo.notes || '')
+      };
+
+      // Populate pool chemical values
+      chemKeys.forEach(ck => {
+        rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || '';
+      });
+
+      // Populate spa chemical values
+      chemKeys.forEach(ck => {
+        rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || '';
+      });
+
+      ws.addRow(rowData);
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    // Robust binary to base64 conversion
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+    const filename = `OASIS_Service_Records_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast('Excel export ready');
+  } catch (error) {
+    console.error('Excel export failed:', error);
+    showToast('Excel export failed');
+  }
+}
+
+function openMap(address) {
+  if (!address) return;
+  let query = address;
+  if (!query.toLowerCase().includes('grand cayman')) {
+    query += ', Grand Cayman';
+  }
+  const encodedAddress = encodeURIComponent(query);
+  const url = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+  window.open(url, '_blank');
+}
+
+function saveClientDetails(clientId) {
+  const name = document.getElementById('edit-client-name').value;
+  const address = document.getElementById('edit-client-address').value;
+  const contact = document.getElementById('edit-client-contact').value;
+  const tech = document.getElementById('edit-client-tech').value;
+
+  if (!name) {
+    alert('Name is required');
+    return;
+  }
+
+  const clients = db.get('clients', []);
+  const index = clients.findIndex(c => c.id === clientId);
+  if (index >= 0) {
+    clients[index] = { ...clients[index], name, address, contact, technician: tech };
+    db.set('clients', clients);
+
+    // Also update any matching workorders
+    const workorders = db.get('workorders', []);
+    workorders.forEach(wo => {
+      if (wo.clientId === clientId) {
+        wo.clientName = name;
+        wo.address = address;
+        wo.technician = tech;
+      }
+    });
+    db.set('workorders', workorders);
+
+    showToast('Client profile updated');
+    router.renderClients();
+  }
+}
+
+async function shareClientDetails(clientId) {
+  const clients = db.get('clients', []);
+  const client = clients.find(c => c.id === clientId);
+  if (!client) return;
+
+  const text = `Client: ${client.name}\nAddress: ${client.address}\nContact: ${client.contact || 'None'}\nTech: ${client.technician || 'None'}`;
+
+  try {
+    if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.Share) {
+      await Capacitor.Plugins.Share.share({
+        title: `Client Profile: ${client.name}`,
+        text: text,
+        dialogTitle: 'Share Client Details'
+      });
+    } else {
+      await navigator.clipboard.writeText(text);
+      showToast('Client details copied to clipboard');
+    }
+  } catch (err) {
+    console.error('Sharing failed:', err);
+    showToast('Manual copy required');
+  }
+}
+
+function initMasterSchedule() {
+  if (db.get('masterScheduleLoaded')) return;
+
+  const clients = [
+    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem" },
+    { name: "Jeey Bomford", address: "49 Mary Read Crescent", tech: "Kadeem" },
+    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem" },
+    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem" },
+    { name: "Gcpsl Sea View", address: "South Church Street", tech: "Kadeem" },
+    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem" },
+    { name: "Sunrise Phase 3", address: "Old Crewe Rd", tech: "Kadeem" },
+    { name: "Vivi Townhomes", address: "275 Fairbanks Rd", tech: "Kadeem" },
+    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin" },
+    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin" },
+    { name: "Caribbean Courts", address: "Bcqs, South Sound", tech: "Elvin" },
+    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin" },
+    { name: "Fin South Church Street", address: "Fin Strata", tech: "Elvin" },
+    { name: "Lakeland Villas #1", address: "Old Crewe Rd", tech: "Elvin" },
+    { name: "Point Of View", address: "South Sound", tech: "Elvin" },
+    { name: "South Palms #1", address: "Glen Eden Rd", tech: "Elvin" },
+    { name: "Southern Skies", address: "South Sound", tech: "Elvin" },
+    { name: "Correy Williams", address: "16 Cypress Point", tech: "Jermaine" },
+    { name: "Andy Albray", address: "17 The Deck House", tech: "Jermaine" },
+    { name: "Joanne Akdeniz", address: "42 Hoya Quay", tech: "Jermaine" },
+    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine" },
+    { name: "Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine" },
+    { name: "Mike Stroh", address: "64 Waterford Quay", tech: "Jermaine" },
+    { name: "Tim Bradley", address: "66 Baquarat Quay", tech: "Jermaine" },
+    { name: "Plum Mandalay", address: "Seven Mile", tech: "Jermaine" },
+    { name: "Ocean Pointe Villas", address: "West Bay", tech: "Jermaine" },
+    { name: "Snug Harbour Villas", address: "Snug Harbour", tech: "Jermaine" },
+    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace" },
+    { name: "John Ferarri", address: "30 Orchid Drive", tech: "Ace" },
+    { name: "Gary Gibbs", address: "306 Yacht Club dr", tech: "Ace" },
+    { name: "Andrew Muir", address: "318 Yacht Drive", tech: "Ace" },
+    { name: "Scott Somerville", address: "40 Orchid Drive", tech: "Ace" },
+    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace" },
+    { name: "Vlad Aldea", address: "474 Yacht Club Dr", tech: "Ace" },
+    { name: "Abraham Burak", address: "Salt Creek", tech: "Ace" },
+    { name: "Sunset Point Condos", address: "North West Point Rd", tech: "Ace" },
+    { name: "Villa Mare", address: "Vista Del Mar", tech: "Ace" },
+    { name: "Jenny Frizzle", address: "302 Windswept Drive", tech: "Donald" },
+    { name: "Anthoney Reid", address: "88 Mallard Drive", tech: "Donald" },
+    { name: "Coral Bay Village", address: "Shamrock Rd", tech: "Donald" },
+    { name: "Harbor Walk", address: "Grand Harbour", tech: "Donald" },
+    { name: "Indigo Bay", address: "Shamrock Rd", tech: "Donald" },
+    { name: "Periwinkle", address: "Edgewater Way", tech: "Donald" },
+    { name: "Savannah Grand", address: "Savannah", tech: "Donald" },
+    { name: "South Shore", address: "Shamrock Rd", tech: "Donald" },
+    { name: "The Palms At Patricks", address: "Patricks Island", tech: "Donald" },
+    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley" },
+    { name: "One Canal Point", address: "Canal Point", tech: "Kingsley" },
+    { name: "Poinsettia", address: "Seven Mile Beach", tech: "Kingsley" },
+    { name: "The Beachcomber", address: "Seven Mile Beach", tech: "Kingsley" },
+    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel" },
+    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel" },
+    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel" },
+    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel" },
+    { name: "Plymouth", address: "Canal Point Dr", tech: "Ariel" },
+    { name: "Glen Kennedy", address: "Salt Creek", tech: "Ariel" },
+    { name: "Mark Vandevelde", address: "Salt Creek", tech: "Ariel" },
+    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel" },
+    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik" },
+    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik" },
+    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik" },
+    { name: "Jason Butcher", address: "44 Grand Estates", tech: "Malik" },
+    { name: "Julie O'Hara", address: "56 Grand Estates", tech: "Malik" },
+    { name: "Mike Gibbs", address: "78 Grand Estates", tech: "Malik" },
+    { name: "Grapetree Condos", address: "Seven Mile Beach", tech: "Malik" },
+    { name: "The Colonial Club", address: "Seven Mile Beach", tech: "Malik" },
+    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem" },
+    { name: "Caribbean Paradise", address: "South Sound", tech: "Kadeem" },
+    { name: "L'Ambience", address: "Fairbanks Rd", tech: "Kadeem" },
+    { name: "Mystic Retreat", address: "John Greer Boulavard", tech: "Kadeem" },
+    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin" },
+    { name: "South Bay Estates", address: "Bel Air Dr", tech: "Elvin" },
+    { name: "Andy Marcher", address: "234 Drake Quay", tech: "Jermaine" },
+    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine" },
+    { name: "Dolce Vita", address: "Govenors Harbour", tech: "Jermaine" },
+    { name: "Amber Stewart", address: "Dolce Vita 4", tech: "Jermaine" },
+    { name: "Pleasant View", address: "West Bay", tech: "Jermaine" },
+    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace" },
+    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace" },
+    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace" },
+    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace" },
+    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace" },
+    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace" },
+    { name: "Charles Ebanks", address: "Bonnieview Av", tech: "Donald" },
+    { name: "One Canal Point Gym", address: "Canal Point", tech: "Kingsley" },
+    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik" },
+    { name: "Moon Bay", address: "Shamrock Rd", tech: "Malik" },
+    { name: "Cayman Coves", address: "South Church Street", tech: "Kadeem" },
+    { name: "Venetia", address: "South Sound", tech: "Kadeem" },
+    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin" },
+    { name: "Tim Dailyey", address: "North Webster Dr", tech: "Elvin" },
+    { name: "Nicholas Lynn", address: "Sandlewood Crescent", tech: "Elvin" },
+    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin" },
+    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin" },
+    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin" },
+    { name: "Riyaz Norrudin", address: "63 Langton Way", tech: "Elvin" },
+    { name: "Mangrove", address: "Bcqs", tech: "Elvin" },
+    { name: "Quentin Creegan", address: "Villa Aramone", tech: "Elvin" },
+    { name: "Jodie O'Mahony", address: "12 El Nathan", tech: "Jermaine" },
+    { name: "Charles Motsinger", address: "124 Hillard", tech: "Jermaine" },
+    { name: "Steve Daker", address: "33 Spurgeon Cr", tech: "Jermaine" },
+    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine" },
+    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine" },
+    { name: "Albert Schimdberger", address: "55 Elnathan Rd", tech: "Jermaine" },
+    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine" },
+    { name: "Blair Ebanks", address: "71 Spurgeon Crescent", tech: "Jermaine" },
+    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine" },
+    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine" },
+    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace" },
+    { name: "Mitchell Demeter", address: "19 Whirlaway Close", tech: "Ace" },
+    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace" },
+    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace" },
+    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace" },
+    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace" },
+    { name: "Coastal Escape", address: "Omega Bay", tech: "Ace" },
+    { name: "Inity Ridge", address: "Prospect Point Rd", tech: "Ace" },
+    { name: "Ocean Reach", address: "Old Crewe Rd", tech: "Ace" },
+    { name: "Scott Somerville", address: "Rum Point Rd", tech: "Donald" },
+    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald" },
+    { name: "67 On The Bay", address: "Queens Highway", tech: "Donald" },
+    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald" },
+    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald" },
+    { name: "Paradise Sur Mar", address: "Sand Cay Rd", tech: "Donald" },
+    { name: "Rip Kai", address: "Rum Point Drive", tech: "Donald" },
+    { name: "Sunrays", address: "Sand Cay Rd", tech: "Donald" },
+    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley" },
+    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley" },
+    { name: "Regant Court", address: "Brittania", tech: "Kingsley" },
+    { name: "Solara Main", address: "Crystal Harbour", tech: "Kingsley" },
+    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel" },
+    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel" },
+    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel" },
+    { name: "Chad Horwitz", address: "49 Calico Quay", tech: "Ariel" },
+    { name: "Malcom Swift", address: "Miramar", tech: "Ariel" },
+    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel" },
+    { name: "Strata #70", address: "Boggy Sands rd", tech: "Ariel" },
+    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik" },
+    { name: "Debbie Ebanks", address: "Fischers Reef", tech: "Malik" },
+    { name: "John Corallo", address: "3A Seahven", tech: "Malik" },
+    { name: "Encompass", address: "3B Seahven", tech: "Malik" },
+    { name: "Joseph Hurlston", address: "42 Monumnet Rd", tech: "Malik" },
+    { name: "George McKenzie", address: "534 Rum Point Dr", tech: "Malik" },
+    { name: "Twin Palms", address: "Rum Point Dr", tech: "Malik" },
+    { name: "Bernie Bako", address: "#4 Venetia", tech: "Kadeem" },
+    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem" },
+    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem" },
+    { name: "Park View Courts", address: "Spruce Lane", tech: "Kadeem" },
+    { name: "The Bentley", address: "Crewe rd", tech: "Kadeem" },
+    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin" },
+    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin" },
+    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin" },
+    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin" },
+    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin" },
+    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin" },
+    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin" },
+    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin" },
+    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin" },
+    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine" },
+    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine" },
+    { name: "Nigel Daily", address: "Snug Harbour", tech: "Jermaine" },
+    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine" },
+    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine" },
+    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine" },
+    { name: "Shoreway Townhomes", address: "Adonis Dr", tech: "Jermaine" },
+    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine" },
+    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine" },
+    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace" },
+    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace" },
+    { name: "Clive Harris", address: "516 Crighton Drive", tech: "Ace" },
+    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace" },
+    { name: "Ross Fortune", address: "90 Prince Charles", tech: "Ace" },
+    { name: "Simon Palmer", address: "Olivias Cove", tech: "Ace" },
+    { name: "Caroline Moran", address: "197 Bimini Dr", tech: "Donald" },
+    { name: "James Reeve", address: "215 Bimini Dr", tech: "Donald" },
+    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald" },
+    { name: "Sina Mirzale", address: "353 Bimini Dr", tech: "Donald" },
+    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald" },
+    { name: "Marlon Bispath", address: "519 Bimini Dr", tech: "Donald" },
+    { name: "Margaret Fantasia", address: "526 Bimini Dr", tech: "Donald" },
+    { name: "Kenny Rankin", address: "Grand Harbour", tech: "Donald" },
+    { name: "James Mendes", address: "106 Olea", tech: "Ariel" },
+    { name: "James O'Brien", address: "102 Olea", tech: "Ariel" },
+    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel" },
+    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel" },
+    { name: "Mr Holland", address: "107 Olea", tech: "Ariel" },
+    { name: "Nikki Harris", address: "213 olea", tech: "Ariel" },
+    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel" },
+    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel" },
+    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik" },
+    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik" },
+    { name: "Iman Shafiei", address: "53 Baquarat Quay", tech: "Malik" },
+    { name: "Enrique Tasende", address: "65 Baccarat Quay", tech: "Malik" },
+    { name: "David Wilson", address: "Boggy Sands", tech: "Malik" },
+    { name: "Nina Irani", address: "Casa Oasis", tech: "Malik" },
+    { name: "Sandy Lane Townhomes", address: "Boggy Sands Rd", tech: "Malik" },
+    { name: "Valencia Heights", address: "Strata #536", tech: "Kadeem" },
+    { name: "Jaime-Lee Eccles", address: "176 Conch Dr", tech: "Kadeem" },
+    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem" },
+    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem" },
+    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem" },
+    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem" },
+    { name: "Hilton Estates", address: "Fairbanks Rd", tech: "Kadeem" },
+    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin" },
+    { name: "Britni Strong", address: "150 Parkway Dr", tech: "Elvin" },
+    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin" },
+    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd", tech: "Elvin" },
+    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin" },
+    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin" },
+    { name: "Saphire", address: "Jec, Nwp Rd", tech: "Elvin" },
+    { name: "The Sands", address: "Boggy Sand Rd", tech: "Elvin" },
+    { name: "Turtle Breeze", address: "Conch Point Rd", tech: "Elvin" },
+    { name: "Francois Du Toit", address: "Snug Harbour", tech: "Jermaine" },
+    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine" },
+    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine" },
+    { name: "Johann Prinslo", address: "270 Jennifer Dr", tech: "Jermaine" },
+    { name: "Andre Slabbert", address: "7 Victoria Dr", tech: "Jermaine" },
+    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine" },
+    { name: "Palm Heights Residence", address: "Seven Mile Beach", tech: "Jermaine" },
+    { name: "Jean Mean", address: "211 Sea Spray Dr", tech: "Ace" },
+    { name: "Paul Rowan", address: "265 Sea Spray Dr", tech: "Ace" },
+    { name: "Charmaine Richter", address: "40 Natures Circle", tech: "Ace" },
+    { name: "Rory Andrews", address: "44 Country Road", tech: "Ace" },
+    { name: "Walker Romanica", address: "79 Riley Circle", tech: "Ace" },
+    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace" },
+    { name: "Grand Palmyra", address: "Seven Mile Beach", tech: "Ace" },
+    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace" },
+    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald" },
+    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald" },
+    { name: "Reg Williams", address: "Cliff House", tech: "Donald" },
+    { name: "Gypsy", address: "1514 Rum Point Dr", tech: "Donald" },
+    { name: "Kai Vista", address: "Rum Point Dr", tech: "Donald" },
+    { name: "Ocean Vista", address: "Rum Point", tech: "Donald" },
+    { name: "Stefan Marenzi", address: "Water Cay Rd", tech: "Donald" },
+    { name: "Bella Rocca", address: "Queens Highway", tech: "Donald" },
+    { name: "Sea 2 Inity", address: "Kiabo", tech: "Donald" },
+    { name: "Guy Manning", address: "Diamonds Edge", tech: "Kingsley" },
+    { name: "Kent Nickerson", address: "Salt Creek", tech: "Kingsley" },
+    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel" },
+    { name: "Suzanne Correy", address: "394 Canal Point Rd", tech: "Ariel" },
+    { name: "November Capitol", address: "One Canal Point", tech: "Ariel" },
+    { name: "Safe Harbor", address: "West Bay", tech: "Ariel" },
+    { name: "Bert Thacker", address: "West Bay", tech: "Ariel" },
+    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik" },
+    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik" },
+    { name: "Philip Smyres", address: "Conch Point Villas", tech: "Malik" },
+    { name: "Brandon Caruana", address: "Conch Point Villas", tech: "Malik" },
+    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik" },
+    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik" },
+    { name: "Phillip Cadien", address: "312 Cypres Point", tech: "Malik" }
+  ];
+
+  // Map to store unique clients by name
+  const uniqueClients = {};
+  clients.forEach(c => {
+    if (!uniqueClients[c.name]) {
+      uniqueClients[c.name] = {
+        id: `c_${Math.random().toString(36).substr(2, 9)}`,
+        name: c.name,
+        address: c.address,
+        technician: c.tech
+      };
+    }
+  });
+
+  const clientArray = Object.values(uniqueClients);
+  db.set('clients', clientArray);
+
+  // Generate pending workorders for each client assigned to their tech
+  const workorders = clientArray.map(c => ({
+    id: `wo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    clientId: c.id,
+    clientName: c.name,
+    address: c.address,
+    technician: c.technician,
+    date: new Date().toISOString().split('T')[0],
+    status: 'pending',
+    readings: { pool: defaultChemReadings(), spa: defaultChemReadings() },
+    chemicalsAdded: { pool: defaultChemicalAdditions(), spa: defaultChemicalAdditions() },
+    photos: []
+  }));
+
+  db.set('workorders', workorders);
+  db.set('masterScheduleLoaded', true);
+}
+
+function populateLoginTechOptions() {
+  const select = document.getElementById('login-tech');
+  if (!select) return;
+
+  const entries = Object.entries(auth.users)
+    .sort((a, b) => a[1].name.localeCompare(b[1].name));
+
+  select.innerHTML = `
+    <option value="" disabled selected>— Select your name —</option>
+    ${entries.map(([id, user]) => `
+      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
+    `).join('')}
+  `;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Always force login screen on startup
+  auth.logout();
+
+  cleanupTestClients();
+  initMasterSchedule();
+  migrateLegacyRepairData();
+  populateLoginTechOptions();
+
+  // Android Back Button Handling
+  if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
+    Capacitor.Plugins.App.addListener('backButton', () => {
+      if (router.currentView === 'dashboard') {
+        // Stop at home page, don't exit if logged in (though we force login above)
+        return;
+      }
+
+      if (!auth.isLoggedIn()) {
+        // If at login screen, maybe let it exit or do nothing
+        return;
+      }
+
+      router.goBack();
+    });
+  }
+
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      router.navigate(btn.dataset.view);
+    });
+  });
+
+  document.getElementById('login-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const select = document.getElementById('login-tech');
+    const pinInput = document.getElementById('login-pin');
+    const username = select ? select.value : '';
+    const pin = pinInput ? pinInput.value : '';
+    const loginScreen = document.getElementById('login-screen');
+    const appShell = document.getElementById('app');
+    const loginError = document.getElementById('login-error');
+
+    console.log('Attempting login for:', username);
+
+    if (auth.login(username, pin)) {
+      console.log('Login successful');
+      const loginScreen = document.getElementById('login-screen');
+      const appShell = document.getElementById('app');
+
+      if (loginScreen) {
+        loginScreen.style.setProperty('display', 'none', 'important');
+      }
+      if (appShell) {
+        appShell.classList.remove('hidden');
+        appShell.style.setProperty('display', 'flex', 'important');
+      }
+      if (loginError) loginError.style.display = 'none';
+
+      // Immediate navigation
+      try {
+        router.navigate('dashboard');
+      } catch (err) {
+        console.error('Navigation error:', err);
+        location.reload();
+      }
+    } else {
+      console.warn('Login failed: invalid username or PIN');
+      if (loginError) loginError.style.display = 'block';
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (e.target.classList.contains('modal-overlay')) {
+      modal.hide();
+    }
+  });
+});
+
+function signOut() {
+  auth.logout();
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('app').style.display = 'none';
+  const loginScreen = document.getElementById('login-screen');
+  loginScreen.classList.remove('hidden');
+  loginScreen.style.display = 'flex';
+  router.navigate('dashboard');
+}
+
+function quickAddClient() {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can add clients');
+    return;
+  }
+  const name = prompt('Client name');
+  if (!name) return;
+
+  const address = prompt('Client address') || '';
+  const contact = prompt('Contact name') || '';
+  const clients = db.get('clients', []);
+
+  clients.unshift({
+    id: `c${Date.now()}`,
+    name,
+    address,
+    contact
+  });
+
+  db.set('clients', clients);
+  showToast('Client added');
+  router.renderClients();
+}
+
+function deleteClient(clientId) {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can delete clients');
+    return;
+  }
+  if (!confirm('Delete this client and related service records?')) return;
+
+  db.set('clients', db.get('clients', []).filter(client => client.id !== clientId));
+  db.set('workorders', db.get('workorders', []).filter(order => order.clientId !== clientId));
+  db.set('repairOrders', getRepairOrders().filter(order => order.clientId !== clientId));
+
+  showToast('Client removed');
+  router.renderClients();
+}
+
+function onChemClientChange() {
+  const select = document.getElementById('wo-client');
+  const addressField = document.getElementById('wo-address');
+  const title = document.getElementById('wo-client-name');
+  if (!select) return;
+
+  const client = db.get('clients', []).find(item => item.id === select.value);
+  if (client) {
+    if (addressField) addressField.value = client.address || '';
+    if (title) title.textContent = client.name || 'Chem Sheet';
+  }
+}
+
+function updateChemGuidancePreview(orderId) {
+  const preview = document.getElementById('chem-guidance-preview');
+  if (!preview) return;
+
+  const order = collectWorkOrderForm(orderId);
+  if (order) {
+    preview.innerHTML = renderChemDosingSummary(order);
+  }
+}
+
+function updateTimeSpentHint() {
+  const hint = document.getElementById('wo-time-spent-hint');
+  const timeIn = document.getElementById('wo-time-in')?.value || '';
+  const timeOut = document.getElementById('wo-time-out')?.value || '';
+  if (!hint) return;
+
+  const spent = calculateTimeSpent(timeIn, timeOut);
+  hint.textContent = `Time on site: ${spent || 'Enter both times to calculate duration.'}`;
+}
+
+function attachChemFieldListeners(orderId) {
+  const form = document.querySelector('.wo-form');
+  if (!form) return;
+
+  form.querySelectorAll('input, select, textarea').forEach(field => {
+    if (field.id && (field.id.startsWith('pool-') || field.id.startsWith('spa-'))) {
+      field.addEventListener('input', () => updateChemGuidancePreview(orderId));
+      field.addEventListener('change', () => updateChemGuidancePreview(orderId));
+    }
+
+    if (field.id === 'wo-time-in' || field.id === 'wo-time-out') {
+      field.addEventListener('input', updateTimeSpentHint);
+      field.addEventListener('change', updateTimeSpentHint);
+    }
+  });
+
+  updateTimeSpentHint();
+}
+
+function collectWorkOrderForm(orderId) {
+  const order = workOrderManager.getOrder(orderId);
+  if (!order) return null;
+
+  const dateInput = document.getElementById('wo-date');
+  if (!dateInput) {
+    return order;
+  }
+
+  const getValue = (id, fallback = '') => {
+    const field = document.getElementById(id);
+    return field ? field.value : fallback;
+  };
+
+  const existingPool = { ...defaultChemReadings(), ...(order.readings?.pool || {}) };
+  const existingSpa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
+  const existingChemicalsAdded = order.chemicalsAdded || {};
+  const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
+  const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
+  const selectedClientId = getValue('wo-client', order.clientId || '');
+  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
+  const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
+
+  const updatedOrder = {
+    ...order,
+    clientId: selectedClientId || order.clientId,
+    clientName: selectedClient?.name || order.clientName,
+    technician: getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || ''),
+    date: getValue('wo-date', order.date),
+    time: getValue('wo-time-in', order.timeIn || order.time || ''),
+    timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
+    timeOut: getValue('wo-time-out', order.timeOut || ''),
+    status: getValue('wo-status', order.status || 'pending'),
+    address: selectedClient?.address || getValue('wo-address', order.address),
+    workPerformed: getValue('wo-work', order.workPerformed || ''),
+    followUpNotes,
+    notes: followUpNotes,
+    photos: normalizeChemPhotos(order.photos), // Ensure photos are preserved from the original order
+    readings: {
+      ...order.readings,
+      pool: {
+        ...existingPool,
+        ph: getValue('pool-ph', existingPool.ph || ''),
+        chlorine: getValue('pool-chlorine', existingPool.chlorine || ''),
+        alkalinity: getValue('pool-alkalinity', existingPool.alkalinity || ''),
+        calcium: getValue('pool-calcium', existingPool.calcium || ''),
+        cya: getValue('pool-cya', existingPool.cya || ''),
+        salt: getValue('pool-salt', existingPool.salt || ''),
+        temp: getValue('pool-temp', existingPool.temp || ''),
+        tds: getValue('pool-tds', existingPool.tds || ''),
+        phosphates: getValue('pool-phosphates', existingPool.phosphates || ''),
+        borates: getValue('pool-borates', existingPool.borates || '')
+      },
+      spa: {
+        ...existingSpa,
+        ph: getValue('spa-ph', existingSpa.ph || ''),
+        chlorine: getValue('spa-chlorine', existingSpa.chlorine || ''),
+        alkalinity: getValue('spa-alkalinity', existingSpa.alkalinity || ''),
+        calcium: getValue('spa-calcium', existingSpa.calcium || ''),
+        cya: getValue('spa-cya', existingSpa.cya || ''),
+        salt: getValue('spa-salt', existingSpa.salt || ''),
+        temp: getValue('spa-temp', existingSpa.temp || ''),
+        tds: getValue('spa-tds', existingSpa.tds || ''),
+        phosphates: getValue('spa-phosphates', existingSpa.phosphates || ''),
+        borates: getValue('spa-borates', existingSpa.borates || '')
+      }
+    },
+    chemicalsAdded: {
+      pool: {
+        ...existingPoolAdded,
+        tabs: getValue('pool-add-tabs', existingPoolAdded.tabs || ''),
+        shock: getValue('pool-add-shock', existingPoolAdded.shock || ''),
+        muriaticAcid: getValue('pool-add-muriaticAcid', existingPoolAdded.muriaticAcid || ''),
+        sodaAsh: getValue('pool-add-sodaAsh', existingPoolAdded.sodaAsh || ''),
+        sodiumBicarb: getValue('pool-add-sodiumBicarb', existingPoolAdded.sodiumBicarb || ''),
+        calcium: getValue('pool-add-calcium', existingPoolAdded.calcium || ''),
+        stabilizer: getValue('pool-add-stabilizer', existingPoolAdded.stabilizer || ''),
+        salt: getValue('pool-add-salt', existingPoolAdded.salt || ''),
+        phosphateRemover: getValue('pool-add-phosphateRemover', existingPoolAdded.phosphateRemover || ''),
+        algaecide: getValue('pool-add-algaecide', existingPoolAdded.algaecide || ''),
+        other: getValue('pool-add-other', existingPoolAdded.other || '')
+      },
+      spa: {
+        ...existingSpaAdded,
+        tabs: getValue('spa-add-tabs', existingSpaAdded.tabs || ''),
+        shock: getValue('spa-add-shock', existingSpaAdded.shock || ''),
+        muriaticAcid: getValue('spa-add-muriaticAcid', existingSpaAdded.muriaticAcid || ''),
+        sodaAsh: getValue('spa-add-sodaAsh', existingSpaAdded.sodaAsh || ''),
+        sodiumBicarb: getValue('spa-add-sodiumBicarb', existingSpaAdded.sodiumBicarb || ''),
+        calcium: getValue('spa-add-calcium', existingSpaAdded.calcium || ''),
+        stabilizer: getValue('spa-add-stabilizer', existingSpaAdded.stabilizer || ''),
+        salt: getValue('spa-add-salt', existingSpaAdded.salt || ''),
+        phosphateRemover: getValue('spa-add-phosphateRemover', existingSpaAdded.phosphateRemover || ''),
+        algaecide: getValue('spa-add-algaecide', existingSpaAdded.algaecide || ''),
+        other: getValue('spa-add-other', existingSpaAdded.other || '')
+      }
+    }
+  };
+
+  updatedOrder.lsi = {
+    pool: calculateLSI(updatedOrder.readings.pool),
+    spa: calculateLSI(updatedOrder.readings.spa)
+  };
+
+  const sourceReadings = Object.values(updatedOrder.readings.pool).some(value => value !== '' && value !== null && value !== undefined)
+    ? updatedOrder.readings.pool
+    : updatedOrder.readings.spa;
+  updatedOrder.chemicals = workOrderManager.calculateDosing(sourceReadings);
+
+  return updatedOrder;
+}
+
+function saveWorkOrderForm(orderId) {
+  const order = collectWorkOrderForm(orderId);
+  if (!order) {
+    showToast('Work order not found');
+    return;
+  }
+
+  workOrderManager.saveOrder(order);
+  router.navigate('workorders');
+  showToast('Chem sheet saved');
+}
+
+function shareReport(orderId) {
+  const order = collectWorkOrderForm(orderId);
+  if (!order) {
+    showToast('Work order not found');
+    return;
+  }
+
+  workOrderManager.saveOrder(order);
+  workOrderManager.generateReport(order);
+}
+
+function sendReport(orderId) {
+  shareReport(orderId);
+}
+
+function getRepairOrders() {
+  return db.get('repairOrders', []);
+}
+
+function saveRepairOrders(orders) {
+  db.set('repairOrders', orders);
+}
+
 function renderRepairOrdersList() {
-  const orders = getRepairOrders();
+  const allOrders = getRepairOrders();
+  const currentUser = auth.getCurrentUser();
   const isAdmin = auth.isAdmin();
+  const canShare = auth.canShare();
+
+  // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
+  const orders = (currentUser && currentUser.username === 'admin')
+    ? allOrders
+    : allOrders.filter(o => o.assignedTo === currentUser.name);
 
   if (!orders.length) {
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
         <div class="empty-title">No repair work orders</div>
-        <div class="empty-subtitle">Create one to manage service repairs in the same app</div>
+        <div class="empty-subtitle">${isAdmin ? 'No repair orders found' : 'Create one to manage service repairs in the same app'}</div>
       </div>
     `;
   }
@@ -2046,8 +4402,8 @@ function renderRepairOrdersList() {
       </div>
       <div class="job-card-footer">
         <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">Open</button>
-        <button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>
-        ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
+        ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
+        ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
       </div>
     </div>
   `).join('');
@@ -2199,7 +4555,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
       <div class="card" style="margin:12px;">
         <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
           <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save Changes</button>
-          <button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true)">Share Report</button>
+          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true)">Share Report</button>` : ''}
         </div>
       </div>
     </div>
@@ -2308,7 +4664,24 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 }
 
 
-function shareRepairPDF(orderId) {
+function getImageDataUrl(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+async function shareRepairPDF(orderId) {
   const order = getRepairOrders().find(item => item.id === orderId);
   if (!order || !window.jspdf) {
     showToast('Unable to generate PDF');
@@ -2323,175 +4696,970 @@ function shareRepairPDF(orderId) {
   const gold = [201, 168, 124];
   const lightBeige = [248, 245, 241];
 
+  let logoData = null;
+  try {
+    logoData = await getImageDataUrl('oasis-logo.png');
+  } catch (e) {
+    console.warn('Logo load failed', e);
+  }
+
   let y = 0;
 
-  const renderPage = (isNewPage = false) => {
-    if (isNewPage) doc.addPage();
-    y = applyOasisPdfBranding(doc, 'Repair Work Order');
-
-    // Info Grid Background
-    doc.setFillColor(...lightBeige);
-    doc.rect(0, y - 10, 210, 50, 'F');
-
-    const col1 = 20;
-    const col2 = 110;
-    let gridY = y;
-
-    const addGridItem = (label, value, x, currentY) => {
-      doc.setFontSize(7);
-      doc.setTextColor(100, 100, 100);
-      doc.setFont('helvetica', 'normal');
-      doc.text(label.toUpperCase(), x, currentY);
-      doc.setFontSize(10);
-      doc.setTextColor(...navy);
-      doc.setFont('helvetica', 'bold');
-      doc.text(String(value || '—'), x, currentY + 5);
-    };
-
-    addGridItem('Client', order.clientName, col1, gridY);
-    addGridItem('Date', order.date, col2, gridY);
-    gridY += 12;
-    addGridItem('Address', order.address, col1, gridY);
-    addGridItem('Status / Priority', `${order.status || '—'} / ${order.priority || '—'}`, col2, gridY);
-    gridY += 12;
-    addGridItem('Assigned Tech', order.assignedTo, col1, gridY);
-    addGridItem('Job Type', order.jobType || '—', col2, gridY);
-    gridY += 12;
-    addGridItem('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
-    addGridItem('Time on Site', calculateTimeSpent(order.timeIn, order.timeOut) || '—', col2, gridY);
-
-    y = gridY + 15;
-    applyOasisPdfFooter(doc);
-  };
-
-  renderPage();
-
-  const ensureSpace = (needed = 20) => {
-    if (y + needed > 260) {
-      renderPage(true);
-    }
-  };
-
-  const addSectionHeader = (title) => {
-    ensureSpace(12);
+  const renderHeader = () => {
     doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
+    doc.rect(0, 0, 210, 25, 'F');
+    doc.setFillColor(...gold);
+    doc.rect(0, 25, 210, 1, 'F');
+
+    if (logoData) {
+      doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
+    }
+
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(8);
+    doc.setFont('times', 'bold');
+    doc.setFontSize(22);
+    doc.text('O A S I S', 32, 17);
+
+    doc.setFontSize(12);
     doc.setFont('helvetica', 'bold');
-    doc.text(title.toUpperCase(), 15, y + 5);
-    y += 10;
+    doc.text('REPAIR WORK ORDER', 195, 14, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(...gold);
+    doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
+
+    return 35;
   };
 
-  addSectionHeader('Work Summary');
-  doc.setFontSize(10);
-  doc.setTextColor(...navy);
+  const renderFooter = () => {
+    const footerY = 278;
+    doc.setFillColor(...navy);
+    doc.rect(0, footerY, 210, 20, 'F');
+    doc.setFillColor(...gold);
+    doc.rect(0, footerY, 210, 0.5, 'F');
+
+    if (logoData) {
+      doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
+    }
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(12);
+    doc.setFont('times', 'bold');
+    doc.text('O A S I S', 30, footerY + 12);
+
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(180, 180, 180);
+    doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
+    doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
+  };
+
+  y = renderHeader();
+
+  // Info Grid
+  doc.setFillColor(...lightBeige);
+  doc.rect(10, y, 190, 42, 'F');
+
+  let gridY = y + 7;
+  const col1 = 15;
+  const col2 = 110;
+
+  const addField = (label, value, x, currentY) => {
+    doc.setFontSize(6);
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'bold');
+    doc.text(label.toUpperCase(), x, currentY);
+    doc.setFontSize(9);
+    doc.setTextColor(...navy);
+    doc.setFont('helvetica', 'normal');
+    doc.text(String(value || '—'), x, currentY + 5);
+  };
+
+  addField('Customer', order.clientName, col1, gridY);
+  addField('Date', order.date, col2, gridY);
+  gridY += 12;
+  addField('Address', order.address, col1, gridY);
+  addField('Job Type', order.jobType, col2, gridY);
+  gridY += 12;
+  addField('Assigned Tech', order.assignedTo, col1, gridY);
+  addField('Status / Priority', `${order.status} / ${order.priority}`, col2, gridY);
+  gridY += 12;
+  addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
+  addField('Labour Hours', order.labourHours || '—', col2, gridY);
+
+  y += 50;
+
+  // Work Summary
+  doc.setFillColor(...navy);
+  doc.rect(10, y, 190, 7, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.text('WORK SUMMARY', 15, y + 5);
+  y += 10;
+
+  doc.setTextColor(60, 60, 60);
+  doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   const summaryLines = doc.splitTextToSize(order.summary || 'No summary provided.', 180);
   doc.text(summaryLines, 15, y);
-  y += (summaryLines.length * 5) + 8;
+  y += (summaryLines.length * 5) + 5;
 
+  // Parts Table
   if (order.partsItems && order.partsItems.length > 0) {
-    addSectionHeader('Parts & Equipment');
-    doc.setFont('helvetica', 'bold');
-    doc.text('Part Description', 15, y);
-    doc.text('Qty', 160, y);
-    y += 6;
-    doc.setDrawColor(...gold);
-    doc.line(15, y, 195, y);
-    y += 5;
-    doc.setFont('helvetica', 'normal');
-    order.partsItems.forEach(item => {
-      ensureSpace(7);
-      doc.text(`${item.category}: ${item.product}` || 'Unknown Part', 15, y);
-      doc.text(String(item.qty || 1), 160, y);
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('PARTS & EQUIPMENT INSTALLED', 15, y + 5);
+    doc.text('QTY', 170, y + 5);
+    y += 7;
+
+    order.partsItems.forEach((item, i) => {
+      if (i % 2 === 0) {
+        doc.setFillColor(248, 248, 248);
+        doc.rect(10, y, 190, 6, 'F');
+      }
+      doc.setTextColor(...navy);
+      doc.text(`${item.category}: ${item.product}` || 'Unknown Part', 15, y + 4.5);
+      doc.text(String(item.qty || 1), 170, y + 4.5);
       y += 6;
     });
     y += 5;
   }
 
+  // Office Notes
   if (order.notes) {
-    addSectionHeader('Service Notes');
-    doc.setFontSize(10);
-    doc.setTextColor(...navy);
-    doc.setFont('helvetica', 'normal');
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('INTERNAL OFFICE NOTES', 15, y + 5);
+    y += 10;
+    doc.setTextColor(60, 60, 60);
     const notesLines = doc.splitTextToSize(order.notes, 180);
     doc.text(notesLines, 15, y);
-    y += (notesLines.length * 5) + 8;
+    y += (notesLines.length * 5) + 5;
   }
 
+  // Photos (Compact)
   const photos = normalizeRepairPhotos(order.photos || []);
   if (photos.some(p => p)) {
-    addSectionHeader('Repair Photos');
-    const photoWidth = 55;
-    const photoHeight = 40;
-    let x = 15;
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('REPAIR PHOTOS', 15, y + 5);
+    y += 10;
 
-    photos.forEach((src, idx) => {
-      if (!src) return;
-
-      const previousY = y;
-      ensureSpace(photoHeight + 12);
-      if (y < previousY) {
-          x = 15;
-      }
-
-      try {
-        doc.addImage(src, 'JPEG', x, y, photoWidth, photoHeight);
-        doc.setFontSize(7);
-        doc.setTextColor(150, 150, 150);
-        doc.text(REPAIR_PHOTO_LABELS[idx], x, y + photoHeight + 4);
-      } catch (e) {
-        console.error("Repair PDF Image add failed", e);
-      }
-
-      x += 60;
-      if (x > 150) {
-        x = 15;
-        y += photoHeight + 12;
+    const pW = 42;
+    const pH = 32;
+    let pX = 15;
+    photos.forEach((p, i) => {
+      if (p && i < 4) { // Max 4 photos to fit on one page
+        try {
+          doc.addImage(p, 'JPEG', pX, y, pW, pH);
+          doc.setFontSize(6);
+          doc.setTextColor(150, 150, 150);
+          doc.text(REPAIR_PHOTO_LABELS[i], pX, y + pH + 4);
+        } catch(e) {}
+        pX += 48;
       }
     });
   }
 
+  renderFooter();
   sharePDF(doc, filename);
 }
 
-function toggleAccordion(header) {
-  const body = header.nextElementSibling;
-  const chev = header.querySelector('.wo-chev');
-  if (!body) return;
+function normalizeRepairPartItems(parts = []) {
+  const source = Array.isArray(parts) && parts.length ? parts : [{}];
+  return source.map(part => ({
+    category: part.category || '',
+    partNumber: part.partNumber || '',
+    product: part.product || '',
+    qty: part.qty || '1',
+    unitPrice: part.unitPrice || ''
+  }));
+}
 
-  const isCollapsed = body.classList.contains('collapsed');
-  if (isCollapsed) {
-    body.classList.remove('collapsed');
-    if (chev) chev.textContent = '▼';
+function buildRepairPartsSummary(parts = []) {
+  return normalizeRepairPartItems(parts)
+    .filter(part => part.category || part.partNumber || part.product)
+    .map(part => {
+      const qty = part.qty || '1';
+      const name = part.product || part.partNumber || 'Part';
+      const category = part.category ? `${part.category}: ` : '';
+      const partNumber = part.partNumber ? ` (${part.partNumber})` : '';
+      const price = part.unitPrice ? ` @ $${Number(part.unitPrice).toFixed(2)}` : '';
+      return `${qty} × ${category}${name}${partNumber}${price}`;
+    })
+    .join('\n');
+}
+
+function renderRepairPartRow(orderId, part, index) {
+  const categories = getRepairCatalogCategories();
+  const items = getRepairCatalogItems(part.category);
+  const selectedItem = items.find(item => item.partNumber === part.partNumber)
+    || items.find(item => item.product === part.product)
+    || null;
+
+  return `
+    <div class="repair-part-row" data-index="${index}" style="margin-bottom:10px;">
+      <div class="wo-grid" style="border-radius:var(--radius-sm); margin-bottom:6px;">
+        <div class="wo-fld">
+          <div class="wo-fld-lbl">Category</div>
+          <select class="repair-part-category" onchange="refreshRepairOrderBuilder('${orderId || ''}')">
+            <option value="">— Select category —</option>
+            ${categories.map(category => `
+              <option value="${escapeHtml(category)}" ${category === part.category ? 'selected' : ''}>${escapeHtml(category)}</option>
+            `).join('')}
+          </select>
+        </div>
+
+        <div class="wo-fld">
+          <div class="wo-fld-lbl">Equipment / Part</div>
+          <select class="repair-part-product" onchange="refreshRepairOrderBuilder('${orderId || ''}')">
+            <option value="">— Select equipment —</option>
+            ${items.map(item => `
+              <option value="${escapeHtml(item.partNumber)}"
+                data-product="${escapeHtml(item.product)}"
+                data-price="${escapeHtml(String(item.price ?? ''))}"
+                ${item.partNumber === part.partNumber ? 'selected' : ''}>
+                ${escapeHtml(item.product)}${item.partNumber ? ` — ${escapeHtml(item.partNumber)}` : ''}
+              </option>
+            `).join('')}
+          </select>
+        </div>
+
+        <div class="wo-fld">
+          <div class="wo-fld-lbl">Quantity</div>
+          <input class="wo-fld-inp repair-part-qty" type="number" min="1" step="1" value="${escapeHtml(String(part.qty || '1'))}" oninput="updateRepairPartRowDetails(this)">
+        </div>
+
+        <div class="wo-fld">
+          <div class="wo-fld-lbl">Part Details</div>
+          <div class="repair-part-details" style="font-size:12px; color:var(--gray-600); line-height:1.5; min-height:38px;">
+            ${selectedItem ? `${escapeHtml(selectedItem.partNumber || '')}${selectedItem.price ? ` • $${Number(selectedItem.price).toFixed(2)}` : ''}` : 'Choose a category and equipment item.'}
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="removeRepairPartRow('${orderId || ''}', ${index})">Remove</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function updateRepairPartRowDetails(input) {
+  const row = input.closest('.repair-part-row');
+  const productSelect = row.querySelector('.repair-part-product');
+  const detailsDiv = row.querySelector('.repair-part-details');
+  const qty = parseInt(input.value) || 1;
+
+  const selectedOption = productSelect.selectedOptions[0];
+  if (selectedOption && selectedOption.value) {
+    const partNumber = selectedOption.value;
+    const price = parseFloat(selectedOption.dataset.price);
+    if (!isNaN(price)) {
+      const total = (price * qty).toFixed(2);
+      detailsDiv.innerHTML = `${escapeHtml(partNumber)} • $${price.toFixed(2)}<br><b>Line Total: $${total}</b>`;
+    } else {
+      detailsDiv.textContent = partNumber;
+    }
+  }
+}
+
+function renderRepairPartsBuilder(orderId, order) {
+  const rows = normalizeRepairPartItems(order.partsItems || []);
+  return `
+    <div class="wo-hint">Select parts by category, choose the equipment item, and enter the quantity used on the job.</div>
+    ${rows.map((part, index) => renderRepairPartRow(orderId, part, index)).join('')}
+    <button type="button" class="btn btn-secondary btn-sm" onclick="addRepairPartRow('${orderId || ''}')">+ Add Another Part / Equipment</button>
+  `;
+}
+
+function refreshRepairOrderBuilder(orderId = '') {
+  const draft = collectRepairOrderFromForm(orderId);
+  if (!draft) return;
+  renderRepairOrderForm(draft.id || orderId, '', draft);
+}
+
+function addRepairPartRow(orderId = '') {
+  const draft = collectRepairOrderFromForm(orderId) || { id: orderId || '', partsItems: [] };
+  draft.partsItems = normalizeRepairPartItems(draft.partsItems || []);
+  draft.partsItems.push({ category: '', partNumber: '', product: '', qty: '1', unitPrice: '' });
+  renderRepairOrderForm(draft.id || orderId, '', draft);
+}
+
+function removeRepairPartRow(orderId = '', index = 0) {
+  const draft = collectRepairOrderFromForm(orderId) || { id: orderId || '', partsItems: [] };
+  const rows = normalizeRepairPartItems(draft.partsItems || []).filter((_, rowIndex) => rowIndex !== index);
+  draft.partsItems = rows.length ? rows : [{ category: '', partNumber: '', product: '', qty: '1', unitPrice: '' }];
+  renderRepairOrderForm(draft.id || orderId, '', draft);
+}
+
+function updateRepairTimeSpentHint() {
+  const hint = document.getElementById('repair-time-spent-hint');
+  if (!hint) return;
+
+  const timeIn = document.getElementById('repair-time-in')?.value || '';
+  const timeOut = document.getElementById('repair-time-out')?.value || '';
+  const spent = calculateTimeSpent(timeIn, timeOut);
+  hint.textContent = `Time on site: ${spent || 'Enter both times to calculate duration.'}`;
+}
+
+function attachRepairFormListeners() {
+  const timeIn = document.getElementById('repair-time-in');
+  const timeOut = document.getElementById('repair-time-out');
+  if (timeIn) timeIn.addEventListener('input', updateRepairTimeSpentHint);
+  if (timeOut) timeOut.addEventListener('input', updateRepairTimeSpentHint);
+  if (timeIn) timeIn.addEventListener('change', updateRepairTimeSpentHint);
+  if (timeOut) timeOut.addEventListener('change', updateRepairTimeSpentHint);
+  updateRepairTimeSpentHint();
+}
+
+function normalizeRepairPhotos(photos = []) {
+  const source = Array.isArray(photos) ? photos : [];
+  return REPAIR_PHOTO_LABELS.map((_, index) => source[index] || '');
+}
+
+function renderRepairPhotoSlot(orderId, label, photo, index) {
+  const safeLabel = escapeHtml(label);
+  return `
+    <div class="photo-slot" id="repair-photo-slot-${index}">
+      <div class="photo-slot-lbl">${safeLabel}</div>
+      <div class="photo-preview-box">
+        ${photo ? `
+          <img class="photo-thumb" data-repair-photo-index="${index}" src="${photo}" alt="${safeLabel}">
+          <button type="button" class="photo-remove" onclick="removeRepairPhoto('${orderId || ''}', ${index})" aria-label="Remove ${safeLabel} photo">&times;</button>
+        ` : `<div class="photo-add-btn">Add ${safeLabel} photo</div>`}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('repair', '${orderId || ''}', ${index})">Take Photo</button>
+        <label class="btn btn-secondary btn-sm" for="repair-photo-gallery-${index}">Choose Photo</label>
+      </div>
+      <input id="repair-photo-gallery-${index}" name="repair-photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
+    </div>
+  `;
+}
+
+function renderRepairPhotoSection(orderId, order) {
+  const photos = normalizeRepairPhotos(order.photos);
+  const beforeAfter = REPAIR_PHOTO_LABELS.slice(0, 2)
+    .map((label, index) => renderRepairPhotoSlot(orderId, label, photos[index], index))
+    .join('');
+  const extras = REPAIR_PHOTO_LABELS.slice(2)
+    .map((label, offset) => renderRepairPhotoSlot(orderId, label, photos[offset + 2], offset + 2))
+    .join('');
+
+  return `
+    <div class="wo-sec">
+      <div class="wo-sec-hd wo-photo-hd" onclick="toggleAccordion(this)">
+        <span>Repair Photos</span>
+        <span class="wo-chev">▼</span>
+      </div>
+      <div class="wo-sec-bd">
+        <div class="photo-ba-row">${beforeAfter}</div>
+        <div class="photo-extra-grid" style="margin-top:8px;">${extras}</div>
+      </div>
+    </div>
+  `;
+}
+
+async function handleRepairPhotoUpload(orderId, slotIndex, event) {
+  const file = event?.target?.files?.[0];
+  if (!file) return;
+
+  try {
+    const order = collectRepairOrderFromForm(orderId);
+    if (!order) {
+      showToast('Repair work order not found');
+      return;
+    }
+
+    showToast('Processing repair photo...');
+    const dataUrl = await resizeImageForStorage(file);
+    if (!dataUrl) throw new Error('Photo processing failed');
+
+    const photos = normalizeRepairPhotos(order.photos);
+    photos[slotIndex] = dataUrl;
+    order.photos = photos;
+
+    // Persist immediately
+    const orders = getRepairOrders();
+    const idx = orders.findIndex(o => o.id === order.id);
+    if (idx >= 0) {
+      orders[idx] = order;
+    } else {
+      orders.unshift(order);
+    }
+    saveRepairOrders(orders);
+
+    const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
+
+    // Update DOM with new ID if it was previously empty
+    if (!orderId) {
+        const container = document.querySelector('[data-active-repair-id]');
+        if (container) container.setAttribute('data-active-repair-id', order.id);
+    }
+
+    if (slot) {
+      const label = REPAIR_PHOTO_LABELS[slotIndex];
+      slot.outerHTML = renderRepairPhotoSlot(order.id, label, dataUrl, slotIndex);
+      showToast('Repair photo added');
+    } else {
+      renderRepairOrderForm(order.id, '', order);
+      showToast('Repair photo added');
+    }
+  } catch (error) {
+    console.error('Repair photo upload failed', error);
+    showToast('Unable to add repair photo');
+  } finally {
+    if (event?.target) event.target.value = '';
+  }
+}
+
+function removeRepairPhoto(orderId, slotIndex) {
+  const order = collectRepairOrderFromForm(orderId);
+  if (!order) {
+    showToast('Repair work order not found');
+    return;
+  }
+
+  const photos = normalizeRepairPhotos(order.photos);
+  photos[slotIndex] = '';
+  order.photos = photos;
+
+  // Persist immediately
+  const orders = getRepairOrders();
+  const idx = orders.findIndex(o => o.id === order.id);
+  if (idx >= 0) {
+    orders[idx] = order;
+    saveRepairOrders(orders);
+  }
+
+  const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
+
+  // Ensure form is locked to this ID if it was a new order
+  if (!orderId) {
+      const container = document.querySelector('[data-active-repair-id]');
+      if (container) container.setAttribute('data-active-repair-id', order.id);
+  }
+
+  if (slot) {
+    const label = REPAIR_PHOTO_LABELS[slotIndex];
+    slot.outerHTML = renderRepairPhotoSlot(order.id, label, '', slotIndex);
   } else {
-    body.classList.add('collapsed');
-    if (chev) chev.textContent = '▶';
+    renderRepairOrderForm(order.id, '', order);
+  }
+
+  showToast('Repair photo removed');
+}
+
+function bulkImportClients() {
+  const data = prompt("Paste clients JSON here (Array of objects with name and address)");
+  if (!data) return;
+  try {
+    const newClients = JSON.parse(data);
+    if (!Array.isArray(newClients)) {
+      alert("Invalid format. Expected an array.");
+      return;
+    }
+    const clients = db.get('clients', []);
+    newClients.forEach(c => {
+      clients.unshift({
+        id: `c${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        name: c.name || 'New Client',
+        address: c.address || '',
+        contact: c.contact || ''
+      });
+    });
+    db.set('clients', clients);
+    showToast(`${newClients.length} clients imported`);
+    router.renderClients();
+  } catch (e) {
+    alert("Error parsing JSON: " + e.message);
   }
 }
 
-function deleteRepairOrder(orderId) {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can delete work orders');
-    return;
+function cleanupTestClients() {
+  const testIds = ['c101', 'c102', 'c103', 'c104'];
+  const clients = db.get('clients', []);
+  const filtered = clients.filter(c => !testIds.includes(c.id));
+  if (filtered.length !== clients.length) {
+    db.set('clients', filtered);
   }
-  if (!confirm('Delete this repair work order?')) return;
-  saveRepairOrders(getRepairOrders().filter(order => order.id !== orderId));
-  showToast('Repair work order deleted');
-  router.renderWorkOrders();
 }
 
-function deleteWorkOrder(orderId) {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can delete chem sheets');
+async function exportCompletedToExcel() {
+  const allWorkorders = db.get('workorders', []);
+  const completed = allWorkorders.filter(wo => wo.status === 'completed');
+
+  if (completed.length === 0) {
+    showToast('No completed work orders to export');
     return;
   }
-  if (!confirm('Delete this chem sheet?')) return;
-  const orders = db.get('workorders', []).filter(o => o.id !== orderId);
-  db.set('workorders', orders);
-  showToast('Chem sheet deleted');
-  router.renderWorkOrders();
+
+  showToast('Generating Excel report...');
+
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet('OASIS Service Records');
+
+    const chemKeys = [
+      { key: 'tabs', label: 'Tabs' },
+      { key: 'shock', label: 'Shock/Oxidizer' },
+      { key: 'muriaticAcid', label: 'Muriatic Acid' },
+      { key: 'sodaAsh', label: 'Soda Ash' },
+      { key: 'sodiumBicarb', label: 'Sodium Bicarb' },
+      { key: 'calcium', label: 'Calcium Increaser' },
+      { key: 'stabilizer', label: 'Stabilizer' },
+      { key: 'salt', label: 'Salt' },
+      { key: 'phosphateRemover', label: 'Phosphate Remover' },
+      { key: 'algaecide', label: 'Algaecide' }
+    ];
+
+    // Define Columns
+    const columns = [
+      { header: 'Date', key: 'date', width: 12 },
+      { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 },
+      { header: 'Technician', key: 'tech', width: 15 },
+      { header: 'Time In', key: 'timeIn', width: 10 },
+      { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Pool Chlorine', key: 'pCl', width: 12 },
+      { header: 'Pool pH', key: 'pph', width: 10 },
+      { header: 'Pool Alk', key: 'palk', width: 10 }
+    ];
+
+    // Add columns for each pool chemical
+    chemKeys.forEach(ck => {
+      columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
+    });
+
+    columns.push(
+      { header: 'Spa Chlorine', key: 'sCl', width: 12 },
+      { header: 'Spa pH', key: 'sph', width: 10 },
+      { header: 'Spa Alk', key: 'salk', width: 10 }
+    );
+
+    // Add columns for each spa chemical
+    chemKeys.forEach(ck => {
+      columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
+    });
+
+    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+
+    ws.columns = columns;
+
+    // Style Header
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+
+    completed.forEach(wo => {
+      const rowData = {
+        date: wo.date,
+        client: wo.clientName,
+        address: wo.address,
+        tech: wo.technician,
+        timeIn: wo.timeIn || wo.time || '',
+        timeOut: wo.timeOut || '',
+        pCl: wo.readings?.pool?.chlorine || '',
+        pph: wo.readings?.pool?.ph || '',
+        palk: wo.readings?.pool?.alkalinity || '',
+        sCl: wo.readings?.spa?.chlorine || '',
+        sph: wo.readings?.spa?.ph || '',
+        salk: wo.readings?.spa?.alkalinity || '',
+        notes: (wo.workPerformed || '') + ' ' + (wo.followUpNotes || wo.notes || '')
+      };
+
+      // Populate pool chemical values
+      chemKeys.forEach(ck => {
+        rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || '';
+      });
+
+      // Populate spa chemical values
+      chemKeys.forEach(ck => {
+        rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || '';
+      });
+
+      ws.addRow(rowData);
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    // Robust binary to base64 conversion
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+    const filename = `OASIS_Service_Records_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast('Excel export ready');
+  } catch (error) {
+    console.error('Excel export failed:', error);
+    showToast('Excel export failed');
+  }
+}
+
+function openMap(address) {
+  if (!address) return;
+  let query = address;
+  if (!query.toLowerCase().includes('grand cayman')) {
+    query += ', Grand Cayman';
+  }
+  const encodedAddress = encodeURIComponent(query);
+  const url = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+  window.open(url, '_blank');
+}
+
+function saveClientDetails(clientId) {
+  const name = document.getElementById('edit-client-name').value;
+  const address = document.getElementById('edit-client-address').value;
+  const contact = document.getElementById('edit-client-contact').value;
+  const tech = document.getElementById('edit-client-tech').value;
+
+  if (!name) {
+    alert('Name is required');
+    return;
+  }
+
+  const clients = db.get('clients', []);
+  const index = clients.findIndex(c => c.id === clientId);
+  if (index >= 0) {
+    clients[index] = { ...clients[index], name, address, contact, technician: tech };
+    db.set('clients', clients);
+
+    // Also update any matching workorders
+    const workorders = db.get('workorders', []);
+    workorders.forEach(wo => {
+      if (wo.clientId === clientId) {
+        wo.clientName = name;
+        wo.address = address;
+        wo.technician = tech;
+      }
+    });
+    db.set('workorders', workorders);
+
+    showToast('Client profile updated');
+    router.renderClients();
+  }
+}
+
+async function shareClientDetails(clientId) {
+  const clients = db.get('clients', []);
+  const client = clients.find(c => c.id === clientId);
+  if (!client) return;
+
+  const text = `Client: ${client.name}\nAddress: ${client.address}\nContact: ${client.contact || 'None'}\nTech: ${client.technician || 'None'}`;
+
+  try {
+    if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.Share) {
+      await Capacitor.Plugins.Share.share({
+        title: `Client Profile: ${client.name}`,
+        text: text,
+        dialogTitle: 'Share Client Details'
+      });
+    } else {
+      await navigator.clipboard.writeText(text);
+      showToast('Client details copied to clipboard');
+    }
+  } catch (err) {
+    console.error('Sharing failed:', err);
+    showToast('Manual copy required');
+  }
+}
+
+function initMasterSchedule() {
+  if (db.get('masterScheduleLoaded')) return;
+
+  const clients = [
+    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem" },
+    { name: "Jeey Bomford", address: "49 Mary Read Crescent", tech: "Kadeem" },
+    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem" },
+    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem" },
+    { name: "Gcpsl Sea View", address: "South Church Street", tech: "Kadeem" },
+    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem" },
+    { name: "Sunrise Phase 3", address: "Old Crewe Rd", tech: "Kadeem" },
+    { name: "Vivi Townhomes", address: "275 Fairbanks Rd", tech: "Kadeem" },
+    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin" },
+    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin" },
+    { name: "Caribbean Courts", address: "Bcqs, South Sound", tech: "Elvin" },
+    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin" },
+    { name: "Fin South Church Street", address: "Fin Strata", tech: "Elvin" },
+    { name: "Lakeland Villas #1", address: "Old Crewe Rd", tech: "Elvin" },
+    { name: "Point Of View", address: "South Sound", tech: "Elvin" },
+    { name: "South Palms #1", address: "Glen Eden Rd", tech: "Elvin" },
+    { name: "Southern Skies", address: "South Sound", tech: "Elvin" },
+    { name: "Correy Williams", address: "16 Cypress Point", tech: "Jermaine" },
+    { name: "Andy Albray", address: "17 The Deck House", tech: "Jermaine" },
+    { name: "Joanne Akdeniz", address: "42 Hoya Quay", tech: "Jermaine" },
+    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine" },
+    { name: "Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine" },
+    { name: "Mike Stroh", address: "64 Waterford Quay", tech: "Jermaine" },
+    { name: "Tim Bradley", address: "66 Baquarat Quay", tech: "Jermaine" },
+    { name: "Plum Mandalay", address: "Seven Mile", tech: "Jermaine" },
+    { name: "Ocean Pointe Villas", address: "West Bay", tech: "Jermaine" },
+    { name: "Snug Harbour Villas", address: "Snug Harbour", tech: "Jermaine" },
+    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace" },
+    { name: "John Ferarri", address: "30 Orchid Drive", tech: "Ace" },
+    { name: "Gary Gibbs", address: "306 Yacht Club dr", tech: "Ace" },
+    { name: "Andrew Muir", address: "318 Yacht Drive", tech: "Ace" },
+    { name: "Scott Somerville", address: "40 Orchid Drive", tech: "Ace" },
+    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace" },
+    { name: "Vlad Aldea", address: "474 Yacht Club Dr", tech: "Ace" },
+    { name: "Abraham Burak", address: "Salt Creek", tech: "Ace" },
+    { name: "Sunset Point Condos", address: "North West Point Rd", tech: "Ace" },
+    { name: "Villa Mare", address: "Vista Del Mar", tech: "Ace" },
+    { name: "Jenny Frizzle", address: "302 Windswept Drive", tech: "Donald" },
+    { name: "Anthoney Reid", address: "88 Mallard Drive", tech: "Donald" },
+    { name: "Coral Bay Village", address: "Shamrock Rd", tech: "Donald" },
+    { name: "Harbor Walk", address: "Grand Harbour", tech: "Donald" },
+    { name: "Indigo Bay", address: "Shamrock Rd", tech: "Donald" },
+    { name: "Periwinkle", address: "Edgewater Way", tech: "Donald" },
+    { name: "Savannah Grand", address: "Savannah", tech: "Donald" },
+    { name: "South Shore", address: "Shamrock Rd", tech: "Donald" },
+    { name: "The Palms At Patricks", address: "Patricks Island", tech: "Donald" },
+    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley" },
+    { name: "One Canal Point", address: "Canal Point", tech: "Kingsley" },
+    { name: "Poinsettia", address: "Seven Mile Beach", tech: "Kingsley" },
+    { name: "The Beachcomber", address: "Seven Mile Beach", tech: "Kingsley" },
+    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel" },
+    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel" },
+    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel" },
+    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel" },
+    { name: "Plymouth", address: "Canal Point Dr", tech: "Ariel" },
+    { name: "Glen Kennedy", address: "Salt Creek", tech: "Ariel" },
+    { name: "Mark Vandevelde", address: "Salt Creek", tech: "Ariel" },
+    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel" },
+    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik" },
+    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik" },
+    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik" },
+    { name: "Jason Butcher", address: "44 Grand Estates", tech: "Malik" },
+    { name: "Julie O'Hara", address: "56 Grand Estates", tech: "Malik" },
+    { name: "Mike Gibbs", address: "78 Grand Estates", tech: "Malik" },
+    { name: "Grapetree Condos", address: "Seven Mile Beach", tech: "Malik" },
+    { name: "The Colonial Club", address: "Seven Mile Beach", tech: "Malik" },
+    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem" },
+    { name: "Caribbean Paradise", address: "South Sound", tech: "Kadeem" },
+    { name: "L'Ambience", address: "Fairbanks Rd", tech: "Kadeem" },
+    { name: "Mystic Retreat", address: "John Greer Boulavard", tech: "Kadeem" },
+    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin" },
+    { name: "South Bay Estates", address: "Bel Air Dr", tech: "Elvin" },
+    { name: "Andy Marcher", address: "234 Drake Quay", tech: "Jermaine" },
+    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine" },
+    { name: "Dolce Vita", address: "Govenors Harbour", tech: "Jermaine" },
+    { name: "Amber Stewart", address: "Dolce Vita 4", tech: "Jermaine" },
+    { name: "Pleasant View", address: "West Bay", tech: "Jermaine" },
+    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace" },
+    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace" },
+    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace" },
+    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace" },
+    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace" },
+    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace" },
+    { name: "Charles Ebanks", address: "Bonnieview Av", tech: "Donald" },
+    { name: "One Canal Point Gym", address: "Canal Point", tech: "Kingsley" },
+    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik" },
+    { name: "Moon Bay", address: "Shamrock Rd", tech: "Malik" },
+    { name: "Cayman Coves", address: "South Church Street", tech: "Kadeem" },
+    { name: "Venetia", address: "South Sound", tech: "Kadeem" },
+    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin" },
+    { name: "Tim Dailyey", address: "North Webster Dr", tech: "Elvin" },
+    { name: "Nicholas Lynn", address: "Sandlewood Crescent", tech: "Elvin" },
+    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin" },
+    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin" },
+    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin" },
+    { name: "Riyaz Norrudin", address: "63 Langton Way", tech: "Elvin" },
+    { name: "Mangrove", address: "Bcqs", tech: "Elvin" },
+    { name: "Quentin Creegan", address: "Villa Aramone", tech: "Elvin" },
+    { name: "Jodie O'Mahony", address: "12 El Nathan", tech: "Jermaine" },
+    { name: "Charles Motsinger", address: "124 Hillard", tech: "Jermaine" },
+    { name: "Steve Daker", address: "33 Spurgeon Cr", tech: "Jermaine" },
+    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine" },
+    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine" },
+    { name: "Albert Schimdberger", address: "55 Elnathan Rd", tech: "Jermaine" },
+    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine" },
+    { name: "Blair Ebanks", address: "71 Spurgeon Crescent", tech: "Jermaine" },
+    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine" },
+    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine" },
+    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace" },
+    { name: "Mitchell Demeter", address: "19 Whirlaway Close", tech: "Ace" },
+    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace" },
+    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace" },
+    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace" },
+    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace" },
+    { name: "Coastal Escape", address: "Omega Bay", tech: "Ace" },
+    { name: "Inity Ridge", address: "Prospect Point Rd", tech: "Ace" },
+    { name: "Ocean Reach", address: "Old Crewe Rd", tech: "Ace" },
+    { name: "Scott Somerville", address: "Rum Point Rd", tech: "Donald" },
+    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald" },
+    { name: "67 On The Bay", address: "Queens Highway", tech: "Donald" },
+    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald" },
+    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald" },
+    { name: "Paradise Sur Mar", address: "Sand Cay Rd", tech: "Donald" },
+    { name: "Rip Kai", address: "Rum Point Drive", tech: "Donald" },
+    { name: "Sunrays", address: "Sand Cay Rd", tech: "Donald" },
+    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley" },
+    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley" },
+    { name: "Regant Court", address: "Brittania", tech: "Kingsley" },
+    { name: "Solara Main", address: "Crystal Harbour", tech: "Kingsley" },
+    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel" },
+    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel" },
+    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel" },
+    { name: "Chad Horwitz", address: "49 Calico Quay", tech: "Ariel" },
+    { name: "Malcom Swift", address: "Miramar", tech: "Ariel" },
+    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel" },
+    { name: "Strata #70", address: "Boggy Sands rd", tech: "Ariel" },
+    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik" },
+    { name: "Debbie Ebanks", address: "Fischers Reef", tech: "Malik" },
+    { name: "John Corallo", address: "3A Seahven", tech: "Malik" },
+    { name: "Encompass", address: "3B Seahven", tech: "Malik" },
+    { name: "Joseph Hurlston", address: "42 Monumnet Rd", tech: "Malik" },
+    { name: "George McKenzie", address: "534 Rum Point Dr", tech: "Malik" },
+    { name: "Twin Palms", address: "Rum Point Dr", tech: "Malik" },
+    { name: "Bernie Bako", address: "#4 Venetia", tech: "Kadeem" },
+    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem" },
+    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem" },
+    { name: "Park View Courts", address: "Spruce Lane", tech: "Kadeem" },
+    { name: "The Bentley", address: "Crewe rd", tech: "Kadeem" },
+    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin" },
+    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin" },
+    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin" },
+    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin" },
+    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin" },
+    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin" },
+    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin" },
+    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin" },
+    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin" },
+    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine" },
+    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine" },
+    { name: "Nigel Daily", address: "Snug Harbour", tech: "Jermaine" },
+    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine" },
+    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine" },
+    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine" },
+    { name: "Shoreway Townhomes", address: "Adonis Dr", tech: "Jermaine" },
+    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine" },
+    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine" },
+    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace" },
+    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace" },
+    { name: "Clive Harris", address: "516 Crighton Drive", tech: "Ace" },
+    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace" },
+    { name: "Ross Fortune", address: "90 Prince Charles", tech: "Ace" },
+    { name: "Simon Palmer", address: "Olivias Cove", tech: "Ace" },
+    { name: "Caroline Moran", address: "197 Bimini Dr", tech: "Donald" },
+    { name: "James Reeve", address: "215 Bimini Dr", tech: "Donald" },
+    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald" },
+    { name: "Sina Mirzale", address: "353 Bimini Dr", tech: "Donald" },
+    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald" },
+    { name: "Marlon Bispath", address: "519 Bimini Dr", tech: "Donald" },
+    { name: "Margaret Fantasia", address: "526 Bimini Dr", tech: "Donald" },
+    { name: "Kenny Rankin", address: "Grand Harbour", tech: "Donald" },
+    { name: "James Mendes", address: "106 Olea", tech: "Ariel" },
+    { name: "James O'Brien", address: "102 Olea", tech: "Ariel" },
+    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel" },
+    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel" },
+    { name: "Mr Holland", address: "107 Olea", tech: "Ariel" },
+    { name: "Nikki Harris", address: "213 olea", tech: "Ariel" },
+    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel" },
+    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel" },
+    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik" },
+    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik" },
+    { name: "Iman Shafiei", address: "53 Baquarat Quay", tech: "Malik" },
+    { name: "Enrique Tasende", address: "65 Baccarat Quay", tech: "Malik" },
+    { name: "David Wilson", address: "Boggy Sands", tech: "Malik" },
+    { name: "Nina Irani", address: "Casa Oasis", tech: "Malik" },
+    { name: "Sandy Lane Townhomes", address: "Boggy Sands Rd", tech: "Malik" },
+    { name: "Valencia Heights", address: "Strata #536", tech: "Kadeem" },
+    { name: "Jaime-Lee Eccles", address: "176 Conch Dr", tech: "Kadeem" },
+    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem" },
+    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem" },
+    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem" },
+    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem" },
+    { name: "Hilton Estates", address: "Fairbanks Rd", tech: "Kadeem" },
+    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin" },
+    { name: "Britni Strong", address: "150 Parkway Dr", tech: "Elvin" },
+    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin" },
+    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd", tech: "Elvin" },
+    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin" },
+    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin" },
+    { name: "Saphire", address: "Jec, Nwp Rd", tech: "Elvin" },
+    { name: "The Sands", address: "Boggy Sand Rd", tech: "Elvin" },
+    { name: "Turtle Breeze", address: "Conch Point Rd", tech: "Elvin" },
+    { name: "Francois Du Toit", address: "Snug Harbour", tech: "Jermaine" },
+    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine" },
+    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine" },
+    { name: "Johann Prinslo", address: "270 Jennifer Dr", tech: "Jermaine" },
+    { name: "Andre Slabbert", address: "7 Victoria Dr", tech: "Jermaine" },
+    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine" },
+    { name: "Palm Heights Residence", address: "Seven Mile Beach", tech: "Jermaine" },
+    { name: "Jean Mean", address: "211 Sea Spray Dr", tech: "Ace" },
+    { name: "Paul Rowan", address: "265 Sea Spray Dr", tech: "Ace" },
+    { name: "Charmaine Richter", address: "40 Natures Circle", tech: "Ace" },
+    { name: "Rory Andrews", address: "44 Country Road", tech: "Ace" },
+    { name: "Walker Romanica", address: "79 Riley Circle", tech: "Ace" },
+    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace" },
+    { name: "Grand Palmyra", address: "Seven Mile Beach", tech: "Ace" },
+    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace" },
+    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald" },
+    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald" },
+    { name: "Reg Williams", address: "Cliff House", tech: "Donald" },
+    { name: "Gypsy", address: "1514 Rum Point Dr", tech: "Donald" },
+    { name: "Kai Vista", address: "Rum Point Dr", tech: "Donald" },
+    { name: "Ocean Vista", address: "Rum Point", tech: "Donald" },
+    { name: "Stefan Marenzi", address: "Water Cay Rd", tech: "Donald" },
+    { name: "Bella Rocca", address: "Queens Highway", tech: "Donald" },
+    { name: "Sea 2 Inity", address: "Kiabo", tech: "Donald" },
+    { name: "Guy Manning", address: "Diamonds Edge", tech: "Kingsley" },
+    { name: "Kent Nickerson", address: "Salt Creek", tech: "Kingsley" },
+    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel" },
+    { name: "Suzanne Correy", address: "394 Canal Point Rd", tech: "Ariel" },
+    { name: "November Capitol", address: "One Canal Point", tech: "Ariel" },
+    { name: "Safe Harbor", address: "West Bay", tech: "Ariel" },
+    { name: "Bert Thacker", address: "West Bay", tech: "Ariel" },
+    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik" },
+    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik" },
+    { name: "Philip Smyres", address: "Conch Point Villas", tech: "Malik" },
+    { name: "Brandon Caruana", address: "Conch Point Villas", tech: "Malik" },
+    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik" },
+    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik" },
+    { name: "Phillip Cadien", address: "312 Cypres Point", tech: "Malik" }
+  ];
+
+  // Map to store unique clients by name
+  const uniqueClients = {};
+  clients.forEach(c => {
+    if (!uniqueClients[c.name]) {
+      uniqueClients[c.name] = {
+        id: `c_${Math.random().toString(36).substr(2, 9)}`,
+        name: c.name,
+        address: c.address,
+        technician: c.tech
+      };
+    }
+  });
+
+  const clientArray = Object.values(uniqueClients);
+  db.set('clients', clientArray);
+
+  // Generate pending workorders for each client assigned to their tech
+  const workorders = clientArray.map(c => ({
+    id: `wo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    clientId: c.id,
+    clientName: c.name,
+    address: c.address,
+    technician: c.technician,
+    date: new Date().toISOString().split('T')[0],
+    status: 'pending',
+    readings: { pool: defaultChemReadings(), spa: defaultChemReadings() },
+    chemicalsAdded: { pool: defaultChemicalAdditions(), spa: defaultChemicalAdditions() },
+    photos: []
+  }));
+
+  db.set('workorders', workorders);
+  db.set('masterScheduleLoaded', true);
 }
 
 function populateLoginTechOptions() {
@@ -2499,53 +5667,40 @@ function populateLoginTechOptions() {
   if (!select) return;
 
   const entries = Object.entries(auth.users)
-    .filter(([id]) => id !== 't12') // Hide Java from the list
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
   select.innerHTML = `
     <option value="" disabled selected>— Select your name —</option>
     ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${user.role === 'admin' ? ' (Admin)' : ''}</option>
+      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
     `).join('')}
   `;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Always force login screen on startup
+  auth.logout();
+
+  cleanupTestClients();
+  initMasterSchedule();
   migrateLegacyRepairData();
-  seedTestClients();
   populateLoginTechOptions();
 
-  const loginScreen = document.getElementById('login-screen');
-  const appShell = document.getElementById('app');
-  const loginError = document.getElementById('login-error');
+  // Android Back Button Handling
+  if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
+    Capacitor.Plugins.App.addListener('backButton', () => {
+      if (router.currentView === 'dashboard') {
+        // Stop at home page, don't exit if logged in (though we force login above)
+        return;
+      }
 
-  if (auth.isLoggedIn()) {
-    console.log('User is already logged in:', auth.getCurrentUser().name);
-    if (loginScreen) {
-      loginScreen.style.display = 'none';
-      loginScreen.classList.add('hidden');
-    }
-    if (appShell) {
-      appShell.classList.remove('hidden');
-      appShell.style.display = 'flex';
-    }
-    if (loginError) loginError.style.display = 'none';
+      if (!auth.isLoggedIn()) {
+        // If at login screen, maybe let it exit or do nothing
+        return;
+      }
 
-    try {
-      router.navigate('dashboard');
-    } catch (err) {
-      console.error('Initial navigation error:', err);
-    }
-  } else {
-    console.log('No user logged in');
-    if (loginScreen) {
-      loginScreen.classList.remove('hidden');
-      loginScreen.style.display = 'flex';
-    }
-    if (appShell) {
-      appShell.classList.add('hidden');
-      appShell.style.display = 'none';
-    }
+      router.goBack();
+    });
   }
 
   document.querySelectorAll('.nav-item').forEach(btn => {
@@ -2557,14 +5712,16 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('login-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const select = document.getElementById('login-tech');
+    const pinInput = document.getElementById('login-pin');
     const username = select ? select.value : '';
+    const pin = pinInput ? pinInput.value : '';
     const loginScreen = document.getElementById('login-screen');
     const appShell = document.getElementById('app');
     const loginError = document.getElementById('login-error');
 
     console.log('Attempting login for:', username);
 
-    if (auth.login(username)) {
+    if (auth.login(username, pin)) {
       console.log('Login successful');
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
@@ -2586,7 +5743,7 @@ document.addEventListener('DOMContentLoaded', () => {
         location.reload();
       }
     } else {
-      console.warn('Login failed: invalid username');
+      console.warn('Login failed: invalid username or PIN');
       if (loginError) loginError.style.display = 'block';
     }
   });
@@ -2731,6 +5888,7 @@ function collectWorkOrderForm(orderId) {
     time: getValue('wo-time-in', order.timeIn || order.time || ''),
     timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
     timeOut: getValue('wo-time-out', order.timeOut || ''),
+    status: getValue('wo-status', order.status || 'pending'),
     address: selectedClient?.address || getValue('wo-address', order.address),
     workPerformed: getValue('wo-work', order.workPerformed || ''),
     followUpNotes,
@@ -2835,4 +5993,68 @@ function shareReport(orderId) {
 
 function sendReport(orderId) {
   shareReport(orderId);
+}
+
+function saveApkLink() {
+  const input = document.getElementById('apk-link-input');
+  if (!input) return;
+
+  const link = input.value.trim();
+  db.set('apk_download_link', link);
+
+  // Re-render the settings view to update the QR code
+  if (router.currentView === 'settings') {
+    router.renderSettings();
+  }
+
+  showToast(link ? 'APK link saved' : 'APK link cleared');
+}
+
+async function shareAppLink() {
+  const link = db.get('apk_download_link') || (window.location.origin + '/oasis-app.apk');
+  if (!link) {
+    showToast('No link to share');
+    return;
+  }
+
+  const shareData = {
+    title: 'Download Pool Tech App',
+    text: 'Download the latest version of the Pool Service App here:',
+    url: link,
+    dialogTitle: 'Share APK Link'
+  };
+
+  try {
+    if (typeof Capacitor !== 'undefined' && Capacitor.Plugins && Capacitor.Plugins.Share) {
+      await Capacitor.Plugins.Share.share(shareData);
+    } else if (navigator.share) {
+      await navigator.share(shareData);
+    } else {
+      // Fallback to clipboard
+      await navigator.clipboard.writeText(link);
+      showToast('Link copied to clipboard');
+    }
+  } catch (err) {
+    console.error('Error sharing:', err);
+    // Fallback to clipboard on error
+    try {
+      await navigator.clipboard.writeText(link);
+      showToast('Link copied to clipboard');
+    } catch (clipboardErr) {
+      showToast('Could not share or copy link');
+    }
+  }
+}
+
+async function copyApkLink() {
+  const link = db.get('apk_download_link') || (window.location.origin + '/oasis-app.apk');
+  if (link) {
+    try {
+      await navigator.clipboard.writeText(link);
+      showToast('Link copied to clipboard');
+    } catch (err) {
+      console.error('Failed to copy link: ', err);
+      showToast('Could not copy link');
+    }
+  }
 }

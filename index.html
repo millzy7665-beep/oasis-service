@@ -54,11 +54,15 @@
             <option value="t8">Malik</option>
             <option value="t9">Jet</option>
             <option value="t10">Mark</option>
-            <option value="admin">Chris Mills (Admin)</option>
+            <option value="admin">Chris Mills</option>
           </select>
         </div>
+        <div class="login-field-group">
+          <label class="login-label">Enter PIN</label>
+          <input type="password" id="login-pin" required maxlength="4" inputmode="numeric" pattern="[0-9]*" placeholder="••••" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ddd; font-size: 18px; text-align: center; letter-spacing: 4px;">
+        </div>
         <button type="submit" class="btn-login">Sign In</button>
-        <div id="login-error" class="login-error" style="display:none">Please select your name.</div>
+        <div id="login-error" class="login-error" style="display:none">Invalid name or PIN.</div>
       </form>
     </div>
   </div>
@@ -124,7 +128,7 @@
     <div id="toast" class="toast hidden"></div>
   </div>
 
-  <script src="tech-catalog.js?v=30"></script>
-  <script src="app.js?v=30"></script>
+  <script src="tech-catalog.js?v=37"></script>
+  <script src="app.js?v=37"></script>
 </body>
 </html>
