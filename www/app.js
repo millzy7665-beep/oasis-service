@@ -1365,8 +1365,9 @@ class WorkOrderManager {
     let y = renderHeader();
 
     // Info Grid
-    doc.setFillColor(...lightBeige);
-    doc.rect(10, y, 190, 22, 'F');
+    doc.setDrawColor(225, 225, 225);
+    doc.setLineWidth(0.4);
+    doc.roundedRect(10, y, 190, 22, 2, 2, 'S');
 
     let gridY = y + 7;
     const col1 = 15;
@@ -1413,10 +1414,8 @@ class WorkOrderManager {
     ];
 
     params.forEach((p, i) => {
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 248, 248);
-        doc.rect(10, y, 190, 5, 'F');
-      }
+      doc.setDrawColor(235, 235, 235);
+      doc.line(10, y + 5, 200, y + 5);
       doc.setTextColor(...navy);
       doc.setFontSize(7);
       doc.setFont('helvetica', 'normal');
@@ -2853,8 +2852,9 @@ async function shareRepairPDF(orderId) {
   y = renderHeader();
 
   // Info Grid
-  doc.setFillColor(...lightBeige);
-  doc.rect(10, y, 190, 42, 'F');
+  doc.setDrawColor(225, 225, 225);
+  doc.setLineWidth(0.4);
+  doc.roundedRect(10, y, 190, 42, 2, 2, 'S');
 
   let gridY = y + 7;
   const col1 = 15;
@@ -2911,10 +2911,8 @@ async function shareRepairPDF(orderId) {
     y += 7;
 
     order.partsItems.forEach((item, i) => {
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 248, 248);
-        doc.rect(10, y, 190, 6, 'F');
-      }
+      doc.setDrawColor(235, 235, 235);
+      doc.line(10, y + 6, 200, y + 6);
       doc.setTextColor(...navy);
       doc.text(`${item.category}: ${item.product}` || 'Unknown Part', 15, y + 4.5);
       doc.text(String(item.qty || 1), 170, y + 4.5);
@@ -5292,8 +5290,9 @@ async function shareRepairPDF(orderId) {
   y = renderHeader();
 
   // Info Grid
-  doc.setFillColor(...lightBeige);
-  doc.rect(10, y, 190, 42, 'F');
+  doc.setDrawColor(225, 225, 225);
+  doc.setLineWidth(0.4);
+  doc.roundedRect(10, y, 190, 42, 2, 2, 'S');
 
   let gridY = y + 7;
   const col1 = 15;
@@ -5350,10 +5349,8 @@ async function shareRepairPDF(orderId) {
     y += 7;
 
     order.partsItems.forEach((item, i) => {
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 248, 248);
-        doc.rect(10, y, 190, 6, 'F');
-      }
+      doc.setDrawColor(235, 235, 235);
+      doc.line(10, y + 6, 200, y + 6);
       doc.setTextColor(...navy);
       doc.text(`${item.category}: ${item.product}` || 'Unknown Part', 15, y + 4.5);
       doc.text(String(item.qty || 1), 170, y + 4.5);
