@@ -1880,12 +1880,21 @@ function populateLoginTechOptions() {
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
-  select.innerHTML = `
-    <option value="" disabled selected>— Select your name —</option>
-    ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
-    `).join('')}
-  `;
+  let options = `<option value="" disabled selected>— Select your name —</option>`;
+
+  // Explicitly add Admin first
+  if (auth.users['admin']) {
+    options += `<option value="admin">Chris Mills (Admin)</option>`;
+  }
+
+  // Add the rest of the users, skipping admin since we added it first
+  entries.forEach(([id, user]) => {
+    if (id !== 'admin') {
+      options += `<option value="${id}">${user.name}</option>`;
+    }
+  });
+
+  select.innerHTML = options;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -4192,12 +4201,21 @@ function populateLoginTechOptions() {
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
-  select.innerHTML = `
-    <option value="" disabled selected>— Select your name —</option>
-    ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
-    `).join('')}
-  `;
+  let options = `<option value="" disabled selected>— Select your name —</option>`;
+
+  // Explicitly add Admin first
+  if (auth.users['admin']) {
+    options += `<option value="admin">Chris Mills (Admin)</option>`;
+  }
+
+  // Add the rest of the users, skipping admin since we added it first
+  entries.forEach(([id, user]) => {
+    if (id !== 'admin') {
+      options += `<option value="${id}">${user.name}</option>`;
+    }
+  });
+
+  select.innerHTML = options;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -5851,12 +5869,21 @@ function populateLoginTechOptions() {
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
-  select.innerHTML = `
-    <option value="" disabled selected>— Select your name —</option>
-    ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
-    `).join('')}
-  `;
+  let options = `<option value="" disabled selected>— Select your name —</option>`;
+
+  // Explicitly add Admin first
+  if (auth.users['admin']) {
+    options += `<option value="admin">Chris Mills (Admin)</option>`;
+  }
+
+  // Add the rest of the users, skipping admin since we added it first
+  entries.forEach(([id, user]) => {
+    if (id !== 'admin') {
+      options += `<option value="${id}">${user.name}</option>`;
+    }
+  });
+
+  select.innerHTML = options;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
