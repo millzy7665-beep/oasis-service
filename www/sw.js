@@ -1,4 +1,4 @@
-// KILL SWITCH SERVICE WORKER
+// KILL SWITCH SERVICE WORKER (v2 - Force Update 2024-04-10T12:35:00.000Z)
 // This script wipes all caches and unregisters itself immediately.
 self.addEventListener('install', () => {
   self.skipWaiting();
