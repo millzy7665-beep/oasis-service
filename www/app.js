@@ -227,13 +227,46 @@ class Router {
     return items;
   }
 
+  getVisibleJobs(items = [], technicianField = 'technician') {
+    const currentUser = auth.getCurrentUser();
+    if (!currentUser) return [];
+
+    return currentUser.username === 'admin'
+      ? items
+      : items.filter(item => (item?.[technicianField] || '') === currentUser.name);
+  }
+
+  getDateKey(value = '') {
+    if (!value) return '';
+
+    if (value instanceof Date) {
+      const year = value.getFullYear();
+      const month = String(value.getMonth() + 1).padStart(2, '0');
+      const day = String(value.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value;
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
   renderDashboard() {
     const content = document.getElementById('main-content');
     if (!content) return;
 
     const user = auth.getCurrentUser();
     const userName = user ? user.name : 'Technician';
-    const repairOrders = typeof getRepairOrders === 'function' ? getRepairOrders() : [];
+    const visibleWorkorders = this.getVisibleJobs(db.get('workorders', []), 'technician');
+    const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
 
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 
@@ -247,12 +280,12 @@ class Router {
       <div class="stats-grid">
         <div class="stat-card" onclick="router.navigate('workorders')">
           <div class="stat-icon">🧪</div>
-          <div class="stat-value">${db.get('workorders', []).length}</div>
+          <div class="stat-value">${visibleWorkorders.length}</div>
           <div class="stat-label">Chem Sheets</div>
         </div>
         <div class="stat-card" onclick="router.navigate('workorders')">
           <div class="stat-icon">🛠️</div>
-          <div class="stat-value">${repairOrders.length}</div>
+          <div class="stat-value">${visibleRepairOrders.length}</div>
           <div class="stat-label">Repair Orders</div>
         </div>
         <div class="stat-card" onclick="router.navigate('clients')">
@@ -273,35 +306,54 @@ class Router {
   }
 
   renderTodaySchedule() {
-    const allWorkorders = db.get('workorders', []);
     const currentUser = auth.getCurrentUser();
+    const todayKey = this.getDateKey(new Date());
 
-    // Filter by tech unless admin
-    const workorders = (currentUser && currentUser.username === 'admin')
-      ? allWorkorders
-      : allWorkorders.filter(wo => wo.technician === currentUser.name);
+    const chemJobs = this.getVisibleJobs(db.get('workorders', []), 'technician').map(wo => ({
+      id: wo.id,
+      clientName: wo.clientName || 'Chem Sheet',
+      address: wo.address || '',
+      time: wo.time || wo.timeIn || 'TBD',
+      status: wo.status || 'pending',
+      kind: 'Chem Sheet',
+      openAction: `router.viewWorkOrder('${wo.id}')`,
+      dateKey: this.getDateKey(wo.date)
+    }));
 
-    const today = new Date().toDateString();
-    const todayOrders = workorders.filter(wo => new Date(wo.date).toDateString() === today);
+    const repairJobs = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo').map(order => ({
+      id: order.id,
+      clientName: order.clientName || 'Repair Job',
+      address: order.address || '',
+      time: order.timeIn || order.time || 'TBD',
+      status: order.status || 'open',
+      kind: order.jobType || 'Repair Order',
+      openAction: `renderRepairOrderForm('${order.id}')`,
+      dateKey: this.getDateKey(order.date)
+    }));
 
-    if (todayOrders.length === 0) {
+    const todayJobs = [...chemJobs, ...repairJobs]
+      .filter(job => job.dateKey === todayKey)
+      .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+
+    if (todayJobs.length === 0) {
       return `
-        <div class="empty-state">
-          <div class="empty-icon">📅</div>
-          <div class="empty-title">No jobs today</div>
-          <div class="empty-subtitle">Enjoy your day off!</div>
+        <div class="card" style="margin: 0 16px 12px;">
+          <div class="card-body">
+            <div class="empty-title">No scheduled jobs for today</div>
+            <div class="empty-subtitle">Assigned jobs for ${currentUser?.name || 'this user'} will appear here automatically.</div>
+          </div>
         </div>
       `;
     }
 
-    return todayOrders.map(wo => `
-      <div class="schedule-item">
-        <div class="schedule-time">${wo.time || 'TBD'}</div>
+    return todayJobs.map(job => `
+      <div class="schedule-item" onclick="${job.openAction}" style="cursor:pointer;">
+        <div class="schedule-time">${escapeHtml(job.time || 'TBD')}</div>
         <div class="schedule-info">
-          <div class="schedule-name">${wo.clientName}</div>
-          <div class="schedule-detail">${wo.address}</div>
+          <div class="schedule-name">${escapeHtml(job.clientName)}</div>
+          <div class="schedule-detail">${escapeHtml(job.kind)} • ${escapeHtml(job.address || 'Address TBD')}</div>
         </div>
-        <div class="schedule-dot ${wo.status === 'completed' ? 'completed' : wo.status === 'in-progress' ? 'in-progress' : 'pending'}"></div>
+        <div class="schedule-dot ${(job.status || '').toLowerCase() === 'completed' ? 'completed' : (job.status || '').toLowerCase() === 'in-progress' ? 'in-progress' : 'pending'}"></div>
       </div>
     `).join('');
   }
