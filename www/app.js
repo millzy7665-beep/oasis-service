@@ -3506,14 +3506,6 @@ function openEmailShare(subject = 'OASIS Report', body = '') {
 }
 
 async function shareFile(base64Data, filename, contentType = 'application/octet-stream') {
-  const itemLabel = filename.toLowerCase().endsWith('.xlsx') ? 'bulk Excel file' : 'report';
-  const shareChoice = promptShareChoice(itemLabel);
-
-  if (shareChoice === 'cancel') {
-    showToast('Share cancelled');
-    return;
-  }
-
   const isPdf = filename.toLowerCase().endsWith('.pdf');
   const shareTitle = filename.toLowerCase().endsWith('.xlsx') ? 'OASIS Bulk Export' : 'OASIS Report';
   const shareText = isPdf ? `OASIS PDF attached: ${filename}` : `OASIS file ready: ${filename}`;
@@ -3522,7 +3514,7 @@ async function shareFile(base64Data, filename, contentType = 'application/octet-
     const plugins = (typeof Capacitor !== 'undefined' && Capacitor.Plugins) ? Capacitor.Plugins : {};
     const { Filesystem, Share } = plugins;
 
-    if ((shareChoice === 'whatsapp' || shareChoice === 'email') && Filesystem && Share) {
+    if (Filesystem && Share) {
       const saveResult = await Filesystem.writeFile({
         path: filename,
         data: base64Data,
@@ -3532,37 +3524,42 @@ async function shareFile(base64Data, filename, contentType = 'application/octet-
       await Share.share({
         title: shareTitle,
         text: shareText,
-        url: saveResult.uri,
         files: [saveResult.uri],
-        dialogTitle: shareChoice === 'whatsapp'
-          ? 'Choose WhatsApp to send this file'
-          : 'Choose Email to send this file with the PDF attached'
+        dialogTitle: isPdf
+          ? 'Share the PDF with any app on this device'
+          : 'Share the file with any app on this device'
       });
 
-      showToast(shareChoice === 'whatsapp'
-        ? 'Choose WhatsApp in the share list'
-        : 'Choose Email in the share list — the PDF will be attached');
+      showToast(isPdf ? 'PDF ready to share' : 'File ready to share');
       return;
     }
   } catch (error) {
-    console.warn('Native sharing failed, using browser fallback:', error);
+    console.warn('Native sharing failed, trying web share:', error);
+  }
+
+  try {
+    if (navigator.share && typeof File !== 'undefined' && typeof atob === 'function') {
+      const byteCharacters = atob(base64Data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+
+      const file = new File([new Uint8Array(byteNumbers)], filename, { type: contentType });
+      const shareData = { title: shareTitle, text: shareText, files: [file] };
+
+      if (!navigator.canShare || navigator.canShare(shareData)) {
+        await navigator.share(shareData);
+        showToast(isPdf ? 'PDF ready to share' : 'File ready to share');
+        return;
+      }
+    }
+  } catch (error) {
+    console.warn('Web share failed, falling back to download:', error);
   }
 
   downloadBase64File(base64Data, filename, contentType);
-
-  if (shareChoice === 'whatsapp') {
-    openWhatsAppShare(`${shareText}\n\nAttach the downloaded file if needed.`);
-    showToast('WhatsApp opened with the file downloaded');
-    return;
-  }
-
-  if (shareChoice === 'email') {
-    openEmailShare(shareTitle, `${shareText}\n\nAttach the downloaded file if needed.`);
-    showToast('Email draft opened with the file downloaded');
-    return;
-  }
-
-  showToast('File downloaded to device');
+  showToast(isPdf ? 'PDF downloaded to device' : 'File downloaded to device');
 }
 
 async function sharePDF(doc, filename) {
