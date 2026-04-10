@@ -1320,9 +1320,11 @@ class WorkOrderManager {
       }
 
       doc.setTextColor(255, 255, 255);
-      doc.setFont('times', 'bold');
-      doc.setFontSize(22);
-      doc.text('O A S I S', 32, 17);
+      doc.setFont('helvetica', 'normal');
+      doc.setCharSpace(1.6);
+      doc.setFontSize(18);
+      doc.text('OASIS', 32, 16.5);
+      doc.setCharSpace(0);
 
       doc.setFontSize(12);
       doc.setFont('helvetica', 'bold');
@@ -1347,9 +1349,11 @@ class WorkOrderManager {
       }
 
       doc.setTextColor(255, 255, 255);
-      doc.setFontSize(12);
-      doc.setFont('times', 'bold');
-      doc.text('O A S I S', 30, footerY + 12);
+      doc.setFont('helvetica', 'normal');
+      doc.setCharSpace(1.4);
+      doc.setFontSize(10.5);
+      doc.text('OASIS', 30, footerY + 11.5);
+      doc.setCharSpace(0);
 
       doc.setFontSize(7);
       doc.setFont('helvetica', 'normal');
@@ -1365,9 +1369,10 @@ class WorkOrderManager {
     let y = renderHeader();
 
     // Info Grid
+    doc.setFillColor(255, 255, 255);
     doc.setDrawColor(225, 225, 225);
     doc.setLineWidth(0.4);
-    doc.roundedRect(10, y, 190, 22, 2, 2, 'S');
+    doc.roundedRect(10, y, 190, 22, 2, 2, 'FD');
 
     let gridY = y + 7;
     const col1 = 15;
@@ -2852,9 +2857,10 @@ async function shareRepairPDF(orderId) {
   y = renderHeader();
 
   // Info Grid
+  doc.setFillColor(255, 255, 255);
   doc.setDrawColor(225, 225, 225);
   doc.setLineWidth(0.4);
-  doc.roundedRect(10, y, 190, 42, 2, 2, 'S');
+  doc.roundedRect(10, y, 190, 42, 2, 2, 'FD');
 
   let gridY = y + 7;
   const col1 = 15;
@@ -3645,9 +3651,11 @@ function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATERSHAPE 
 
   // Logo Placeholder / Text
   doc.setTextColor(...white);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
-  doc.text('O A S I S', 45, 18);
+  doc.setFont('helvetica', 'normal');
+  doc.setCharSpace(1.8);
+  doc.setFontSize(18);
+  doc.text('OASIS', 45, 18);
+  doc.setCharSpace(0);
 
   // Title
   doc.setFontSize(14);
@@ -3670,9 +3678,11 @@ function applyOasisPdfFooter(doc) {
   doc.rect(0, y, 210, 22, 'F');
 
   doc.setTextColor(...white);
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text('O A S I S', 40, y + 10);
+  doc.setFont('helvetica', 'normal');
+  doc.setCharSpace(1.5);
+  doc.setFontSize(11);
+  doc.text('OASIS', 40, y + 10);
+  doc.setCharSpace(0);
   doc.setFontSize(7);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(150, 150, 150);
@@ -5290,9 +5300,10 @@ async function shareRepairPDF(orderId) {
   y = renderHeader();
 
   // Info Grid
+  doc.setFillColor(255, 255, 255);
   doc.setDrawColor(225, 225, 225);
   doc.setLineWidth(0.4);
-  doc.roundedRect(10, y, 190, 42, 2, 2, 'S');
+  doc.roundedRect(10, y, 190, 42, 2, 2, 'FD');
 
   let gridY = y + 7;
   const col1 = 15;
