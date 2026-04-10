@@ -46,12 +46,15 @@ class DB {
               this.storage.setItem(key, newValStr);
               requiresReRender = true;
 
-              // Notify admin of new chem sheets if logged in
-              if (key === 'workorders' && typeof auth !== 'undefined' && auth.isAdmin()) {
-                if (currentVal && currentVal.length < data[key].length) {
-                  const latest = data[key][data[key].length - 1];
+              // Notify admin of completed chem sheets or repair orders if logged in
+              if ((key === 'workorders' || key === 'repairOrders') && typeof auth !== 'undefined' && auth.isAdmin()) {
+                const typeName = key === 'workorders' ? 'Chem Sheet' : 'Repair Order';
+                const oldCompleted = (currentVal || []).filter(o => o.status === 'completed').length;
+                const newCompleted = (data[key] || []).filter(o => o.status === 'completed').length;
+                if (newCompleted > oldCompleted) {
+                  const latest = data[key].filter(o => o.status === 'completed').pop();
                   if (typeof showToast === 'function') {
-                    showToast(`New Chem Sheet saved for ${latest.clientName}!`);
+                    showToast(`Completed ${typeName} saved for ${latest.clientName || 'Client'}!`);
                   }
                 }
               }
@@ -320,7 +323,7 @@ class Router {
     const currentUser = auth.getCurrentUser();
 
     // Filter by tech unless admin
-    const workorders = (currentUser && currentUser.username === 'admin')
+    const workorders = (auth.isAdmin())
       ? allWorkorders
       : allWorkorders.filter(wo => wo.technician === currentUser.name);
 
@@ -494,7 +497,7 @@ class Router {
     const canShare = auth.canShare();
 
     // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-    const workorders = (currentUser && currentUser.username === 'admin')
+    const workorders = (auth.isAdmin())
       ? allWorkorders
       : allWorkorders.filter(wo => wo.technician === currentUser.name);
 
@@ -2127,7 +2130,7 @@ function renderRepairOrdersList() {
   const canShare = auth.canShare();
 
   // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  const orders = (currentUser && currentUser.username === 'admin')
+  const orders = (auth.isAdmin())
     ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
@@ -4436,7 +4439,7 @@ function renderRepairOrdersList() {
   const canShare = auth.canShare();
 
   // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  const orders = (currentUser && currentUser.username === 'admin')
+  const orders = (auth.isAdmin())
     ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
