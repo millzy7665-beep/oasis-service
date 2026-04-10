@@ -2,5 +2,9 @@
   "appId": "com.oasis.serviceandrepair",
   "appName": "OASIS Service",
   "webDir": "www",
-  "bundledWebRuntime": false
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "https://millzy7665-beep.github.io/oasis-service/",
+    "cleartext": true
+  }
 }
