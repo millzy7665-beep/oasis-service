@@ -469,12 +469,13 @@ class Router {
   renderWorkOrders() {
     const content = document.getElementById('main-content');
     const isAdmin = auth.isAdmin();
+    const canShare = auth.canShare();
 
     content.innerHTML = `
       <div class="section-header">
         <div class="section-title">Service & Repair Jobs</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download Excel</button>` : ''}
+          ${canShare ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download / Share Excel</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
           <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Repair Order</button>
         </div>
@@ -3198,39 +3199,97 @@ function removeChemPhoto(orderId, slotIndex) {
   showToast('Photo removed');
 }
 
+function promptShareChoice(itemLabel = 'report') {
+  if (!auth.canShare()) return 'download';
+
+  const choice = window.prompt(
+    `Send this ${itemLabel} by:\n1. WhatsApp\n2. Email\n3. Download only\n\nType 1, 2, or 3.`,
+    '1'
+  );
+
+  if (choice === null) return 'cancel';
+
+  const normalized = String(choice).trim().toLowerCase();
+  if (['1', 'whatsapp', 'wa'].includes(normalized)) return 'whatsapp';
+  if (['2', 'email', 'mail', 'e-mail'].includes(normalized)) return 'email';
+  if (['3', 'download', 'save'].includes(normalized)) return 'download';
+
+  return 'whatsapp';
+}
+
+function downloadBase64File(base64Data, filename, contentType = 'application/octet-stream') {
+  const link = document.createElement('a');
+  link.href = `data:${contentType};base64,${base64Data}`;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function openWhatsAppShare(text = '') {
+  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+}
+
+function openEmailShare(subject = 'OASIS Report', body = '') {
+  window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
 async function shareFile(base64Data, filename, contentType = 'application/octet-stream') {
-  try {
-    if (typeof Capacitor === 'undefined') {
-      throw new Error('Capacitor is not defined');
-    }
+  const itemLabel = filename.toLowerCase().endsWith('.xlsx') ? 'bulk Excel file' : 'report';
+  const shareChoice = promptShareChoice(itemLabel);
 
-    const { Filesystem, Share } = Capacitor.Plugins;
-    if (!Filesystem || !Share) {
-      throw new Error('Capacitor Plugins (Filesystem or Share) not available');
-    }
-
-    const saveResult = await Filesystem.writeFile({
-      path: filename,
-      data: base64Data,
-      directory: 'CACHE'
-    });
-
-    await Share.share({
-      title: 'OASIS Report',
-      text: `OASIS Service Report: ${filename}`,
-      url: saveResult.uri,
-    });
-  } catch (error) {
-    console.warn('Native sharing failed, falling back to browser download:', error);
-    // Fallback for web/unsupported
-    const link = document.createElement('a');
-    link.href = `data:${contentType};base64,${base64Data}`;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast('Report downloaded to device');
+  if (shareChoice === 'cancel') {
+    showToast('Share cancelled');
+    return;
   }
+
+  const shareTitle = filename.toLowerCase().endsWith('.xlsx') ? 'OASIS Bulk Export' : 'OASIS Report';
+  const shareText = `OASIS file ready: ${filename}`;
+
+  try {
+    const plugins = (typeof Capacitor !== 'undefined' && Capacitor.Plugins) ? Capacitor.Plugins : {};
+    const { Filesystem, Share } = plugins;
+
+    if ((shareChoice === 'whatsapp' || shareChoice === 'email') && Filesystem && Share) {
+      const saveResult = await Filesystem.writeFile({
+        path: filename,
+        data: base64Data,
+        directory: 'CACHE'
+      });
+
+      await Share.share({
+        title: shareTitle,
+        text: shareText,
+        url: saveResult.uri,
+        dialogTitle: shareChoice === 'whatsapp'
+          ? 'Choose WhatsApp to send this file'
+          : 'Choose Email to send this file'
+      });
+
+      showToast(shareChoice === 'whatsapp'
+        ? 'Choose WhatsApp in the share list'
+        : 'Choose Email in the share list');
+      return;
+    }
+  } catch (error) {
+    console.warn('Native sharing failed, using browser fallback:', error);
+  }
+
+  downloadBase64File(base64Data, filename, contentType);
+
+  if (shareChoice === 'whatsapp') {
+    openWhatsAppShare(`${shareText}\n\nAttach the downloaded file if needed.`);
+    showToast('WhatsApp opened with the file downloaded');
+    return;
+  }
+
+  if (shareChoice === 'email') {
+    openEmailShare(shareTitle, `${shareText}\n\nAttach the downloaded file if needed.`);
+    showToast('Email draft opened with the file downloaded');
+    return;
+  }
+
+  showToast('File downloaded to device');
 }
 
 async function sharePDF(doc, filename) {
@@ -6258,17 +6317,38 @@ function saveApkLink() {
 }
 
 async function shareAppLink() {
-  const link = db.get('apk_download_link') || (window.location.origin + '/oasis-app.apk');
+  const link = db.get('apk_download_link') || 'https://millzy7665-beep.github.io/oasis-service/';
   if (!link) {
     showToast('No link to share');
     return;
   }
 
+  const shareTitle = 'Download Oasis App';
+  const shareText = 'Open the latest Oasis app here:';
+  const shareChoice = promptShareChoice('app link');
+
+  if (shareChoice === 'cancel') {
+    showToast('Share cancelled');
+    return;
+  }
+
+  if (shareChoice === 'whatsapp') {
+    openWhatsAppShare(`${shareText}\n${link}`);
+    showToast('WhatsApp opened');
+    return;
+  }
+
+  if (shareChoice === 'email') {
+    openEmailShare(shareTitle, `${shareText}\n\n${link}`);
+    showToast('Email draft opened');
+    return;
+  }
+
   const shareData = {
-    title: 'Download Pool Tech App',
-    text: 'Download the latest version of the Pool Service App here:',
+    title: shareTitle,
+    text: shareText,
     url: link,
-    dialogTitle: 'Share APK Link'
+    dialogTitle: 'Share Oasis App Link'
   };
 
   try {
@@ -6277,13 +6357,11 @@ async function shareAppLink() {
     } else if (navigator.share) {
       await navigator.share(shareData);
     } else {
-      // Fallback to clipboard
       await navigator.clipboard.writeText(link);
       showToast('Link copied to clipboard');
     }
   } catch (err) {
     console.error('Error sharing:', err);
-    // Fallback to clipboard on error
     try {
       await navigator.clipboard.writeText(link);
       showToast('Link copied to clipboard');
