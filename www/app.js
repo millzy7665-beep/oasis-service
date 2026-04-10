@@ -213,11 +213,13 @@ class Router {
     const userName = user ? user.name : 'Technician';
     const repairOrders = typeof getRepairOrders === 'function' ? getRepairOrders() : [];
 
+    const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
     content.innerHTML = `
       <div class="wave-banner">
         <div class="wave-banner-eyebrow">Welcome back</div>
         <div class="wave-banner-title">${userName}</div>
-        <div class="wave-banner-sub">Ready for today's service and repair jobs</div>
+        <div class="wave-banner-sub">Ready for today's service and repair jobs • ${todayStr}</div>
       </div>
 
       <div class="stats-grid">
