@@ -626,6 +626,10 @@ class Router {
       ? allClients.filter(c => c.serviceDays && c.serviceDays.includes(todayDay))
       : allClients.filter(c => c.technician === userName && c.serviceDays && c.serviceDays.includes(todayDay));
 
+    // Total assigned clients for this tech
+    const myTotalClients = isAdmin ? allClients.length : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
+    const isFieldTech = !isAdmin && user && user.name !== 'Jet' && user.name !== 'Mark';
+
     content.innerHTML = `
       <div class="wave-banner">
         <div class="wave-banner-eyebrow">Welcome back</div>
@@ -637,18 +641,20 @@ class Router {
         <div class="stat-card" onclick="router.navigate('routes')">
           <div class="stat-icon">🗺️</div>
           <div class="stat-value">${myRouteClients.length}</div>
-          <div class="stat-label">Today's Stops</div>
+          <div class="stat-label">Today's Visits</div>
         </div>
-        <div class="stat-card" onclick="router.navigate('workorders')">
-          <div class="stat-icon">🧪</div>
-          <div class="stat-value">${visibleWorkorders.length}</div>
-          <div class="stat-label">Chem Sheets</div>
+        <div class="stat-card" onclick="router.navigate('clients')">
+          <div class="stat-icon">👥</div>
+          <div class="stat-value">${myTotalClients}</div>
+          <div class="stat-label">Total Visits</div>
         </div>
+        ${isFieldTech ? '' : `
         <div class="stat-card" onclick="router.navigate('workorders')">
           <div class="stat-icon">🛠️</div>
           <div class="stat-value">${visibleRepairOrders.length}</div>
           <div class="stat-label">Repair Orders</div>
         </div>
+        `}
       </div>
 
       <div class="section-header">
