@@ -3,72 +3,11 @@
 // PDF generation with local save instead of email
 
 // ==========================================
-// FIREBASE & DATA MANAGEMENT (DB)
+// DATA MANAGEMENT (DB)
 // ==========================================
-const firebaseConfig = {
-  apiKey: "AIzaSyAo3vP7Myf08Q8KqoFlcgGNOZp2mX2R-38",
-  authDomain: "oasis-service-app-69def.firebaseapp.com",
-  projectId: "oasis-service-app-69def",
-  storageBucket: "oasis-service-app-69def.firebasestorage.app",
-  messagingSenderId: "156557428291",
-  appId: "1:156557428291:web:243524f03403d05c65f6f6",
-  measurementId: "G-THQ9YGZ0B5"
-};
-
-// Initialize Firebase if not already initialized
-if (typeof firebase !== 'undefined' && !firebase.apps.length) {
-  firebase.initializeApp(firebaseConfig);
-}
-const firestore = typeof firebase !== 'undefined' ? firebase.firestore() : null;
-
 class DB {
   constructor() {
     this.storage = window.localStorage;
-    this.syncKeys = ['workorders', 'clients', 'repairOrders', 'apk_download_link'];
-    this.isSyncing = false;
-    this.initFirebaseSync();
-  }
-
-  initFirebaseSync() {
-    if (!firestore) return;
-
-    firestore.collection('app_data').doc('shared_state').onSnapshot((doc) => {
-      if (doc.exists) {
-        const data = doc.data();
-        this.isSyncing = true;
-        let requiresReRender = false;
-
-        for (const key of this.syncKeys) {
-          if (data[key] !== undefined) {
-            const currentVal = this.get(key);
-            const newValStr = JSON.stringify(data[key]);
-            if (JSON.stringify(currentVal) !== newValStr) {
-              this.storage.setItem(key, newValStr);
-              requiresReRender = true;
-
-              // Notify admin of completed chem sheets or repair orders if logged in
-              if ((key === 'workorders' || key === 'repairOrders') && typeof auth !== 'undefined' && auth.isAdmin()) {
-                const typeName = key === 'workorders' ? 'Chem Sheet' : 'Repair Order';
-                const oldCompleted = (currentVal || []).filter(o => o.status === 'completed').length;
-                const newCompleted = (data[key] || []).filter(o => o.status === 'completed').length;
-                if (newCompleted > oldCompleted) {
-                  const latest = data[key].filter(o => o.status === 'completed').pop();
-                  if (typeof showToast === 'function') {
-                    showToast(`Completed ${typeName} saved for ${latest.clientName || 'Client'}!`);
-                  }
-                }
-              }
-            }
-          }
-        }
-        this.isSyncing = false;
-
-        // Re-render UI to show new sync data
-        if (requiresReRender && typeof router !== 'undefined' && router.currentView) {
-          router.navigate(router.currentView, false);
-        }
-      }
-    });
   }
 
   get(key, defaultValue = null) {
@@ -83,13 +22,6 @@ class DB {
   set(key, value) {
     try {
       this.storage.setItem(key, JSON.stringify(value));
-
-      // Push to cloud if it's a shared key and we aren't currently receiving a sync
-      if (!this.isSyncing && this.syncKeys.includes(key) && firestore) {
-         firestore.collection('app_data').doc('shared_state').set({
-           [key]: value
-         }, { merge: true }).catch(err => console.error("Firebase sync error:", err));
-      }
       return true;
     } catch (e) {
       return false;
@@ -124,7 +56,8 @@ class Auth {
       't8': { role: 'technician', name: 'Malik' },
       't9': { role: 'technician', name: 'Jet' },
       't10': { role: 'technician', name: 'Mark' },
-      'admin': { role: 'admin', name: 'Chris Mills' }
+      'admin': { role: 'admin', name: 'Chris Mills' },
+      'admin2': { role: 'admin', name: 'James Bussey' }
     };
   }
 
@@ -181,7 +114,7 @@ class Auth {
     const user = this.getCurrentUser();
     if (!user) return false;
     // Chris (admin), Jet (t9), Mark (t10)
-    return user.username === 'admin' || user.username === 't9' || user.username === 't10';
+    return user.role === 'admin' || user.username === 't9' || user.username === 't10';
   }
 }
 
@@ -219,6 +152,257 @@ class Modal {
 
 const modal = new Modal();
 
+class NotificationManager {
+  constructor() {
+    this.storageKey = 'oasis_notifications';
+  }
+
+  getAll() {
+    return db.get(this.storageKey, []);
+  }
+
+  saveAll(items = []) {
+    db.set(this.storageKey, items.slice(0, 250));
+  }
+
+  getForUser(user = auth.getCurrentUser()) {
+    const userName = user?.name || '';
+    return this.getAll().filter(item => item.recipient === userName || item.recipient === 'all');
+  }
+
+  getUnreadForUser(user = auth.getCurrentUser()) {
+    return this.getForUser(user).filter(item => !item.read);
+  }
+
+  async requestPermission() {
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        await Notification.requestPermission();
+      }
+    } catch (error) {
+      console.warn('Browser notification permission request failed', error);
+    }
+
+    try {
+      const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
+      if (localNotifications?.requestPermissions) {
+        await localNotifications.requestPermissions();
+      }
+    } catch (error) {
+      console.warn('Local notification permission request failed', error);
+    }
+  }
+
+  async presentLiveNotification(item) {
+    const currentUser = auth.getCurrentUser();
+    if (!currentUser || item.recipient !== currentUser.name) return;
+
+    try {
+      const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
+      if (localNotifications?.schedule) {
+        await localNotifications.schedule({
+          notifications: [{
+            id: Number(String(Date.now()).slice(-8)),
+            title: item.title,
+            body: item.message,
+            schedule: { at: new Date(Date.now() + 500) }
+          }]
+        });
+        return;
+      }
+    } catch (error) {
+      console.warn('Capacitor local notification failed', error);
+    }
+
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        new Notification(item.title, { body: item.message });
+        return;
+      }
+    } catch (error) {
+      console.warn('Browser notification failed', error);
+    }
+
+    showToast(item.title);
+  }
+
+  async create({ type = 'update', title = 'New update', message = '', recipients = [], targetView = '', targetId = '', actionLabel = 'Open' }) {
+    const list = this.getAll();
+    const createdAt = new Date().toISOString();
+    const targetRecipients = [...new Set((Array.isArray(recipients) ? recipients : [recipients]).filter(Boolean))];
+
+    for (const recipient of targetRecipients) {
+      const item = {
+        id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        type,
+        title,
+        message,
+        recipient,
+        createdAt,
+        targetView,
+        targetId,
+        actionLabel,
+        read: false
+      };
+
+      list.unshift(item);
+      await this.presentLiveNotification(item);
+    }
+
+    this.saveAll(list);
+  }
+
+  markRead(noteId, user = auth.getCurrentUser()) {
+    const userName = user?.name || '';
+    let updatedNote = null;
+
+    const updated = this.getAll().map(item => {
+      if (item.id === noteId && (!userName || item.recipient === userName || item.recipient === 'all')) {
+        updatedNote = { ...item, read: true };
+        return updatedNote;
+      }
+      return item;
+    });
+
+    this.saveAll(updated);
+    return updatedNote;
+  }
+
+  markAllRead(user = auth.getCurrentUser()) {
+    const userName = user?.name || '';
+    const updated = this.getAll().map(item => (
+      item.recipient === userName ? { ...item, read: true } : item
+    ));
+    this.saveAll(updated);
+  }
+
+  showUnreadToast(user = auth.getCurrentUser()) {
+    const unreadCount = this.getUnreadForUser(user).length;
+    if (unreadCount) {
+      showToast(`${unreadCount} new notification${unreadCount === 1 ? '' : 's'}`);
+    }
+  }
+
+  renderDashboardPanel() {
+    const notes = this.getUnreadForUser().slice(0, 4);
+
+    if (!notes.length) {
+      return `
+        <div class="card" style="margin: 0 16px 12px;">
+          <div class="card-body">
+            <div class="empty-title">No new notifications</div>
+            <div class="empty-subtitle">New clients, chem sheets, and repair orders from Admin will appear here offline on this device.</div>
+          </div>
+        </div>
+      `;
+    }
+
+    const iconMap = {
+      client: '👥',
+      chem: '🧪',
+      repair: '🛠️',
+      update: '🔔'
+    };
+
+    return `
+      <div class="card" style="margin: 0 16px 12px;">
+        <div class="card-body">
+          ${notes.map(note => {
+            const stamp = note.createdAt
+              ? new Date(note.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+              : '';
+
+            return `
+              <div class="detail-row" style="align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid var(--gray-200);">
+                <div style="font-size:18px; line-height:1;">${iconMap[note.type] || '🔔'}</div>
+                <div style="flex:1;">
+                  <div class="detail-value" style="font-weight:700;">${escapeHtml(note.title || 'Update')}</div>
+                  <div class="detail-label" style="margin-top:3px;">${escapeHtml(note.message || '')}</div>
+                  <div class="detail-label" style="margin-top:4px; font-size:11px;">${escapeHtml(stamp)}</div>
+                  <div style="margin-top:8px;">
+                    <button class="btn btn-secondary btn-sm" onclick="openNotificationItem('${note.id}')">${escapeHtml(note.actionLabel || 'Acknowledge')}</button>
+                  </div>
+                </div>
+                <span class="badge badge-pending">New</span>
+              </div>
+            `;
+          }).join('')}
+          <div style="margin-top:10px;">
+            <button class="btn btn-secondary btn-sm" onclick="markNotificationsRead()">Clear All Notifications</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+}
+
+const notificationManager = new NotificationManager();
+
+function getAdminNames() {
+  return Object.values(auth.users)
+    .filter(user => user.role === 'admin')
+    .map(user => user.name)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function getAdminName() {
+  return getAdminNames()[0] || 'Chris Mills';
+}
+
+function getAdminRecipients(excludeName = '') {
+  return getAdminNames().filter(name => name && name !== excludeName);
+}
+
+function getTechnicianNames() {
+  return Object.values(auth.users)
+    .filter(user => user.role === 'technician')
+    .map(user => user.name)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function normalizeTechnicianName(name = '') {
+  const value = String(name || '').trim();
+  if (!value) return '';
+
+  const match = getTechnicianNames().find(item => item.toLowerCase() === value.toLowerCase());
+  return match || value;
+}
+
+function markNotificationsRead() {
+  notificationManager.markAllRead();
+  showToast('Notifications cleared');
+  if (router.currentView === 'dashboard') {
+    router.renderDashboard();
+  }
+}
+
+function openNotificationItem(noteId) {
+  const note = notificationManager.markRead(noteId);
+  if (!note) return;
+
+  if (note.targetView === 'chem' && note.targetId) {
+    router.viewWorkOrder(note.targetId);
+    return;
+  }
+
+  if (note.targetView === 'repair' && note.targetId) {
+    renderRepairOrderForm(note.targetId);
+    return;
+  }
+
+  if (note.targetView === 'clients') {
+    router.renderClients();
+    return;
+  }
+
+  if (note.targetView === 'workorders') {
+    router.renderWorkOrders();
+    return;
+  }
+
+  router.renderDashboard();
+}
+
 // ==========================================
 // ROUTER
 // ==========================================
@@ -229,11 +413,11 @@ class Router {
       'routes': this.renderRoutes.bind(this),
       'clients': this.renderClients.bind(this),
       'workorders': this.renderWorkOrders.bind(this),
-      'settings': this.renderSettings.bind(this),
-      'completed_jobs': this.renderCompletedJobs.bind(this)
+      'settings': this.renderSettings.bind(this)
     };
     this.currentView = 'dashboard';
     this.history = ['dashboard'];
+    this.adminJobStatusFilter = 'all';
   }
 
   navigate(view, pushHistory = true) {
@@ -274,13 +458,73 @@ class Router {
     });
   }
 
+  setAdminJobStatusFilter(value = 'all') {
+    this.adminJobStatusFilter = value || 'all';
+    if (this.currentView === 'workorders') {
+      this.renderWorkOrders();
+    }
+  }
+
+  applyStatusFilter(items = []) {
+    const filter = this.adminJobStatusFilter || 'all';
+
+    if (filter === 'completed') {
+      return items.filter(item => (item.status || '').toLowerCase() === 'completed');
+    }
+
+    if (filter === 'pending') {
+      return items.filter(item => (item.status || '').toLowerCase() !== 'completed');
+    }
+
+    return items;
+  }
+
+  getVisibleJobs(items = [], technicianField = 'technician') {
+    const currentUser = auth.getCurrentUser();
+    if (!currentUser) return [];
+
+    return currentUser.role === 'admin'
+      ? items
+      : items.filter(item => (item?.[technicianField] || '') === currentUser.name);
+  }
+
+  getDateKey(value = '') {
+    if (!value) return '';
+
+    if (value instanceof Date) {
+      const year = value.getFullYear();
+      const month = String(value.getMonth() + 1).padStart(2, '0');
+      const day = String(value.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value;
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
   renderDashboard() {
     const content = document.getElementById('main-content');
     if (!content) return;
 
     const user = auth.getCurrentUser();
     const userName = user ? user.name : 'Technician';
-    const repairOrders = typeof getRepairOrders === 'function' ? getRepairOrders() : [];
+    const visibleWorkorders = this.getVisibleJobs(db.get('workorders', []), 'technician');
+    const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
+    const unreadNotifications = notificationManager.getUnreadForUser(user).length;
+
+    notificationManager.requestPermission();
+    if (unreadNotifications) {
+      setTimeout(() => notificationManager.showUnreadToast(user), 150);
+    }
 
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 
@@ -294,12 +538,12 @@ class Router {
       <div class="stats-grid">
         <div class="stat-card" onclick="router.navigate('workorders')">
           <div class="stat-icon">🧪</div>
-          <div class="stat-value">${db.get('workorders', []).length}</div>
+          <div class="stat-value">${visibleWorkorders.length}</div>
           <div class="stat-label">Chem Sheets</div>
         </div>
         <div class="stat-card" onclick="router.navigate('workorders')">
           <div class="stat-icon">🛠️</div>
-          <div class="stat-value">${repairOrders.length}</div>
+          <div class="stat-value">${visibleRepairOrders.length}</div>
           <div class="stat-label">Repair Orders</div>
         </div>
         <div class="stat-card" onclick="router.navigate('clients')">
@@ -307,6 +551,14 @@ class Router {
           <div class="stat-value">${db.get('clients', []).length}</div>
           <div class="stat-label">Clients</div>
         </div>
+      </div>
+
+      <div class="section-header">
+        <div class="section-title">Notifications${unreadNotifications ? ` (${unreadNotifications} new)` : ''}</div>
+      </div>
+
+      <div id="dashboard-notifications">
+        ${notificationManager.renderDashboardPanel()}
       </div>
 
       <div class="section-header">
@@ -320,35 +572,54 @@ class Router {
   }
 
   renderTodaySchedule() {
-    const allWorkorders = db.get('workorders', []);
     const currentUser = auth.getCurrentUser();
+    const todayKey = this.getDateKey(new Date());
 
-    // Filter by tech unless admin
-    const workorders = (auth.isAdmin())
-      ? allWorkorders
-      : allWorkorders.filter(wo => wo.technician === currentUser.name);
+    const chemJobs = this.getVisibleJobs(db.get('workorders', []), 'technician').map(wo => ({
+      id: wo.id,
+      clientName: wo.clientName || 'Chem Sheet',
+      address: wo.address || '',
+      time: wo.time || wo.timeIn || 'TBD',
+      status: wo.status || 'pending',
+      kind: 'Chem Sheet',
+      openAction: `router.viewWorkOrder('${wo.id}')`,
+      dateKey: this.getDateKey(wo.date)
+    }));
 
-    const today = new Date().toDateString();
-    const todayOrders = workorders.filter(wo => new Date(wo.date).toDateString() === today);
+    const repairJobs = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo').map(order => ({
+      id: order.id,
+      clientName: order.clientName || 'Repair Job',
+      address: order.address || '',
+      time: order.timeIn || order.time || 'TBD',
+      status: order.status || 'open',
+      kind: order.jobType || 'Repair Order',
+      openAction: `renderRepairOrderForm('${order.id}')`,
+      dateKey: this.getDateKey(order.date)
+    }));
 
-    if (todayOrders.length === 0) {
+    const todayJobs = [...chemJobs, ...repairJobs]
+      .filter(job => job.dateKey === todayKey)
+      .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+
+    if (todayJobs.length === 0) {
       return `
-        <div class="empty-state">
-          <div class="empty-icon">📅</div>
-          <div class="empty-title">No jobs today</div>
-          <div class="empty-subtitle">Enjoy your day off!</div>
+        <div class="card" style="margin: 0 16px 12px;">
+          <div class="card-body">
+            <div class="empty-title">No scheduled jobs for today</div>
+            <div class="empty-subtitle">Assigned jobs for ${currentUser?.name || 'this user'} will appear here automatically.</div>
+          </div>
         </div>
       `;
     }
 
-    return todayOrders.map(wo => `
-      <div class="schedule-item">
-        <div class="schedule-time">${wo.time || 'TBD'}</div>
+    return todayJobs.map(job => `
+      <div class="schedule-item" onclick="${job.openAction}" style="cursor:pointer;">
+        <div class="schedule-time">${escapeHtml(job.time || 'TBD')}</div>
         <div class="schedule-info">
-          <div class="schedule-name">${wo.clientName}</div>
-          <div class="schedule-detail">${wo.address}</div>
+          <div class="schedule-name">${escapeHtml(job.clientName)}</div>
+          <div class="schedule-detail">${escapeHtml(job.kind)} • ${escapeHtml(job.address || 'Address TBD')}</div>
         </div>
-        <div class="schedule-dot ${wo.status === 'completed' ? 'completed' : wo.status === 'in-progress' ? 'in-progress' : 'pending'}"></div>
+        <div class="schedule-dot ${(job.status || '').toLowerCase() === 'completed' ? 'completed' : (job.status || '').toLowerCase() === 'in-progress' ? 'in-progress' : 'pending'}"></div>
       </div>
     `).join('');
   }
@@ -397,7 +668,7 @@ class Router {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
-    const isMainAdmin = user && user.username === 'admin';
+    const isMainAdmin = user && user.role === 'admin';
 
     content.innerHTML = `
       <div class="section-header">
@@ -427,13 +698,17 @@ class Router {
   renderClientsList(query = '') {
     const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
+    const currentUser = auth.getCurrentUser();
+    const scopedClients = isAdmin
+      ? allClients
+      : allClients.filter(client => (client.technician || '') === (currentUser?.name || ''));
 
     const clients = query
-      ? allClients.filter(c =>
+      ? scopedClients.filter(c =>
           c.name.toLowerCase().includes(query.toLowerCase()) ||
           c.address.toLowerCase().includes(query.toLowerCase())
         )
-      : allClients;
+      : scopedClients;
 
     if (clients.length === 0) {
       return `
@@ -464,17 +739,33 @@ class Router {
   renderWorkOrders() {
     const content = document.getElementById('main-content');
     const isAdmin = auth.isAdmin();
+    const canShare = auth.canShare();
 
     content.innerHTML = `
       <div class="section-header">
         <div class="section-title">Service & Repair Jobs</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Download Completed Orders</button>
-          <button class="btn btn-secondary btn-sm" onclick="router.navigate(\'completed_jobs\')">🔍 Search Completed Jobs</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download Excel</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
           <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Repair Order</button>
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.createEstimate()">+ Estimate Sheet</button>` : ''}
         </div>
       </div>
+
+      ${isAdmin ? `
+      <div class="card" style="margin: 0 16px 12px;">
+        <div class="card-body">
+          <div class="form-row" style="margin-bottom:0;">
+            <label for="admin-job-status-filter">Filter jobs by status</label>
+            <select id="admin-job-status-filter" onchange="router.setAdminJobStatusFilter(this.value)">
+              <option value="all" ${this.adminJobStatusFilter === 'all' ? 'selected' : ''}>All jobs</option>
+              <option value="pending" ${this.adminJobStatusFilter === 'pending' ? 'selected' : ''}>Pending / Open</option>
+              <option value="completed" ${this.adminJobStatusFilter === 'completed' ? 'selected' : ''}>Completed only</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      ` : ''}
 
       <div id="workorders-list">
         ${this.renderWorkOrdersList()}
@@ -486,9 +777,21 @@ class Router {
 
       <div class="card">
         <div class="card-body">
-          ${renderRepairOrdersList()}
+          ${renderRepairOrdersList(this.adminJobStatusFilter)}
         </div>
       </div>
+
+      ${isAdmin ? `
+      <div class="section-header" style="margin-top:10px">
+        <div class="section-title">Client Estimates</div>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          ${renderEstimateList()}
+        </div>
+      </div>
+      ` : ''}
     `;
   }
 
@@ -498,47 +801,32 @@ class Router {
     const isAdmin = auth.isAdmin();
     const canShare = auth.canShare();
 
-    // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-    const workorders = (auth.isAdmin())
+    let workorders = (currentUser && currentUser.role === 'admin')
       ? allWorkorders
       : allWorkorders.filter(wo => wo.technician === currentUser.name);
 
+    if (isAdmin) {
+      workorders = this.applyStatusFilter(workorders);
+    }
+
     if (workorders.length === 0) {
+      const emptyTitle = isAdmin && this.adminJobStatusFilter === 'completed'
+        ? 'No completed jobs found'
+        : isAdmin && this.adminJobStatusFilter === 'pending'
+          ? 'No pending or open jobs found'
+          : 'No jobs found';
+
       return `
         <div class="empty-state">
           <div class="empty-icon">🧪</div>
-          <div class="empty-title">No jobs found</div>
-          <div class="empty-subtitle">${isAdmin ? 'No active jobs' : 'Check back later for your assigned jobs'}</div>
+          <div class="empty-title">${emptyTitle}</div>
+          <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a new job' : 'Check back later for your assigned jobs'}</div>
         </div>
       `;
     }
 
-    if (isAdmin) {
-      // Grouping logic for Admin (Chris)
-      const techs = [...new Set(workorders.map(wo => wo.technician || 'Unassigned'))].sort();
-
-      return techs.map(tech => {
-        const techJobs = workorders.filter(wo => (wo.technician || 'Unassigned') === tech);
-        const completed = techJobs.filter(wo => wo.status === 'completed');
-        const pending = techJobs.filter(wo => wo.status !== 'completed');
-
-        return `
-          <div class="wo-group">
-            <div class="wo-group-hd" onclick="toggleAccordion(this)">
-              <span>👤 ${tech} (${completed.length} Completed / ${pending.length} Pending)</span>
-              <span class="wo-chev">▼</span>
-            </div>
-            <div class="wo-sec-bd">
-              <div class="job-list-compact">
-                ${techJobs.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('')}
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-
-    return workorders.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('');
+    const sortedWorkorders = [...workorders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+    return sortedWorkorders.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('');
   }
 
   renderJobCard(wo, canShare, isAdmin, currentUser) {
@@ -552,7 +840,7 @@ class Router {
             <div class="job-meta">
               <div class="job-meta-item">📅 ${wo.date}</div>
               <div class="job-meta-item">⏰ ${wo.time || 'TBD'}</div>
-              ${currentUser.username === 'admin' ? `<div class="job-meta-item">👤 ${wo.technician || 'Unknown'}</div>` : ''}
+              ${currentUser.role === 'admin' ? `<div class="job-meta-item">👤 ${wo.technician || 'Unknown'}</div>` : ''}
             </div>
           </div>
           <button class="btn btn-icon" onclick="openMap('${wo.address}')" title="View on Map">📍</button>
@@ -561,112 +849,19 @@ class Router {
           <div class="badge badge-${wo.status || 'pending'}">${wo.status || 'pending'}</div>
         </div>
         <div class="job-card-footer">
-          <button class="btn btn-secondary btn-sm" onclick="router.viewWorkOrder('${wo.id}')">Open</button>
+          <button class="btn ${isCompleted ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="router.viewWorkOrder('${wo.id}')">${isCompleted ? 'Completed' : 'Open'}</button>
           ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareReport('${wo.id}')">Share</button>` : ''}
-          ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteWorkOrder('${wo.id}')">Delete</button>` : ''}
+          ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteWorkOrder('${wo.id}')">Delete</button>` : ''}
         </div>
       </div>
     `;
-  }
-
-
-  renderCompletedJobs() {
-    const content = document.getElementById('main-content');
-    const isAdmin = auth.isAdmin();
-    if (!isAdmin) {
-       this.navigate('dashboard');
-       return;
-    }
-
-    content.innerHTML = `
-      <div class="section-header">
-        <div class="section-title">Completed Jobs History</div>
-        <button class="btn btn-secondary btn-sm" onclick="router.goBack()">← Back</button>
-      </div>
-      <div style="padding: 15px 15px 0;">
-        <input type="text" id="admin-search-completed" class="form-control" placeholder="Search by client or tech..." oninput="router.filterCompletedJobs(this.value)">
-      </div>
-      <div id="completed-jobs-results" style="padding: 0 15px; margin-top: 15px;">
-        ${this.generateCompletedJobsHtml('')}
-      </div>
-    `;
-  }
-
-  filterCompletedJobs(term) {
-    const container = document.getElementById('completed-jobs-results');
-    if (container) {
-      container.innerHTML = this.generateCompletedJobsHtml(term);
-    }
-  }
-
-  generateCompletedJobsHtml(term) {
-    term = (term || '').toLowerCase().trim();
-    const allWorkorders = db.get('workorders', []);
-    const allRepairOrders = db.get('repairOrders', []);
-    const currentUser = auth.getCurrentUser();
-
-    let completedJobs = [
-      ...allWorkorders.filter(j => j.status === 'completed'),
-      ...allRepairOrders.filter(j => j.status === 'completed')
-    ];
-
-    if (term) {
-      completedJobs = completedJobs.filter(j =>
-        (j.clientName && j.clientName.toLowerCase().includes(term)) ||
-        ((j.technician || j.assignedTo) && (j.technician || j.assignedTo).toLowerCase().includes(term)) ||
-        (j.date && j.date.includes(term))
-      );
-    }
-
-    completedJobs.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-    if (completedJobs.length === 0) {
-      return `<div class="empty-state"><div class="empty-title">No completed jobs found for '${term}'</div></div>`;
-    }
-
-    const jobToCard = (job) => {
-        const isRepair = !!job.jobType;
-        const title = escapeHtml(job.clientName || 'Job');
-        const subtitle = escapeHtml(isRepair ? job.jobType : job.address);
-        const tech = escapeHtml(job.technician || job.assignedTo || '');
-        const date = escapeHtml(job.date || '');
-        const openCmd = isRepair ? `renderRepairOrderForm('${escapeHtml(job.id)}')` : `router.viewWorkOrder('${job.id}')`;
-        const shareCmd = isRepair ? `shareRepairPDF('${escapeHtml(job.id)}')` : `shareReport('${job.id}')`;
-        const deleteCmd = isRepair ? `deleteRepairOrder('${escapeHtml(job.id)}')` : `deleteWorkOrder('${job.id}')`;
-
-        return `
-        <div class="job-card job-card-completed" style="margin-bottom:12px;">
-            <div class="job-card-header">
-                <div>
-                    <div class="job-card-title">${title}</div>
-                    <div class="job-card-customer">${subtitle}</div>
-                    <div class="job-meta">
-                        <div class="job-meta-item">📅 ${date}</div>
-                        <div class="job-meta-item">👤 ${tech}</div>
-                    </div>
-                </div>
-            </div>
-            <div class="job-card-footer">
-                <button class="btn btn-secondary btn-sm" onclick="${openCmd}">Open</button>
-                <button class="btn btn-secondary btn-sm" onclick="${shareCmd}">PDF</button>
-                <button class="btn btn-secondary btn-sm btn-outline-danger" onclick="${deleteCmd}">Delete</button>
-            </div>
-        </div>`;
-                <button class="btn btn-primary btn-sm" onclick="${shareCmd}">Share</button>
-                <button class="btn btn-danger btn-sm" onclick="${deleteCmd}">Delete</button>
-            </div>
-        </div>
-        ;
-    };
-
-    return completedJobs.map(jobToCard).join('');
   }
 
   renderSettings() {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
-    const isMainAdmin = user && user.username === 'admin';
+    const isMainAdmin = user && user.role === 'admin';
 
     content.innerHTML = `
       <div class="section-header">
@@ -687,6 +882,20 @@ class Router {
         </div>
       </div>
 
+      ${isAdmin ? `
+      <div class="section-header" style="margin-top: 20px;">
+        <div class="section-title">Estimate Builder</div>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <p style="font-size: 13px; color: var(--gray-600); margin-bottom: 12px;">
+            Create a branded estimate sheet with client details, equipment selection, quantities and totals.
+          </p>
+          <button class="btn btn-primary" onclick="router.createEstimate()">Open Estimate Sheet</button>
+        </div>
+      </div>
+      ` : ''}
+
       ${isMainAdmin ? `
       <div class="section-header" style="margin-top: 20px;">
         <div class="section-title">Team Distribution</div>
@@ -697,8 +906,8 @@ class Router {
             To share the app with your team, copy the link below or scan the QR code.
           </p>
           <div class="form-group" style="padding:0; margin-bottom:12px; display:none;">
-            <label class="form-label">APK Download Link</label>
-            <input type="text" id="apk-link-input" class="form-control" placeholder="Paste your Drive link here..." value="https://millzy7665-beep.github.io/oasis-service/">
+            <label class="form-label">App Link</label>
+            <input type="text" id="apk-link-input" class="form-control" placeholder="Paste your app link here..." value="https://millzy7665-beep.github.io/oasis-service/">
           </div>
 
           <div id="qr-container" style="text-align: center; margin-top: 15px;">
@@ -919,6 +1128,29 @@ class Router {
       showToast('Chem sheet created');
     }
   }
+  createEstimate(clientId = '') {
+    if (!auth.isAdmin()) {
+      showToast('Only admins can create estimate sheets');
+      return;
+    }
+
+    const clients = db.get('clients', []);
+    if (!clients.length) {
+      showToast('Add a client first');
+      this.renderClients();
+      return;
+    }
+
+    renderEstimateForm('', clientId || clients[0].id);
+  }
+  viewEstimate(id) {
+    if (!auth.isAdmin()) {
+      showToast('Only admins can view estimate sheets');
+      return;
+    }
+
+    renderEstimateForm(id);
+  }
   viewWorkOrder(id) {
     const order = workOrderManager.getOrder(id);
     if (!order) {
@@ -1013,12 +1245,15 @@ class WorkOrderManager {
     const client = clients.find(c => c.id === clientId);
     if (!client) return null;
 
+    const currentUser = auth.getCurrentUser();
+    const assignedTechnician = client.technician || currentUser?.name || '';
+
     const order = {
       id: Date.now().toString(),
       clientId,
       clientName: client.name,
       address: client.address,
-      technician: auth.getCurrentUser()?.name || '',
+      technician: assignedTechnician,
       date: new Date().toISOString().split('T')[0],
       time: '',
       timeIn: '',
@@ -1147,9 +1382,11 @@ class WorkOrderManager {
       }
 
       doc.setTextColor(255, 255, 255);
-      doc.setFont('times', 'bold');
-      doc.setFontSize(22);
-      doc.text('O A S I S', 32, 17);
+      doc.setFont('helvetica', 'normal');
+      doc.setCharSpace(1.6);
+      doc.setFontSize(18);
+      doc.text('OASIS', 32, 16.5);
+      doc.setCharSpace(0);
 
       doc.setFontSize(12);
       doc.setFont('helvetica', 'bold');
@@ -1174,9 +1411,11 @@ class WorkOrderManager {
       }
 
       doc.setTextColor(255, 255, 255);
-      doc.setFontSize(12);
-      doc.setFont('times', 'bold');
-      doc.text('O A S I S', 30, footerY + 12);
+      doc.setFont('helvetica', 'normal');
+      doc.setCharSpace(1.4);
+      doc.setFontSize(10.5);
+      doc.text('OASIS', 30, footerY + 11.5);
+      doc.setCharSpace(0);
 
       doc.setFontSize(7);
       doc.setFont('helvetica', 'normal');
@@ -1192,8 +1431,6 @@ class WorkOrderManager {
     let y = renderHeader();
 
     // Info Grid
-    doc.setFillColor(...lightBeige);
-    doc.rect(10, y, 190, 22, 'F');
 
     let gridY = y + 7;
     const col1 = 15;
@@ -1240,10 +1477,8 @@ class WorkOrderManager {
     ];
 
     params.forEach((p, i) => {
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 248, 248);
-        doc.rect(10, y, 190, 5, 'F');
-      }
+      doc.setDrawColor(235, 235, 235);
+      doc.line(10, y + 5, 200, y + 5);
       doc.setTextColor(...navy);
       doc.setFontSize(7);
       doc.setFont('helvetica', 'normal');
@@ -1407,11 +1642,14 @@ function cleanupTestClients() {
 }
 
 async function exportCompletedToExcel() {
-  const allWorkorders = db.get('workorders', []);
-  const completed = allWorkorders.filter(wo => wo.status === 'completed');
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
 
-  if (completed.length === 0) {
-    showToast('No completed work orders to export');
+  const completedChemSheets = sortByNewest(db.get('workorders', []).filter(wo => isCompleted(wo.status)));
+  const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
+
+  if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
+    showToast('No completed chem sheets or repair orders to export');
     return;
   }
 
@@ -1419,7 +1657,28 @@ async function exportCompletedToExcel() {
 
   try {
     const workbook = new ExcelJS.Workbook();
-    const ws = workbook.addWorksheet('OASIS Service Records');
+    workbook.creator = 'OASIS Service App';
+    workbook.created = new Date();
+    workbook.modified = new Date();
+
+    const styleHeader = (sheet, columnCount) => {
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = {
+        from: { row: 1, column: 1 },
+        to: { row: 1, column: columnCount }
+      };
+    };
+
+    const formatBody = (sheet) => {
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        row.alignment = { vertical: 'top', wrapText: true };
+      });
+    };
 
     const chemKeys = [
       { key: 'tabs', label: 'Tabs' },
@@ -1434,8 +1693,8 @@ async function exportCompletedToExcel() {
       { key: 'algaecide', label: 'Algaecide' }
     ];
 
-    // Define Columns
-    const columns = [
+    const chemSheet = workbook.addWorksheet('Chem Sheets');
+    const chemColumns = [
       { header: 'Date', key: 'date', width: 12 },
       { header: 'Client', key: 'client', width: 25 },
       { header: 'Address', key: 'address', width: 35 },
@@ -1447,36 +1706,30 @@ async function exportCompletedToExcel() {
       { header: 'Pool Alk', key: 'palk', width: 10 }
     ];
 
-    // Add columns for each pool chemical
     chemKeys.forEach(ck => {
-      columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
+      chemColumns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
     });
 
-    columns.push(
+    chemColumns.push(
       { header: 'Spa Chlorine', key: 'sCl', width: 12 },
       { header: 'Spa pH', key: 'sph', width: 10 },
       { header: 'Spa Alk', key: 'salk', width: 10 }
     );
 
-    // Add columns for each spa chemical
     chemKeys.forEach(ck => {
-      columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
+      chemColumns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
     });
 
-    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+    chemColumns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+    chemSheet.columns = chemColumns;
+    styleHeader(chemSheet, chemColumns.length);
 
-    ws.columns = columns;
-
-    // Style Header
-    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
-
-    completed.forEach(wo => {
+    completedChemSheets.forEach(wo => {
       const rowData = {
-        date: wo.date,
-        client: wo.clientName,
-        address: wo.address,
-        tech: wo.technician,
+        date: wo.date || '',
+        client: wo.clientName || '',
+        address: wo.address || '',
+        tech: wo.technician || '',
         timeIn: wo.timeIn || wo.time || '',
         timeOut: wo.timeOut || '',
         pCl: wo.readings?.pool?.chlorine || '',
@@ -1485,35 +1738,80 @@ async function exportCompletedToExcel() {
         sCl: wo.readings?.spa?.chlorine || '',
         sph: wo.readings?.spa?.ph || '',
         salk: wo.readings?.spa?.alkalinity || '',
-        notes: (wo.workPerformed || '') + ' ' + (wo.followUpNotes || wo.notes || '')
+        notes: `${wo.workPerformed || ''} ${wo.followUpNotes || wo.notes || ''}`.trim()
       };
 
-      // Populate pool chemical values
       chemKeys.forEach(ck => {
         rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || '';
-      });
-
-      // Populate spa chemical values
-      chemKeys.forEach(ck => {
         rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || '';
       });
 
-      ws.addRow(rowData);
+      chemSheet.addRow(rowData);
     });
+
+    if (chemSheet.rowCount === 1) {
+      chemSheet.addRow({ client: 'No completed chem sheets' });
+    }
+    formatBody(chemSheet);
+
+    const repairColumns = [
+      { header: 'Date', key: 'date', width: 12 },
+      { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 },
+      { header: 'Technician', key: 'tech', width: 18 },
+      { header: 'Job Type', key: 'jobType', width: 20 },
+      { header: 'Priority', key: 'priority', width: 12 },
+      { header: 'Status', key: 'status', width: 12 },
+      { header: 'Time In', key: 'timeIn', width: 10 },
+      { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Labour Hours', key: 'labourHours', width: 12 },
+      { header: 'Materials', key: 'materials', width: 30 },
+      { header: 'Parts Summary', key: 'partsSummary', width: 40 },
+      { header: 'Work Summary', key: 'summary', width: 40 },
+      { header: 'Notes', key: 'notes', width: 40 }
+    ];
+
+    const repairSheet = workbook.addWorksheet('Repair Orders');
+    repairSheet.columns = repairColumns;
+    styleHeader(repairSheet, repairColumns.length);
+
+    completedRepairOrders.forEach(order => {
+      repairSheet.addRow({
+        date: order.date || '',
+        client: order.clientName || '',
+        address: order.address || '',
+        tech: order.assignedTo || '',
+        jobType: order.jobType || '',
+        priority: order.priority || '',
+        status: order.status || '',
+        timeIn: order.timeIn || order.time || '',
+        timeOut: order.timeOut || '',
+        labourHours: order.labourHours || '',
+        materials: order.materials || '',
+        partsSummary: order.partsSummary || '',
+        summary: order.summary || '',
+        notes: order.notes || ''
+      });
+    });
+
+    if (repairSheet.rowCount === 1) {
+      repairSheet.addRow({ client: 'No completed repair orders' });
+    }
+    formatBody(repairSheet);
 
     const buffer = await workbook.xlsx.writeBuffer();
 
-    // Robust binary to base64 conversion
     let binary = '';
     const bytes = new Uint8Array(buffer);
     for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
+      binary += String.fromCharCode(bytes[i]);
     }
-    const base64 = btoa(binary);
-    const filename = `OASIS_Service_Records_${new Date().toISOString().split('T')[0]}.xlsx`;
 
-    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast('Excel export ready');
+    const base64 = btoa(binary);
+    const filename = `OASIS_Completed_Orders_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast('Completed orders Excel ready to email');
   } catch (error) {
     console.error('Excel export failed:', error);
     showToast('Excel export failed');
@@ -1884,21 +2182,12 @@ function populateLoginTechOptions() {
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
-  let options = `<option value="" disabled selected>— Select your name —</option>`;
-
-  // Explicitly add Admin first
-  if (auth.users['admin']) {
-    options += `<option value="admin">Chris Mills (Admin)</option>`;
-  }
-
-  // Add the rest of the users, skipping admin since we added it first
-  entries.forEach(([id, user]) => {
-    if (id !== 'admin') {
-      options += `<option value="${id}">${user.name}</option>`;
-    }
-  });
-
-  select.innerHTML = options;
+  select.innerHTML = `
+    <option value="" disabled selected>— Select your name —</option>
+    ${entries.map(([id, user]) => `
+      <option value="${id}">${user.name}${user.role === 'admin' ? ' (Admin)' : ''}</option>
+    `).join('')}
+  `;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2199,9 +2488,12 @@ function saveWorkOrderForm(orderId) {
     return;
   }
 
+  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
-  showToast('Chem sheet saved');
+  showToast(order.status === 'completed'
+    ? 'Completed chem sheet saved for admin export'
+    : 'Chem sheet saved');
 }
 
 function shareReport(orderId) {
@@ -2227,31 +2519,41 @@ function saveRepairOrders(orders) {
   db.set('repairOrders', orders);
 }
 
-function renderRepairOrdersList() {
+function renderRepairOrdersList(statusFilter = 'all') {
   const allOrders = getRepairOrders();
   const currentUser = auth.getCurrentUser();
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  let orders = isAdmin
+  let orders = (currentUser && currentUser.role === 'admin')
     ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
-  // Hide completed repair orders from the main active list for everyone
-  orders = orders.filter(o => o.status !== 'completed');
+  if (isAdmin) {
+    if (statusFilter === 'completed') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+    } else if (statusFilter === 'pending') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
+    }
+  }
 
   if (!orders.length) {
+    const emptyTitle = isAdmin && statusFilter === 'completed'
+      ? 'No completed repair orders'
+      : isAdmin && statusFilter === 'pending'
+        ? 'No pending or open repair orders'
+        : 'No repair work orders';
+
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
-        <div class="empty-title">No repair work orders</div>
-        <div class="empty-subtitle">${isAdmin ? 'No repair orders found' : 'Create one to manage service repairs in the same app'}</div>
+        <div class="empty-title">${emptyTitle}</div>
+        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a repair order' : 'Create one to manage service repairs in the same app'}</div>
       </div>
     `;
   }
 
-  return orders.map(order => `
+  return [...orders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).map(order => `
     <div class="job-card" style="margin-bottom:12px;">
       <div class="job-card-header">
         <div>
@@ -2269,9 +2571,9 @@ function renderRepairOrdersList() {
         <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
       </div>
       <div class="job-card-footer">
-        <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">Open</button>
+        <button class="btn ${order.status === 'completed' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">${order.status === 'completed' ? 'Completed' : 'Open'}</button>
         ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
-        ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
+        ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
       </div>
     </div>
   `).join('');
@@ -2511,6 +2813,10 @@ function collectRepairOrderFromForm(orderId = '') {
 
 function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   const order = collectRepairOrderFromForm(orderId);
+  if (!order) return;
+
+  order.status = document.getElementById('repair-status')?.value || order.status || 'open';
+
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
 
@@ -2521,7 +2827,9 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  showToast('Repair work order saved');
+  showToast(order.status === 'completed'
+    ? 'Completed repair order saved for admin export'
+    : 'Repair work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -2530,7 +2838,6 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   router.renderWorkOrders();
 }
-
 
 function getImageDataUrl(url) {
   return new Promise((resolve, reject) => {
@@ -2629,8 +2936,6 @@ async function shareRepairPDF(orderId) {
   y = renderHeader();
 
   // Info Grid
-  doc.setFillColor(...lightBeige);
-  doc.rect(10, y, 190, 42, 'F');
 
   let gridY = y + 7;
   const col1 = 15;
@@ -2687,10 +2992,8 @@ async function shareRepairPDF(orderId) {
     y += 7;
 
     order.partsItems.forEach((item, i) => {
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 248, 248);
-        doc.rect(10, y, 190, 6, 'F');
-      }
+      doc.setDrawColor(235, 235, 235);
+      doc.line(10, y + 6, 200, y + 6);
       doc.setTextColor(...navy);
       doc.text(`${item.category}: ${item.product}` || 'Unknown Part', 15, y + 4.5);
       doc.text(String(item.qty || 1), 170, y + 4.5);
@@ -2777,6 +3080,660 @@ function deleteWorkOrder(orderId) {
   db.set('workorders', orders);
   showToast('Chem sheet deleted');
   router.renderWorkOrders();
+}
+
+const ESTIMATE_STATUSES = ['Draft', 'Sent', 'Approved', 'Declined'];
+
+function getEstimateSheets() {
+  return db.get('estimates', []);
+}
+
+function saveEstimateSheets(estimates = []) {
+  db.set('estimates', estimates);
+}
+
+function getEstimateSheet(id = '') {
+  return getEstimateSheets().find(item => item.id === id) || null;
+}
+
+function parseEstimateNumber(value = 0) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  const cleaned = String(value ?? '').replace(/[^0-9.-]+/g, '');
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatEstimateMoney(value = 0) {
+  return parseEstimateNumber(value).toFixed(2);
+}
+
+function getEstimateDefaultDate() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function getEstimateDefaultValidUntil(dateValue = getEstimateDefaultDate()) {
+  const sourceDate = new Date(dateValue || getEstimateDefaultDate());
+  if (Number.isNaN(sourceDate.getTime())) return '';
+  sourceDate.setDate(sourceDate.getDate() + 30);
+  return sourceDate.toISOString().split('T')[0];
+}
+
+function nextEstimateNumber(currentId = '') {
+  const highest = getEstimateSheets()
+    .filter(item => item.id !== currentId)
+    .reduce((max, item) => {
+      const match = String(item.estimateNumber || '').match(/(\d+)/);
+      const value = match ? parseInt(match[1], 10) : 0;
+      return Number.isFinite(value) && value > max ? value : max;
+    }, 0);
+
+  return `EST-${String(highest + 1).padStart(4, '0')}`;
+}
+
+function getEstimateStatusBadgeClass(status = 'Draft') {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'approved') return 'completed';
+  if (normalized === 'sent') return 'in-progress';
+  return 'pending';
+}
+
+function normalizeEstimateItems(items = []) {
+  const source = Array.isArray(items) && items.length ? items : [{}];
+  return source.map(item => ({
+    category: item.category || '',
+    partNumber: item.partNumber || '',
+    equipment: item.equipment || item.product || '',
+    qty: String(item.qty || '1'),
+    unitPrice: item.unitPrice ?? item.price ?? '',
+    subtotal: item.subtotal || '',
+    note: item.note || ''
+  }));
+}
+
+function calculateEstimateItemSubtotal(item = {}) {
+  const qty = Math.max(parseEstimateNumber(item.qty), 0);
+  const unitPrice = Math.max(parseEstimateNumber(item.unitPrice), 0);
+  return qty * unitPrice;
+}
+
+function calculateEstimateSubtotal(items = []) {
+  return normalizeEstimateItems(items)
+    .reduce((sum, item) => sum + calculateEstimateItemSubtotal(item), 0);
+}
+
+function renderEstimateList() {
+  const clients = db.get('clients', []);
+  const estimates = [...getEstimateSheets()].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+  if (!estimates.length) {
+    return `
+      <div class="empty-state" style="margin:0;">
+        <div class="empty-icon">🧾</div>
+        <div class="empty-title">No estimate sheets yet</div>
+        <div class="empty-subtitle">Use the Estimate Sheet button above to create a branded client quote with clean totals.</div>
+      </div>
+    `;
+  }
+
+  return estimates.map(estimate => {
+    const client = clients.find(item => item.id === estimate.clientId);
+    const clientName = client?.name || estimate.clientName || 'Client';
+    const total = formatEstimateMoney(estimate.total || estimate.subtotal || 0);
+
+    return `
+      <div class="job-card">
+        <div class="job-card-header">
+          <div>
+            <div class="job-card-title">${escapeHtml(clientName)}</div>
+            <div class="job-card-customer">${escapeHtml(estimate.project || 'Client Estimate')}</div>
+            <div class="job-meta">
+              <div class="job-meta-item">🧾 ${escapeHtml(estimate.estimateNumber || 'Draft')}</div>
+              <div class="job-meta-item">📅 ${escapeHtml(estimate.date || '')}</div>
+              <div class="job-meta-item">💲 $${escapeHtml(total)}</div>
+            </div>
+          </div>
+          <div class="badge badge-${getEstimateStatusBadgeClass(estimate.status)}">${escapeHtml(estimate.status || 'Draft')}</div>
+        </div>
+        ${estimate.scope ? `<div class="detail-row"><div class="detail-label">Scope</div><div class="detail-value">${escapeHtml(estimate.scope)}</div></div>` : ''}
+        <div class="job-card-footer">
+          <button class="btn btn-secondary btn-sm" onclick="router.viewEstimate('${escapeHtml(estimate.id)}')">Open</button>
+          <button class="btn btn-secondary btn-sm" onclick="saveEstimatePDF('${escapeHtml(estimate.id)}')">PDF</button>
+          ${auth.canShare() ? `<button class="btn btn-primary btn-sm" onclick="shareEstimatePDF('${escapeHtml(estimate.id)}')">Share</button>` : ''}
+          <button class="btn btn-danger btn-sm" onclick="deleteEstimateSheet('${escapeHtml(estimate.id)}')">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderEstimateItemRow(estimateId, item, index) {
+  const categories = getRepairCatalogCategories();
+  const catalogItems = getRepairCatalogItems(item.category);
+  const selectedItem = catalogItems.find(entry => entry.partNumber === item.partNumber)
+    || catalogItems.find(entry => entry.product === item.equipment)
+    || null;
+  const qty = String(item.qty || '1');
+  const unitPrice = formatEstimateMoney(selectedItem?.price ?? item.unitPrice ?? 0);
+  const lineTotal = formatEstimateMoney(calculateEstimateItemSubtotal({ qty, unitPrice }));
+
+  return `
+    <div class="estimate-item-row" data-index="${index}" style="margin-bottom:12px;">
+      <div class="wo-grid" style="border-radius:var(--radius-sm); margin-bottom:6px;">
+        <div class="wo-fld">
+          <div class="wo-fld-lbl">Category</div>
+          <select class="estimate-item-category" onchange="refreshEstimateBuilder('${escapeHtml(estimateId || '')}')">
+            <option value="">— Select category —</option>
+            ${categories.map(category => `
+              <option value="${escapeHtml(category)}" ${category === item.category ? 'selected' : ''}>${escapeHtml(category)}</option>
+            `).join('')}
+          </select>
+        </div>
+
+        <div class="wo-fld">
+          <div class="wo-fld-lbl">Equipment / Part</div>
+          <select class="estimate-item-product" onchange="updateEstimateItemRowDetails(this)">
+            <option value="">— Select equipment —</option>
+            ${catalogItems.map(entry => `
+              <option value="${escapeHtml(entry.partNumber || entry.product)}"
+                data-product="${escapeHtml(entry.product)}"
+                data-price="${escapeHtml(String(entry.price ?? ''))}"
+                ${(entry.partNumber === item.partNumber || entry.product === item.equipment) ? 'selected' : ''}>
+                ${escapeHtml(entry.product)}${entry.partNumber ? ` — ${escapeHtml(entry.partNumber)}` : ''}
+              </option>
+            `).join('')}
+          </select>
+        </div>
+
+        <div class="wo-fld">
+          <div class="wo-fld-lbl">Qty</div>
+          <input class="wo-fld-inp estimate-item-qty" type="number" min="1" step="1" value="${escapeHtml(qty)}" oninput="updateEstimateItemRowDetails(this)">
+        </div>
+
+        <div class="wo-fld">
+          <div class="wo-fld-lbl">Unit Price</div>
+          <input class="wo-fld-inp estimate-item-price" type="number" min="0" step="0.01" value="${escapeHtml(unitPrice)}" oninput="updateEstimateItemRowDetails(this)">
+        </div>
+      </div>
+
+      <div class="detail-row" style="margin-bottom:8px;">
+        <div class="detail-label">Part / Line Total</div>
+        <div class="detail-value estimate-item-details">${selectedItem ? `${escapeHtml(selectedItem.partNumber || '')} • $${formatEstimateMoney(selectedItem.price ?? unitPrice)}` : 'Choose a category and equipment item.'}<br><strong>Line Total: $${escapeHtml(lineTotal)}</strong></div>
+      </div>
+
+      <div class="form-row" style="margin-bottom:8px;">
+        <label>Line Note</label>
+        <input class="form-control estimate-item-note" type="text" value="${escapeHtml(item.note || '')}" placeholder="Optional note for this equipment line">
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="removeEstimateItemRow('${escapeHtml(estimateId || '')}', ${index})">Remove Line</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate = null) {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can create estimate sheets');
+    router.renderWorkOrders();
+    return;
+  }
+
+  const clients = db.get('clients', []);
+  if (!clients.length) {
+    showToast('Add a client first');
+    router.renderClients();
+    return;
+  }
+
+  const existing = !draftEstimate && estimateId ? getEstimateSheet(estimateId) : null;
+  const estimate = draftEstimate || existing || {};
+  const activeEstimateId = estimate.id || estimateId || `est_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const selectedClientId = estimate.clientId || presetClientId || clients[0]?.id || '';
+  const selectedClient = clients.find(item => item.id === selectedClientId) || null;
+  const createdDate = estimate.date || getEstimateDefaultDate();
+  const validUntil = estimate.validUntil || getEstimateDefaultValidUntil(createdDate);
+  const items = normalizeEstimateItems(estimate.items || []);
+  const subtotal = formatEstimateMoney(estimate.subtotal || calculateEstimateSubtotal(items));
+  const total = formatEstimateMoney(estimate.total || calculateEstimateSubtotal(items));
+  const currentUser = auth.getCurrentUser();
+  const content = document.getElementById('main-content');
+
+  content.innerHTML = `
+    <div class="wo-form">
+      <div class="wo-bar">
+        <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
+        <div id="estimate-form-title" class="wo-bar-title">${escapeHtml(estimate.project || selectedClient?.name || 'Estimate Sheet')}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="saveEstimateSheet('${escapeHtml(activeEstimateId)}', true)">Save & Share</button>
+          <button class="btn btn-primary btn-sm" onclick="saveEstimateSheet('${escapeHtml(activeEstimateId)}')">Save</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin:12px 16px 0;">
+        <div class="card-body">
+          <div class="card-title">Branded Client Estimate Sheet</div>
+          <div class="list-item-sub" style="margin-top:6px;">Build a clean OASIS estimate using the client list and equipment catalogue. Tax and discount sections have been removed.</div>
+        </div>
+      </div>
+
+      <div class="wo-sec">
+        <div class="wo-sec-hd">Estimate Details</div>
+        <div class="wo-sec-bd">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Estimate #</label>
+              <input id="est-number" class="form-control" value="${escapeHtml(estimate.estimateNumber || nextEstimateNumber(estimateId))}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Date *</label>
+              <input id="est-date" class="form-control" type="date" value="${escapeHtml(createdDate)}">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Valid Until</label>
+              <input id="est-valid-until" class="form-control" type="date" value="${escapeHtml(validUntil)}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Status</label>
+              <select id="est-status" class="form-control">
+                ${ESTIMATE_STATUSES.map(status => `<option value="${escapeHtml(status)}" ${status === (estimate.status || 'Draft') ? 'selected' : ''}>${escapeHtml(status)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Client *</label>
+            <select id="est-client" class="form-control" onchange="onEstimateClientChange()">
+              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === selectedClientId ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Address</label>
+            <input id="est-address" class="form-control" value="${escapeHtml(estimate.address || selectedClient?.address || '')}">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Project / Estimate Title</label>
+            <input id="est-project" class="form-control" value="${escapeHtml(estimate.project || 'Pool Equipment Estimate')}" placeholder="Pump replacement, heater install, automation upgrade...">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Scope Summary</label>
+            <textarea id="est-scope" class="form-control" rows="3" placeholder="Briefly describe the work or equipment being quoted">${escapeHtml(estimate.scope || '')}</textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="wo-sec">
+        <div class="wo-sec-hd">Equipment & Pricing</div>
+        <div class="wo-sec-bd">
+          <div class="wo-hint">Select equipment from the existing catalogue, set your quantities, and the totals will update automatically.</div>
+          <div id="estimate-items-list">${items.map((item, index) => renderEstimateItemRow(activeEstimateId, item, index)).join('')}</div>
+          <button type="button" class="btn btn-secondary" style="width:100%;justify-content:center;" onclick="addEstimateItemRow('${escapeHtml(activeEstimateId)}')">+ Add Equipment Line</button>
+
+          <div class="form-row" style="margin-top:12px;">
+            <div class="form-group">
+              <label class="form-label">Subtotal</label>
+              <input id="est-subtotal" class="form-control" value="${escapeHtml(subtotal)}" readonly style="background:var(--gray-50);">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Grand Total</label>
+              <input id="est-total" class="form-control" value="${escapeHtml(total)}" readonly style="background:var(--gray-50);font-weight:700;color:var(--navy);">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="wo-sec">
+        <div class="wo-sec-hd">Client Notes & Terms</div>
+        <div class="wo-sec-bd">
+          <div class="form-group">
+            <label class="form-label">Prepared By</label>
+            <input id="est-prepared-by" class="form-control" value="${escapeHtml(estimate.preparedBy || currentUser?.name || 'OASIS')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Terms</label>
+            <textarea id="est-terms" class="form-control" rows="3">${escapeHtml(estimate.terms || 'Estimate valid for 30 days. Pricing is based on the current scope and may change if site conditions or selected equipment change.')}</textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Notes</label>
+            <textarea id="est-notes" class="form-control" rows="3" placeholder="Optional client-facing notes">${escapeHtml(estimate.notes || '')}</textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin:12px;">
+        <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-secondary" onclick="saveEstimateSheet('${escapeHtml(activeEstimateId)}', true)">Save & Share</button>
+          <button class="btn btn-primary" onclick="saveEstimateSheet('${escapeHtml(activeEstimateId)}')">Save Estimate</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  updateEstimateTotals();
+}
+
+function onEstimateClientChange() {
+  const clientId = document.getElementById('est-client')?.value || '';
+  const client = db.get('clients', []).find(item => item.id === clientId);
+  const address = document.getElementById('est-address');
+  const title = document.getElementById('estimate-form-title');
+
+  if (address && client) {
+    address.value = client.address || '';
+  }
+
+  if (title && client && !document.getElementById('est-project')?.value.trim()) {
+    title.textContent = client.name || 'Estimate Sheet';
+  }
+}
+
+function updateEstimateItemRowDetails(source) {
+  const row = source?.closest('.estimate-item-row');
+  if (!row) return;
+
+  const productSelect = row.querySelector('.estimate-item-product');
+  const qtyInput = row.querySelector('.estimate-item-qty');
+  const priceInput = row.querySelector('.estimate-item-price');
+  const detailsDiv = row.querySelector('.estimate-item-details');
+  const selectedOption = productSelect?.selectedOptions?.[0];
+
+  if (productSelect && source === productSelect && priceInput && selectedOption?.dataset?.price) {
+    priceInput.value = formatEstimateMoney(selectedOption.dataset.price);
+  }
+
+  const qty = Math.max(parseEstimateNumber(qtyInput?.value || 0), 0);
+  const unitPrice = Math.max(parseEstimateNumber(priceInput?.value || 0), 0);
+  const lineTotal = qty * unitPrice;
+  const partNumber = selectedOption?.value || '';
+
+  if (detailsDiv) {
+    detailsDiv.innerHTML = `${partNumber ? `${escapeHtml(partNumber)} • ` : ''}$${formatEstimateMoney(unitPrice)}<br><strong>Line Total: $${formatEstimateMoney(lineTotal)}</strong>`;
+  }
+
+  updateEstimateTotals();
+}
+
+function updateEstimateTotals() {
+  const total = Array.from(document.querySelectorAll('.estimate-item-row')).reduce((sum, row) => {
+    const qty = parseEstimateNumber(row.querySelector('.estimate-item-qty')?.value || 0);
+    const unitPrice = parseEstimateNumber(row.querySelector('.estimate-item-price')?.value || 0);
+    return sum + (qty * unitPrice);
+  }, 0);
+
+  const subtotalField = document.getElementById('est-subtotal');
+  const totalField = document.getElementById('est-total');
+  if (subtotalField) subtotalField.value = formatEstimateMoney(total);
+  if (totalField) totalField.value = formatEstimateMoney(total);
+  return total;
+}
+
+function collectEstimateFromForm(estimateId = '') {
+  const existing = estimateId ? getEstimateSheet(estimateId) : null;
+  const clients = db.get('clients', []);
+  const clientId = document.getElementById('est-client')?.value || '';
+  const client = clients.find(item => item.id === clientId) || null;
+  const subtotal = updateEstimateTotals();
+
+  const items = Array.from(document.querySelectorAll('.estimate-item-row')).map(row => {
+    const productSelect = row.querySelector('.estimate-item-product');
+    const selectedOption = productSelect?.selectedOptions?.[0];
+    const qty = row.querySelector('.estimate-item-qty')?.value || '1';
+    const unitPrice = row.querySelector('.estimate-item-price')?.value || '';
+    return {
+      category: row.querySelector('.estimate-item-category')?.value || '',
+      partNumber: productSelect?.value || '',
+      equipment: selectedOption?.dataset?.product || '',
+      qty,
+      unitPrice,
+      subtotal: formatEstimateMoney(parseEstimateNumber(qty) * parseEstimateNumber(unitPrice)),
+      note: row.querySelector('.estimate-item-note')?.value?.trim() || ''
+    };
+  }).filter(item => item.category || item.partNumber || item.equipment || item.note || parseEstimateNumber(item.qty) || parseEstimateNumber(item.unitPrice));
+
+  return {
+    id: existing?.id || estimateId || `est_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    estimateNumber: document.getElementById('est-number')?.value.trim() || nextEstimateNumber(estimateId),
+    clientId,
+    clientName: client?.name || existing?.clientName || '',
+    address: document.getElementById('est-address')?.value.trim() || client?.address || '',
+    date: document.getElementById('est-date')?.value || '',
+    validUntil: document.getElementById('est-valid-until')?.value || '',
+    status: document.getElementById('est-status')?.value || 'Draft',
+    project: document.getElementById('est-project')?.value.trim() || '',
+    scope: document.getElementById('est-scope')?.value.trim() || '',
+    preparedBy: document.getElementById('est-prepared-by')?.value.trim() || auth.getCurrentUser()?.name || 'OASIS',
+    terms: document.getElementById('est-terms')?.value.trim() || '',
+    notes: document.getElementById('est-notes')?.value.trim() || '',
+    items,
+    subtotal: formatEstimateMoney(subtotal),
+    total: formatEstimateMoney(subtotal),
+    createdAt: existing?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function refreshEstimateBuilder(estimateId = '') {
+  const draft = collectEstimateFromForm(estimateId);
+  renderEstimateForm(draft.id || estimateId, '', draft);
+}
+
+function addEstimateItemRow(estimateId = '') {
+  const draft = collectEstimateFromForm(estimateId) || { id: estimateId || '', items: [] };
+  draft.items = normalizeEstimateItems(draft.items || []);
+  draft.items.push({ category: '', partNumber: '', equipment: '', qty: '1', unitPrice: '', note: '' });
+  renderEstimateForm(draft.id || estimateId, '', draft);
+}
+
+function removeEstimateItemRow(estimateId = '', index = 0) {
+  const draft = collectEstimateFromForm(estimateId) || { id: estimateId || '', items: [] };
+  draft.items = normalizeEstimateItems(draft.items || []).filter((_, itemIndex) => itemIndex !== index);
+  if (!draft.items.length) {
+    draft.items = [{}];
+  }
+  renderEstimateForm(draft.id || estimateId, '', draft);
+}
+
+async function saveEstimateSheet(estimateId = '', shareAfterSave = false) {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can create estimate sheets');
+    return;
+  }
+
+  const estimate = collectEstimateFromForm(estimateId);
+  if (!estimate.clientId) {
+    alert('Please select a client.');
+    return;
+  }
+  if (!estimate.date) {
+    alert('Please enter an estimate date.');
+    return;
+  }
+
+  const estimates = getEstimateSheets();
+  const existingIndex = estimates.findIndex(item => item.id === estimate.id);
+  if (existingIndex >= 0) {
+    estimates[existingIndex] = estimate;
+  } else {
+    estimates.unshift(estimate);
+  }
+  saveEstimateSheets(estimates);
+
+  showToast(existingIndex >= 0 ? 'Estimate updated' : 'Estimate saved');
+
+  if (shareAfterSave) {
+    await saveEstimatePDF(estimate.id, 'share');
+  }
+
+  router.renderWorkOrders();
+}
+
+function deleteEstimateSheet(estimateId) {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can delete estimates');
+    return;
+  }
+  if (!confirm('Delete this estimate sheet?')) return;
+  saveEstimateSheets(getEstimateSheets().filter(item => item.id !== estimateId));
+  showToast('Estimate deleted');
+  router.renderWorkOrders();
+}
+
+async function saveEstimatePDF(estimateId, mode = 'save') {
+  const estimate = getEstimateSheet(estimateId);
+  if (!estimate) {
+    showToast('Save this estimate first');
+    return;
+  }
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+    showToast('PDF library not loaded');
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const subtotal = parseEstimateNumber(estimate.subtotal || estimate.total || 0);
+  const total = parseEstimateNumber(estimate.total || subtotal);
+  const items = normalizeEstimateItems(estimate.items || []);
+  const clientName = estimate.clientName || 'Client';
+  let y = applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
+
+  const ensureSpace = (needed = 16) => {
+    if (y + needed > 265) {
+      applyOasisPdfFooter(doc);
+      doc.addPage();
+      y = applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
+    }
+  };
+
+  doc.setFillColor(248, 245, 241);
+  doc.roundedRect(15, y - 4, 180, 26, 3, 3, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.text('CLIENT', 18, y + 2);
+  doc.text('ESTIMATE #', 110, y + 2);
+  doc.text('ADDRESS', 18, y + 14);
+  doc.text('VALID UNTIL', 110, y + 14);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(55, 55, 55);
+  doc.text(String(clientName || '—'), 18, y + 7);
+  doc.text(String(estimate.estimateNumber || '—'), 110, y + 7);
+  doc.text(String(estimate.address || '—'), 18, y + 19);
+  doc.text(String(estimate.validUntil || '—'), 110, y + 19);
+  y += 32;
+
+  ensureSpace(20);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(13, 43, 69);
+  doc.text(estimate.project || 'Pool Equipment Estimate', 15, y);
+  y += 6;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(55, 55, 55);
+  const scopeLines = doc.splitTextToSize(estimate.scope || 'Supply and install the items listed below.', 180);
+  doc.text(scopeLines, 15, y);
+  y += (scopeLines.length * 4.5) + 5;
+
+  const tableRows = items
+    .filter(item => item.category || item.partNumber || item.equipment || item.note)
+    .map(item => ([
+      item.category || '—',
+      item.equipment || item.partNumber || 'Equipment line',
+      String(item.qty || '1'),
+      `$${formatEstimateMoney(item.unitPrice || 0)}`,
+      `$${formatEstimateMoney(item.subtotal || calculateEstimateItemSubtotal(item))}`
+    ]));
+
+  if (doc.autoTable) {
+    doc.autoTable({
+      startY: y,
+      head: [['Category', 'Equipment', 'Qty', 'Unit Price', 'Line Total']],
+      body: tableRows.length ? tableRows : [['—', 'No equipment lines entered', '', '', '']],
+      theme: 'grid',
+      margin: { left: 15, right: 15 },
+      headStyles: { fillColor: [13, 43, 69], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5 },
+      alternateRowStyles: { fillColor: [248, 245, 241] },
+      styles: { fontSize: 8, cellPadding: 2.5, textColor: [55, 55, 55], lineColor: [228, 228, 228], lineWidth: 0.1 },
+      columnStyles: {
+        0: { cellWidth: 30 },
+        1: { cellWidth: 78 },
+        2: { cellWidth: 18, halign: 'center' },
+        3: { cellWidth: 28, halign: 'right' },
+        4: { cellWidth: 28, halign: 'right' }
+      }
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+
+  ensureSpace(28);
+  doc.setFillColor(248, 245, 241);
+  doc.roundedRect(120, y, 75, 18, 3, 3, 'F');
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(55, 55, 55);
+  doc.text('Subtotal', 125, y + 7);
+  doc.text(`$${formatEstimateMoney(subtotal)}`, 190, y + 7, { align: 'right' });
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(13, 43, 69);
+  doc.text('Grand Total', 125, y + 14);
+  doc.text(`$${formatEstimateMoney(total)}`, 190, y + 14, { align: 'right' });
+  y += 26;
+
+  if (estimate.notes) {
+    ensureSpace(20);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(13, 43, 69);
+    doc.text('Notes', 15, y);
+    y += 6;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(55, 55, 55);
+    const noteLines = doc.splitTextToSize(estimate.notes, 180);
+    doc.text(noteLines, 15, y);
+    y += (noteLines.length * 4.5) + 4;
+  }
+
+  ensureSpace(20);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(13, 43, 69);
+  doc.text('Terms', 15, y);
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(55, 55, 55);
+  const termLines = doc.splitTextToSize(estimate.terms || 'Estimate valid for 30 days.', 180);
+  doc.text(termLines, 15, y);
+
+  applyOasisPdfFooter(doc);
+
+  const safeClient = String(clientName || 'Client').replace(/[^a-z0-9]+/gi, '_');
+  const filename = `OASIS_Estimate_${safeClient}_${estimate.date || getEstimateDefaultDate()}.pdf`;
+
+  if (mode === 'share') {
+    await sharePDF(doc, filename);
+    return;
+  }
+
+  doc.save(filename);
+  showToast('Estimate PDF downloaded');
+}
+
+function shareEstimatePDF(estimateId) {
+  return saveEstimatePDF(estimateId, 'share');
 }
 
 // ==========================================
@@ -3033,9 +3990,10 @@ function renderChemPhotoSlot(orderId, label, photo, index) {
         ` : `<div class="photo-add-btn">Add ${safeLabel} photo</div>`}
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('chem', '${orderId}', ${index})">Take Photo</button>
-        <label class="btn btn-secondary btn-sm" for="photo-gallery-${index}">Choose Photo</label>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('chem', '${orderId}', ${index}, 'CAMERA')">Camera</button>
+        <label class="btn btn-secondary btn-sm" for="photo-gallery-${index}">Gallery</label>
       </div>
+      <input id="photo-camera-${index}" name="photo-camera-${index}" class="photo-file-inp" type="file" accept="image/*" capture="environment" onchange="handleChemPhotoUpload('${orderId}', ${index}, event)">
       <input id="photo-gallery-${index}" name="photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleChemPhotoUpload('${orderId}', ${index}, event)">
     </div>
   `;
@@ -3068,10 +4026,19 @@ function renderChemPhotoSection(order) {
  * Native Camera Implementation
  * Bypasses HTML inputs to force camera launch on Android
  */
-async function takeNativePhoto(type, orderId, slotIndex) {
+async function takeNativePhoto(type, orderId, slotIndex, preferredSource = 'CAMERA') {
   try {
     if (typeof Capacitor === 'undefined' || !Capacitor.Plugins.Camera) {
-      showToast('Camera plugin not available');
+      const fallbackInputId = type === 'repair'
+        ? (preferredSource === 'PHOTOS' ? `repair-photo-gallery-${slotIndex}` : `repair-photo-camera-${slotIndex}`)
+        : (preferredSource === 'PHOTOS' ? `photo-gallery-${slotIndex}` : `photo-camera-${slotIndex}`);
+      const fallbackInput = document.getElementById(fallbackInputId);
+      if (fallbackInput) {
+        fallbackInput.click();
+        return;
+      }
+
+      showToast(preferredSource === 'CAMERA' ? 'Camera not available' : 'Photo library not available');
       return;
     }
 
@@ -3079,7 +4046,7 @@ async function takeNativePhoto(type, orderId, slotIndex) {
       quality: 80,
       allowEditing: false,
       resultType: 'dataUrl',
-      source: 'CAMERA' // Forces camera specifically
+      source: preferredSource
     });
 
     if (!image || !image.dataUrl) return;
@@ -3236,44 +4203,156 @@ function removeChemPhoto(orderId, slotIndex) {
   showToast('Photo removed');
 }
 
+function promptShareChoice(itemLabel = 'report') {
+  if (!auth.canShare()) return 'download';
+
+  const choice = window.prompt(
+    `Send this ${itemLabel} by:\n1. WhatsApp\n2. Email\n3. Download only\n\nType 1, 2, or 3.`,
+    '1'
+  );
+
+  if (choice === null) return 'cancel';
+
+  const normalized = String(choice).trim().toLowerCase();
+  if (['1', 'whatsapp', 'wa'].includes(normalized)) return 'whatsapp';
+  if (['2', 'email', 'mail', 'e-mail'].includes(normalized)) return 'email';
+  if (['3', 'download', 'save'].includes(normalized)) return 'download';
+
+  return 'whatsapp';
+}
+
+function downloadBase64File(base64Data, filename, contentType = 'application/octet-stream') {
+  const link = document.createElement('a');
+  link.href = `data:${contentType};base64,${base64Data}`;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function openWhatsAppShare(text = '') {
+  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+}
+
+function openEmailShare(subject = 'OASIS Report', body = '') {
+  window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
 async function shareFile(base64Data, filename, contentType = 'application/octet-stream') {
+  const isPdf = filename.toLowerCase().endsWith('.pdf');
+  const shareTitle = filename.toLowerCase().endsWith('.xlsx') ? 'OASIS Bulk Export' : 'OASIS Report';
+  const shareText = isPdf ? `OASIS PDF attached: ${filename}` : `OASIS file ready: ${filename}`;
+
   try {
-    if (typeof Capacitor === 'undefined') {
-      throw new Error('Capacitor is not defined');
+    const plugins = (typeof Capacitor !== 'undefined' && Capacitor.Plugins) ? Capacitor.Plugins : {};
+    const { Filesystem, Share } = plugins;
+
+    if (Filesystem && Share) {
+      const saveResult = await Filesystem.writeFile({
+        path: filename,
+        data: base64Data,
+        directory: 'CACHE'
+      });
+
+      await Share.share({
+        title: shareTitle,
+        text: shareText,
+        files: [saveResult.uri],
+        dialogTitle: isPdf
+          ? 'Share the PDF with any app on this device'
+          : 'Share the file with any app on this device'
+      });
+
+      showToast(isPdf ? 'PDF ready to share' : 'File ready to share');
+      return;
     }
-
-    const { Filesystem, Share } = Capacitor.Plugins;
-    if (!Filesystem || !Share) {
-      throw new Error('Capacitor Plugins (Filesystem or Share) not available');
-    }
-
-    const saveResult = await Filesystem.writeFile({
-      path: filename,
-      data: base64Data,
-      directory: 'CACHE'
-    });
-
-    await Share.share({
-      title: 'OASIS Report',
-      text: `OASIS Service Report: ${filename}`,
-      url: saveResult.uri,
-    });
   } catch (error) {
-    console.warn('Native sharing failed, falling back to browser download:', error);
-    // Fallback for web/unsupported
-    const link = document.createElement('a');
-    link.href = `data:${contentType};base64,${base64Data}`;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast('Report downloaded to device');
+    console.warn('Native sharing failed, trying web share:', error);
   }
+
+  try {
+    if (navigator.share && typeof File !== 'undefined' && typeof atob === 'function') {
+      const byteCharacters = atob(base64Data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+
+      const file = new File([new Uint8Array(byteNumbers)], filename, { type: contentType });
+      const shareData = { title: shareTitle, text: shareText, files: [file] };
+
+      if (!navigator.canShare || navigator.canShare(shareData)) {
+        await navigator.share(shareData);
+        showToast(isPdf ? 'PDF ready to share' : 'File ready to share');
+        return;
+      }
+    }
+  } catch (error) {
+    console.warn('Web share failed, falling back to download:', error);
+  }
+
+  downloadBase64File(base64Data, filename, contentType);
+  showToast(isPdf ? 'PDF downloaded to device' : 'File downloaded to device');
 }
 
 async function sharePDF(doc, filename) {
   const b64 = doc.output('datauristring').split(',')[1];
   await shareFile(b64, filename, 'application/pdf');
+}
+
+async function shareFileByEmail(base64Data, filename, contentType = 'application/octet-stream') {
+  const subject = filename.toLowerCase().endsWith('.xlsx') ? 'OASIS Completed Orders Spreadsheet' : 'OASIS File';
+  const body = `Please send the attached file:\n\n${filename}`;
+
+  try {
+    const plugins = (typeof Capacitor !== 'undefined' && Capacitor.Plugins) ? Capacitor.Plugins : {};
+    const { Filesystem, Share } = plugins;
+
+    if (Filesystem && Share) {
+      const saveResult = await Filesystem.writeFile({
+        path: filename,
+        data: base64Data,
+        directory: 'CACHE'
+      });
+
+      await Share.share({
+        title: subject,
+        text: body,
+        files: [saveResult.uri],
+        dialogTitle: 'Choose Email to send the spreadsheet'
+      });
+
+      showToast('Choose Email to send the spreadsheet');
+      return;
+    }
+  } catch (error) {
+    console.warn('Native email share failed, using fallback:', error);
+  }
+
+  try {
+    if (navigator.share && typeof File !== 'undefined' && typeof atob === 'function') {
+      const byteCharacters = atob(base64Data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+
+      const file = new File([new Uint8Array(byteNumbers)], filename, { type: contentType });
+      const shareData = { title: subject, text: body, files: [file] };
+
+      if (!navigator.canShare || navigator.canShare(shareData)) {
+        await navigator.share(shareData);
+        showToast('Choose Email to send the spreadsheet');
+        return;
+      }
+    }
+  } catch (error) {
+    console.warn('Web email share failed, downloading instead:', error);
+  }
+
+  downloadBase64File(base64Data, filename, contentType);
+  openEmailShare(subject, `${body}\n\nThe spreadsheet has also been downloaded to your device if it needs attaching manually.`);
+  showToast('Email draft opened with spreadsheet download ready');
 }
 
 async function exportRepairToExcel(orderId) {
@@ -3356,9 +4435,11 @@ function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATERSHAPE 
 
   // Logo Placeholder / Text
   doc.setTextColor(...white);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
-  doc.text('O A S I S', 45, 18);
+  doc.setFont('helvetica', 'normal');
+  doc.setCharSpace(1.8);
+  doc.setFontSize(18);
+  doc.text('OASIS', 45, 18);
+  doc.setCharSpace(0);
 
   // Title
   doc.setFontSize(14);
@@ -3381,9 +4462,11 @@ function applyOasisPdfFooter(doc) {
   doc.rect(0, y, 210, 22, 'F');
 
   doc.setTextColor(...white);
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text('O A S I S', 40, y + 10);
+  doc.setFont('helvetica', 'normal');
+  doc.setCharSpace(1.5);
+  doc.setFontSize(11);
+  doc.text('OASIS', 40, y + 10);
+  doc.setCharSpace(0);
   doc.setFontSize(7);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(150, 150, 150);
@@ -3728,11 +4811,14 @@ function cleanupTestClients() {
 }
 
 async function exportCompletedToExcel() {
-  const allWorkorders = db.get('workorders', []);
-  const completed = allWorkorders.filter(wo => wo.status === 'completed');
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
 
-  if (completed.length === 0) {
-    showToast('No completed work orders to export');
+  const completedChemSheets = sortByNewest(db.get('workorders', []).filter(wo => isCompleted(wo.status)));
+  const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
+
+  if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
+    showToast('No completed chem sheets or repair orders to export');
     return;
   }
 
@@ -3740,7 +4826,28 @@ async function exportCompletedToExcel() {
 
   try {
     const workbook = new ExcelJS.Workbook();
-    const ws = workbook.addWorksheet('OASIS Service Records');
+    workbook.creator = 'OASIS Service App';
+    workbook.created = new Date();
+    workbook.modified = new Date();
+
+    const styleHeader = (sheet, columnCount) => {
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = {
+        from: { row: 1, column: 1 },
+        to: { row: 1, column: columnCount }
+      };
+    };
+
+    const formatBody = (sheet) => {
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        row.alignment = { vertical: 'top', wrapText: true };
+      });
+    };
 
     const chemKeys = [
       { key: 'tabs', label: 'Tabs' },
@@ -3755,8 +4862,8 @@ async function exportCompletedToExcel() {
       { key: 'algaecide', label: 'Algaecide' }
     ];
 
-    // Define Columns
-    const columns = [
+    const chemSheet = workbook.addWorksheet('Chem Sheets');
+    const chemColumns = [
       { header: 'Date', key: 'date', width: 12 },
       { header: 'Client', key: 'client', width: 25 },
       { header: 'Address', key: 'address', width: 35 },
@@ -3768,36 +4875,30 @@ async function exportCompletedToExcel() {
       { header: 'Pool Alk', key: 'palk', width: 10 }
     ];
 
-    // Add columns for each pool chemical
     chemKeys.forEach(ck => {
-      columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
+      chemColumns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
     });
 
-    columns.push(
+    chemColumns.push(
       { header: 'Spa Chlorine', key: 'sCl', width: 12 },
       { header: 'Spa pH', key: 'sph', width: 10 },
       { header: 'Spa Alk', key: 'salk', width: 10 }
     );
 
-    // Add columns for each spa chemical
     chemKeys.forEach(ck => {
-      columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
+      chemColumns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
     });
 
-    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+    chemColumns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+    chemSheet.columns = chemColumns;
+    styleHeader(chemSheet, chemColumns.length);
 
-    ws.columns = columns;
-
-    // Style Header
-    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
-
-    completed.forEach(wo => {
+    completedChemSheets.forEach(wo => {
       const rowData = {
-        date: wo.date,
-        client: wo.clientName,
-        address: wo.address,
-        tech: wo.technician,
+        date: wo.date || '',
+        client: wo.clientName || '',
+        address: wo.address || '',
+        tech: wo.technician || '',
         timeIn: wo.timeIn || wo.time || '',
         timeOut: wo.timeOut || '',
         pCl: wo.readings?.pool?.chlorine || '',
@@ -3806,35 +4907,80 @@ async function exportCompletedToExcel() {
         sCl: wo.readings?.spa?.chlorine || '',
         sph: wo.readings?.spa?.ph || '',
         salk: wo.readings?.spa?.alkalinity || '',
-        notes: (wo.workPerformed || '') + ' ' + (wo.followUpNotes || wo.notes || '')
+        notes: `${wo.workPerformed || ''} ${wo.followUpNotes || wo.notes || ''}`.trim()
       };
 
-      // Populate pool chemical values
       chemKeys.forEach(ck => {
         rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || '';
-      });
-
-      // Populate spa chemical values
-      chemKeys.forEach(ck => {
         rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || '';
       });
 
-      ws.addRow(rowData);
+      chemSheet.addRow(rowData);
     });
+
+    if (chemSheet.rowCount === 1) {
+      chemSheet.addRow({ client: 'No completed chem sheets' });
+    }
+    formatBody(chemSheet);
+
+    const repairColumns = [
+      { header: 'Date', key: 'date', width: 12 },
+      { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 },
+      { header: 'Technician', key: 'tech', width: 18 },
+      { header: 'Job Type', key: 'jobType', width: 20 },
+      { header: 'Priority', key: 'priority', width: 12 },
+      { header: 'Status', key: 'status', width: 12 },
+      { header: 'Time In', key: 'timeIn', width: 10 },
+      { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Labour Hours', key: 'labourHours', width: 12 },
+      { header: 'Materials', key: 'materials', width: 30 },
+      { header: 'Parts Summary', key: 'partsSummary', width: 40 },
+      { header: 'Work Summary', key: 'summary', width: 40 },
+      { header: 'Notes', key: 'notes', width: 40 }
+    ];
+
+    const repairSheet = workbook.addWorksheet('Repair Orders');
+    repairSheet.columns = repairColumns;
+    styleHeader(repairSheet, repairColumns.length);
+
+    completedRepairOrders.forEach(order => {
+      repairSheet.addRow({
+        date: order.date || '',
+        client: order.clientName || '',
+        address: order.address || '',
+        tech: order.assignedTo || '',
+        jobType: order.jobType || '',
+        priority: order.priority || '',
+        status: order.status || '',
+        timeIn: order.timeIn || order.time || '',
+        timeOut: order.timeOut || '',
+        labourHours: order.labourHours || '',
+        materials: order.materials || '',
+        partsSummary: order.partsSummary || '',
+        summary: order.summary || '',
+        notes: order.notes || ''
+      });
+    });
+
+    if (repairSheet.rowCount === 1) {
+      repairSheet.addRow({ client: 'No completed repair orders' });
+    }
+    formatBody(repairSheet);
 
     const buffer = await workbook.xlsx.writeBuffer();
 
-    // Robust binary to base64 conversion
     let binary = '';
     const bytes = new Uint8Array(buffer);
     for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
+      binary += String.fromCharCode(bytes[i]);
     }
-    const base64 = btoa(binary);
-    const filename = `OASIS_Service_Records_${new Date().toISOString().split('T')[0]}.xlsx`;
 
-    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast('Excel export ready');
+    const base64 = btoa(binary);
+    const filename = `OASIS_Completed_Orders_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast('Completed orders Excel ready to email');
   } catch (error) {
     console.error('Excel export failed:', error);
     showToast('Excel export failed');
@@ -4205,21 +5351,12 @@ function populateLoginTechOptions() {
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
-  let options = `<option value="" disabled selected>— Select your name —</option>`;
-
-  // Explicitly add Admin first
-  if (auth.users['admin']) {
-    options += `<option value="admin">Chris Mills (Admin)</option>`;
-  }
-
-  // Add the rest of the users, skipping admin since we added it first
-  entries.forEach(([id, user]) => {
-    if (id !== 'admin') {
-      options += `<option value="${id}">${user.name}</option>`;
-    }
-  });
-
-  select.innerHTML = options;
+  select.innerHTML = `
+    <option value="" disabled selected>— Select your name —</option>
+    ${entries.map(([id, user]) => `
+      <option value="${id}">${user.name}${user.role === 'admin' ? ' (Admin)' : ''}</option>
+    `).join('')}
+  `;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -4520,9 +5657,12 @@ function saveWorkOrderForm(orderId) {
     return;
   }
 
+  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
-  showToast('Chem sheet saved');
+  showToast(order.status === 'completed'
+    ? 'Completed chem sheet saved for admin export'
+    : 'Chem sheet saved');
 }
 
 function shareReport(orderId) {
@@ -4548,31 +5688,41 @@ function saveRepairOrders(orders) {
   db.set('repairOrders', orders);
 }
 
-function renderRepairOrdersList() {
+function renderRepairOrdersList(statusFilter = 'all') {
   const allOrders = getRepairOrders();
   const currentUser = auth.getCurrentUser();
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  let orders = isAdmin
+  let orders = (currentUser && currentUser.role === 'admin')
     ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
-  // Hide completed repair orders from the main active list for everyone
-  orders = orders.filter(o => o.status !== 'completed');
+  if (isAdmin) {
+    if (statusFilter === 'completed') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+    } else if (statusFilter === 'pending') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
+    }
+  }
 
   if (!orders.length) {
+    const emptyTitle = isAdmin && statusFilter === 'completed'
+      ? 'No completed repair orders'
+      : isAdmin && statusFilter === 'pending'
+        ? 'No pending or open repair orders'
+        : 'No repair work orders';
+
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
-        <div class="empty-title">No repair work orders</div>
-        <div class="empty-subtitle">${isAdmin ? 'No repair orders found' : 'Create one to manage service repairs in the same app'}</div>
+        <div class="empty-title">${emptyTitle}</div>
+        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a repair order' : 'Create one to manage service repairs in the same app'}</div>
       </div>
     `;
   }
 
-  return orders.map(order => `
+  return [...orders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).map(order => `
     <div class="job-card" style="margin-bottom:12px;">
       <div class="job-card-header">
         <div>
@@ -4590,9 +5740,9 @@ function renderRepairOrdersList() {
         <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
       </div>
       <div class="job-card-footer">
-        <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">Open</button>
+        <button class="btn ${order.status === 'completed' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">${order.status === 'completed' ? 'Completed' : 'Open'}</button>
         ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
-        ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
+        ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
       </div>
     </div>
   `).join('');
@@ -4833,7 +5983,8 @@ function collectRepairOrderFromForm(orderId = '') {
 function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) return;
-  order.status = document.getElementById('repair-status')?.value || order.status;
+
+  order.status = document.getElementById('repair-status')?.value || order.status || 'open';
 
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
@@ -4845,19 +5996,9 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  showToast('Repair work order saved');
-
-  if (shareAfterSave) {
-    shareRepairPDF(order.id);
-  } else {
-    router.renderWorkOrders();
-  }
-} else {
-    orders.unshift(order);
-  }
-
-  saveRepairOrders(orders);
-  showToast('Repair work order saved');
+  showToast(order.status === 'completed'
+    ? 'Completed repair order saved for admin export'
+    : 'Repair work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -4866,7 +6007,6 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   router.renderWorkOrders();
 }
-
 
 function getImageDataUrl(url) {
   return new Promise((resolve, reject) => {
@@ -4965,8 +6105,6 @@ async function shareRepairPDF(orderId) {
   y = renderHeader();
 
   // Info Grid
-  doc.setFillColor(...lightBeige);
-  doc.rect(10, y, 190, 42, 'F');
 
   let gridY = y + 7;
   const col1 = 15;
@@ -5023,10 +6161,8 @@ async function shareRepairPDF(orderId) {
     y += 7;
 
     order.partsItems.forEach((item, i) => {
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 248, 248);
-        doc.rect(10, y, 190, 6, 'F');
-      }
+      doc.setDrawColor(235, 235, 235);
+      doc.line(10, y + 6, 200, y + 6);
       doc.setTextColor(...navy);
       doc.text(`${item.category}: ${item.product}` || 'Unknown Part', 15, y + 4.5);
       doc.text(String(item.qty || 1), 170, y + 4.5);
@@ -5396,11 +6532,14 @@ function cleanupTestClients() {
 }
 
 async function exportCompletedToExcel() {
-  const allWorkorders = db.get('workorders', []);
-  const completed = allWorkorders.filter(wo => wo.status === 'completed');
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
 
-  if (completed.length === 0) {
-    showToast('No completed work orders to export');
+  const completedChemSheets = sortByNewest(db.get('workorders', []).filter(wo => isCompleted(wo.status)));
+  const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
+
+  if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
+    showToast('No completed chem sheets or repair orders to export');
     return;
   }
 
@@ -5408,7 +6547,28 @@ async function exportCompletedToExcel() {
 
   try {
     const workbook = new ExcelJS.Workbook();
-    const ws = workbook.addWorksheet('OASIS Service Records');
+    workbook.creator = 'OASIS Service App';
+    workbook.created = new Date();
+    workbook.modified = new Date();
+
+    const styleHeader = (sheet, columnCount) => {
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = {
+        from: { row: 1, column: 1 },
+        to: { row: 1, column: columnCount }
+      };
+    };
+
+    const formatBody = (sheet) => {
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        row.alignment = { vertical: 'top', wrapText: true };
+      });
+    };
 
     const chemKeys = [
       { key: 'tabs', label: 'Tabs' },
@@ -5423,8 +6583,8 @@ async function exportCompletedToExcel() {
       { key: 'algaecide', label: 'Algaecide' }
     ];
 
-    // Define Columns
-    const columns = [
+    const chemSheet = workbook.addWorksheet('Chem Sheets');
+    const chemColumns = [
       { header: 'Date', key: 'date', width: 12 },
       { header: 'Client', key: 'client', width: 25 },
       { header: 'Address', key: 'address', width: 35 },
@@ -5436,36 +6596,30 @@ async function exportCompletedToExcel() {
       { header: 'Pool Alk', key: 'palk', width: 10 }
     ];
 
-    // Add columns for each pool chemical
     chemKeys.forEach(ck => {
-      columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
+      chemColumns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
     });
 
-    columns.push(
+    chemColumns.push(
       { header: 'Spa Chlorine', key: 'sCl', width: 12 },
       { header: 'Spa pH', key: 'sph', width: 10 },
       { header: 'Spa Alk', key: 'salk', width: 10 }
     );
 
-    // Add columns for each spa chemical
     chemKeys.forEach(ck => {
-      columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
+      chemColumns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
     });
 
-    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+    chemColumns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+    chemSheet.columns = chemColumns;
+    styleHeader(chemSheet, chemColumns.length);
 
-    ws.columns = columns;
-
-    // Style Header
-    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
-
-    completed.forEach(wo => {
+    completedChemSheets.forEach(wo => {
       const rowData = {
-        date: wo.date,
-        client: wo.clientName,
-        address: wo.address,
-        tech: wo.technician,
+        date: wo.date || '',
+        client: wo.clientName || '',
+        address: wo.address || '',
+        tech: wo.technician || '',
         timeIn: wo.timeIn || wo.time || '',
         timeOut: wo.timeOut || '',
         pCl: wo.readings?.pool?.chlorine || '',
@@ -5474,35 +6628,80 @@ async function exportCompletedToExcel() {
         sCl: wo.readings?.spa?.chlorine || '',
         sph: wo.readings?.spa?.ph || '',
         salk: wo.readings?.spa?.alkalinity || '',
-        notes: (wo.workPerformed || '') + ' ' + (wo.followUpNotes || wo.notes || '')
+        notes: `${wo.workPerformed || ''} ${wo.followUpNotes || wo.notes || ''}`.trim()
       };
 
-      // Populate pool chemical values
       chemKeys.forEach(ck => {
         rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || '';
-      });
-
-      // Populate spa chemical values
-      chemKeys.forEach(ck => {
         rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || '';
       });
 
-      ws.addRow(rowData);
+      chemSheet.addRow(rowData);
     });
+
+    if (chemSheet.rowCount === 1) {
+      chemSheet.addRow({ client: 'No completed chem sheets' });
+    }
+    formatBody(chemSheet);
+
+    const repairColumns = [
+      { header: 'Date', key: 'date', width: 12 },
+      { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 },
+      { header: 'Technician', key: 'tech', width: 18 },
+      { header: 'Job Type', key: 'jobType', width: 20 },
+      { header: 'Priority', key: 'priority', width: 12 },
+      { header: 'Status', key: 'status', width: 12 },
+      { header: 'Time In', key: 'timeIn', width: 10 },
+      { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Labour Hours', key: 'labourHours', width: 12 },
+      { header: 'Materials', key: 'materials', width: 30 },
+      { header: 'Parts Summary', key: 'partsSummary', width: 40 },
+      { header: 'Work Summary', key: 'summary', width: 40 },
+      { header: 'Notes', key: 'notes', width: 40 }
+    ];
+
+    const repairSheet = workbook.addWorksheet('Repair Orders');
+    repairSheet.columns = repairColumns;
+    styleHeader(repairSheet, repairColumns.length);
+
+    completedRepairOrders.forEach(order => {
+      repairSheet.addRow({
+        date: order.date || '',
+        client: order.clientName || '',
+        address: order.address || '',
+        tech: order.assignedTo || '',
+        jobType: order.jobType || '',
+        priority: order.priority || '',
+        status: order.status || '',
+        timeIn: order.timeIn || order.time || '',
+        timeOut: order.timeOut || '',
+        labourHours: order.labourHours || '',
+        materials: order.materials || '',
+        partsSummary: order.partsSummary || '',
+        summary: order.summary || '',
+        notes: order.notes || ''
+      });
+    });
+
+    if (repairSheet.rowCount === 1) {
+      repairSheet.addRow({ client: 'No completed repair orders' });
+    }
+    formatBody(repairSheet);
 
     const buffer = await workbook.xlsx.writeBuffer();
 
-    // Robust binary to base64 conversion
     let binary = '';
     const bytes = new Uint8Array(buffer);
     for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
+      binary += String.fromCharCode(bytes[i]);
     }
-    const base64 = btoa(binary);
-    const filename = `OASIS_Service_Records_${new Date().toISOString().split('T')[0]}.xlsx`;
 
-    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast('Excel export ready');
+    const base64 = btoa(binary);
+    const filename = `OASIS_Completed_Orders_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast('Completed orders Excel ready to email');
   } catch (error) {
     console.error('Excel export failed:', error);
     showToast('Excel export failed');
@@ -5873,21 +7072,12 @@ function populateLoginTechOptions() {
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
 
-  let options = `<option value="" disabled selected>— Select your name —</option>`;
-
-  // Explicitly add Admin first
-  if (auth.users['admin']) {
-    options += `<option value="admin">Chris Mills (Admin)</option>`;
-  }
-
-  // Add the rest of the users, skipping admin since we added it first
-  entries.forEach(([id, user]) => {
-    if (id !== 'admin') {
-      options += `<option value="${id}">${user.name}</option>`;
-    }
-  });
-
-  select.innerHTML = options;
+  select.innerHTML = `
+    <option value="" disabled selected>— Select your name —</option>
+    ${entries.map(([id, user]) => `
+      <option value="${id}">${user.name}${user.role === 'admin' ? ' (Admin)' : ''}</option>
+    `).join('')}
+  `;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -6188,10 +7378,12 @@ function saveWorkOrderForm(orderId) {
     return;
   }
 
-  order.status = document.getElementById('wo-status')?.value || order.status;
+  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
-  showToast('Chem sheet saved');
+  showToast(order.status === 'completed'
+    ? 'Completed chem sheet saved for admin export'
+    : 'Chem sheet saved');
 }
 
 function shareReport(orderId) {
@@ -6209,11 +7401,22 @@ function sendReport(orderId) {
   shareReport(orderId);
 }
 
+function getSavedAppLink() {
+  const savedLink = String(db.get('apk_download_link') || '').trim();
+  if (!savedLink || /oasis-app\.apk$/i.test(savedLink)) {
+    return 'https://millzy7665-beep.github.io/oasis-service/';
+  }
+  return savedLink;
+}
+
 function saveApkLink() {
   const input = document.getElementById('apk-link-input');
   if (!input) return;
 
-  const link = input.value.trim();
+  const rawLink = input.value.trim();
+  const link = (!rawLink || /oasis-app\.apk$/i.test(rawLink))
+    ? 'https://millzy7665-beep.github.io/oasis-service/'
+    : rawLink;
   db.set('apk_download_link', link);
 
   // Re-render the settings view to update the QR code
@@ -6221,21 +7424,42 @@ function saveApkLink() {
     router.renderSettings();
   }
 
-  showToast(link ? 'APK link saved' : 'APK link cleared');
+  showToast(link ? 'App link saved' : 'App link cleared');
 }
 
 async function shareAppLink() {
-  const link = db.get('apk_download_link') || (window.location.origin + '/oasis-app.apk');
+  const link = getSavedAppLink();
   if (!link) {
     showToast('No link to share');
     return;
   }
 
+  const shareTitle = 'Download Oasis App';
+  const shareText = 'Open the latest Oasis app here:';
+  const shareChoice = promptShareChoice('app link');
+
+  if (shareChoice === 'cancel') {
+    showToast('Share cancelled');
+    return;
+  }
+
+  if (shareChoice === 'whatsapp') {
+    openWhatsAppShare(`${shareText}\n${link}`);
+    showToast('WhatsApp opened');
+    return;
+  }
+
+  if (shareChoice === 'email') {
+    openEmailShare(shareTitle, `${shareText}\n\n${link}`);
+    showToast('Email draft opened');
+    return;
+  }
+
   const shareData = {
-    title: 'Download Pool Tech App',
-    text: 'Download the latest version of the Pool Service App here:',
+    title: shareTitle,
+    text: shareText,
     url: link,
-    dialogTitle: 'Share APK Link'
+    dialogTitle: 'Share Oasis App Link'
   };
 
   try {
@@ -6244,13 +7468,11 @@ async function shareAppLink() {
     } else if (navigator.share) {
       await navigator.share(shareData);
     } else {
-      // Fallback to clipboard
       await navigator.clipboard.writeText(link);
       showToast('Link copied to clipboard');
     }
   } catch (err) {
     console.error('Error sharing:', err);
-    // Fallback to clipboard on error
     try {
       await navigator.clipboard.writeText(link);
       showToast('Link copied to clipboard');
@@ -6261,7 +7483,7 @@ async function shareAppLink() {
 }
 
 async function copyApkLink() {
-  const link = db.get('apk_download_link') || (window.location.origin + '/oasis-app.apk');
+  const link = getSavedAppLink();
   if (link) {
     try {
       await navigator.clipboard.writeText(link);
@@ -6271,4 +7493,215 @@ async function copyApkLink() {
       showToast('Could not copy link');
     }
   }
+}
+
+function quickAddClient() {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can add clients');
+    return;
+  }
+
+  const name = prompt('Client name');
+  if (!name) return;
+
+  const address = prompt('Client address') || '';
+  const contact = prompt('Contact name') || '';
+  const technicianInput = prompt(
+    `Assign this client to which technician?\n\n${getTechnicianNames().join(', ')}`,
+    getTechnicianNames()[0] || ''
+  );
+  const technician = normalizeTechnicianName(technicianInput);
+
+  if (!technician) {
+    showToast('Please select the technician for this client');
+    return;
+  }
+
+  const clients = db.get('clients', []);
+  const clientId = `c${Date.now()}`;
+  clients.unshift({
+    id: clientId,
+    name,
+    address,
+    contact,
+    technician
+  });
+
+  db.set('clients', clients);
+
+  notificationManager.create({
+    type: 'client',
+    title: 'New client from Admin',
+    message: `${name} has been added and sent to ${technician}.`,
+    recipients: [technician, ...getAdminRecipients()],
+    targetView: 'clients',
+    targetId: clientId,
+    actionLabel: 'Open Clients'
+  });
+
+  showToast(`Client added and sent to ${technician}`);
+  router.renderClients();
+}
+
+function onChemClientChange() {
+  const select = document.getElementById('wo-client');
+  const addressField = document.getElementById('wo-address');
+  const title = document.getElementById('wo-client-name');
+  const techField = document.getElementById('wo-tech');
+  if (!select) return;
+
+  const client = db.get('clients', []).find(item => item.id === select.value);
+  if (client) {
+    if (addressField) addressField.value = client.address || '';
+    if (title) title.textContent = client.name || 'Chem Sheet';
+    if (techField && client.technician) techField.value = client.technician;
+  }
+}
+
+function saveWorkOrderForm(orderId) {
+  const previousOrder = workOrderManager.getOrder(orderId);
+  const order = collectWorkOrderForm(orderId);
+  if (!order) {
+    showToast('Work order not found');
+    return;
+  }
+
+  const currentUser = auth.getCurrentUser();
+  const previousStatus = (previousOrder?.status || '').toLowerCase();
+  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
+  order.updatedAt = new Date().toISOString();
+  order.updatedBy = currentUser?.name || '';
+
+  workOrderManager.saveOrder(order);
+
+  if (currentUser?.username === 'admin' && order.technician && order.technician !== currentUser.name) {
+    const assignmentChanged = !previousOrder || previousOrder.technician !== order.technician || previousStatus !== (order.status || '').toLowerCase();
+    if (assignmentChanged) {
+      notificationManager.create({
+        type: 'chem',
+        title: 'New chem sheet from Admin',
+        message: `${order.clientName || 'A chem sheet'} has been sent directly to you.`,
+        recipients: [order.technician, ...getAdminRecipients(order.technician)],
+        targetView: 'chem',
+        targetId: order.id,
+        actionLabel: 'Open Chem Sheet'
+      });
+    }
+  } else if (currentUser && currentUser.username !== 'admin') {
+    const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
+    if (shouldNotifyAdmin) {
+      notificationManager.create({
+        type: 'chem',
+        title: order.status === 'completed' ? 'Completed chem sheet received' : 'Chem sheet received from technician',
+        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a chem sheet'}.`,
+        recipients: getAdminRecipients(currentUser?.name),
+        targetView: 'chem',
+        targetId: order.id,
+        actionLabel: 'Open Chem Sheet'
+      });
+    }
+  }
+
+  router.navigate('workorders');
+  showToast(order.status === 'completed'
+    ? 'Completed chem sheet saved for admin export'
+    : 'Chem sheet saved');
+}
+
+function onRepairClientChange() {
+  const select = document.getElementById('repair-client');
+  const address = document.getElementById('repair-address');
+  const title = document.getElementById('repair-bar-title');
+  const techField = document.getElementById('repair-tech');
+  if (!select || !address) return;
+
+  const client = db.get('clients', []).find(item => item.id === select.value);
+  if (client) {
+    address.value = client.address || '';
+    if (title) title.textContent = client.name || 'Repair Order';
+    if (techField && client.technician) techField.value = client.technician;
+  }
+}
+
+function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
+  const order = collectRepairOrderFromForm(orderId);
+  if (!order) return;
+
+  const currentUser = auth.getCurrentUser();
+  const orders = getRepairOrders();
+  const previousOrder = orders.find(item => item.id === order.id);
+  const previousStatus = (previousOrder?.status || '').toLowerCase();
+
+  order.status = document.getElementById('repair-status')?.value || order.status || 'open';
+  order.updatedAt = new Date().toISOString();
+  order.updatedBy = currentUser?.name || '';
+
+  const index = orders.findIndex(item => item.id === order.id);
+  if (index >= 0) {
+    orders[index] = order;
+  } else {
+    orders.unshift(order);
+  }
+
+  saveRepairOrders(orders);
+
+  if (currentUser?.username === 'admin' && order.assignedTo && order.assignedTo !== currentUser.name) {
+    const assignmentChanged = !previousOrder || previousOrder.assignedTo !== order.assignedTo || previousStatus !== (order.status || '').toLowerCase();
+    if (assignmentChanged) {
+      notificationManager.create({
+        type: 'repair',
+        title: 'New repair order from Admin',
+        message: `${order.clientName || 'A repair order'} has been sent directly to you.`,
+        recipients: [order.assignedTo, ...getAdminRecipients(order.assignedTo)],
+        targetView: 'repair',
+        targetId: order.id,
+        actionLabel: 'Open Repair Order'
+      });
+    }
+  } else if (currentUser && currentUser.username !== 'admin') {
+    const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
+    if (shouldNotifyAdmin) {
+      notificationManager.create({
+        type: 'repair',
+        title: order.status === 'completed' ? 'Completed repair order received' : 'Repair order received from technician',
+        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a repair order'}.`,
+        recipients: getAdminRecipients(currentUser?.name),
+        targetView: 'repair',
+        targetId: order.id,
+        actionLabel: 'Open Repair Order'
+      });
+    }
+  }
+
+  showToast(order.status === 'completed'
+    ? 'Completed repair order saved for admin export'
+    : 'Repair work order saved');
+
+  if (shareAfterSave) {
+    shareRepairPDF(order.id);
+    return;
+  }
+
+  router.renderWorkOrders();
+}
+
+function renderRepairPhotoSlot(orderId, label, photo, index) {
+  const safeLabel = escapeHtml(label);
+  return `
+    <div class="photo-slot" id="repair-photo-slot-${index}">
+      <div class="photo-slot-lbl">${safeLabel}</div>
+      <div class="photo-preview-box">
+        ${photo ? `
+          <img class="photo-thumb" data-repair-photo-index="${index}" src="${photo}" alt="${safeLabel}">
+          <button type="button" class="photo-remove" onclick="removeRepairPhoto('${orderId || ''}', ${index})" aria-label="Remove ${safeLabel} photo">&times;</button>
+        ` : `<div class="photo-add-btn">Add ${safeLabel} photo</div>`}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('repair', '${orderId || ''}', ${index}, 'CAMERA')">Camera</button>
+        <label class="btn btn-secondary btn-sm" for="repair-photo-gallery-${index}">Gallery</label>
+      </div>
+      <input id="repair-photo-camera-${index}" name="repair-photo-camera-${index}" class="photo-file-inp" type="file" accept="image/*" capture="environment" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
+      <input id="repair-photo-gallery-${index}" name="repair-photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
+    </div>
+  `;
 }

@@ -6,9 +6,10 @@
   <meta name="theme-color" content="#0a1e2e">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="OASIS Service">
-  <link rel="apple-touch-icon" href="icon-180.png">
-  <title>OASIS — Service</title>
+  <meta name="apple-mobile-web-app-title" content="Oasis">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="oasis-logo.png">
+  <title>Oasis</title>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
@@ -54,7 +55,7 @@
             <option value="t8">Malik</option>
             <option value="t9">Jet</option>
             <option value="t10">Mark</option>
-            <option value="admin">Chris Mills</option>
+            <option value="admin">Chris Mills (Admin)</option>
           </select>
         </div>
         <div class="login-field-group">
@@ -128,7 +129,20 @@
     <div id="toast" class="toast hidden"></div>
   </div>
 
-  <script src="tech-catalog.js?v=37"></script>
-  <script src="app.js?v=37"></script>
+  <script src="tech-catalog.js?v=101"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="app.js?v=117"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').then(registration => {
+          console.log('SW registered: ', registration);
+        }).catch(registrationError => {
+          console.log('SW registration failed: ', registrationError);
+        });
+      });
+    }
+  </script>
 </body>
 </html>

@@ -1,40 +1,5 @@
 const REPAIRS_STORAGE_PREFIX = 'oasis_repairs_';
 
-async function shareFile(base64Data, filename, contentType = 'application/octet-stream') {
-  try {
-    if (typeof Capacitor === 'undefined') {
-      throw new Error('Capacitor is not defined');
-    }
-
-    const { Filesystem, Share } = Capacitor.Plugins;
-    if (!Filesystem || !Share) {
-      throw new Error('Capacitor Plugins (Filesystem or Share) not available');
-    }
-
-    const saveResult = await Filesystem.writeFile({
-      path: filename,
-      data: base64Data,
-      directory: 'CACHE'
-    });
-
-    await Share.share({
-      title: 'OASIS Report',
-      text: `OASIS Service Report: ${filename}`,
-      url: saveResult.uri,
-    });
-  } catch (error) {
-    console.warn('Native sharing failed, falling back to browser download:', error);
-    // Fallback for web/unsupported
-    const link = document.createElement('a');
-    link.href = `data:${contentType};base64,${base64Data}`;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast('Report downloaded to device');
-  }
-}
-
 const RepairUsers = {
   t1: { name: 'Jet', role: 'technician' },
   t2: { name: 'Mark', role: 'technician' },
@@ -465,7 +430,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '') {
 
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">
           <button class="btn btn-primary" onclick="saveRepairOrder('${escapeHtml(orderId)}')">Save Work Order</button>
-          <button class="btn send-report-btn" onclick="saveRepairOrder('${escapeHtml(orderId)}', true)">Share PDF</button>
+          <button class="btn send-report-btn" onclick="saveRepairOrder('${escapeHtml(orderId)}', true)">Download PDF</button>
         </div>
       </div>
     </div>
@@ -507,7 +472,7 @@ function collectRepairOrderFromForm(orderId = '') {
   };
 }
 
-function saveRepairOrder(orderId = '', shareAfterSave = false) {
+function saveRepairOrder(orderId = '', downloadAfterSave = false) {
   const order = collectRepairOrderFromForm(orderId);
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
@@ -521,15 +486,15 @@ function saveRepairOrder(orderId = '', shareAfterSave = false) {
   setRepairOrders(orders);
   showToast('Technician work order saved');
 
-  if (shareAfterSave) {
-    shareRepairPDF(order.id);
+  if (downloadAfterSave) {
+    downloadRepairPDF(order.id);
     return;
   }
 
   renderRepairView('tech-orders');
 }
 
-async function shareRepairPDF(orderId) {
+function downloadRepairPDF(orderId) {
   const order = getRepairOrders().find(item => item.id === orderId);
   if (!order || !window.jspdf) {
     showToast('Unable to generate PDF');
@@ -579,10 +544,9 @@ async function shareRepairPDF(orderId) {
   doc.text(noteLines, 20, y);
 
   const safeClient = (order.clientName || 'Client').replace(/[^a-z0-9]+/gi, '_');
-  const filename = `OASIS_Technician_${safeClient}_${order.date || 'work_order'}.pdf`;
-  const b64 = doc.output('datauristring').split(',')[1];
+  doc.save(`OASIS_Technician_${safeClient}_${order.date || 'work_order'}.pdf`);
 
-  await shareFile(b64, filename, 'application/pdf');
+  showToast('Technician PDF saved to device');
   renderRepairView('tech-orders');
 }
 
@@ -670,7 +634,7 @@ window.signOut = signOut;
 window.renderRepairView = renderRepairView;
 window.renderRepairOrderForm = renderRepairOrderForm;
 window.saveRepairOrder = saveRepairOrder;
-window.shareRepairPDF = shareRepairPDF;
+window.downloadRepairPDF = downloadRepairPDF;
 window.deleteRepairOrder = deleteRepairOrder;
 window.quickAddClient = quickAddClient;
 window.deleteRepairClient = deleteRepairClient;

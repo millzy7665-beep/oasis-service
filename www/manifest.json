@@ -1,6 +1,6 @@
 {
-  "name": "OASIS Service and Repair",
-  "short_name": "OASIS S&R",
+  "name": "Oasis",
+  "short_name": "Oasis",
   "description": "Unified OASIS service, chem sheet, and repair work order app",
   "id": "./index.html?app=service-repair",
   "start_url": "./index.html?source=pwa-service-repair",

@@ -12,14 +12,14 @@
 /* ── OASIS Brand Tokens ── */
 :root {
   /* Brand colours — exact values from oasis.ky global CSS */
-  --navy:         #1A405F;   /* Primary — deep ocean navy          */
-  --navy-dark:    #0f2a40;   /* Darker navy for hovers             */
-  --navy-deep:    #0a1e2e;   /* Deepest navy for headers           */
+  --navy:         #111111;   /* Primary — unified black theme      */
+  --navy-dark:    #050505;   /* Darker black for hovers            */
+  --navy-deep:    #000000;   /* Black for headers/navigation       */
   --ocean:        #226683;   /* Mid ocean blue                     */
   --teal:         #539199;   /* Accent water teal                  */
   --teal-light:   #e8f2f3;   /* Very light teal wash               */
-  --champagne:    #D4C9BB;   /* Sand / champagne secondary         */
-  --champagne-dk: #b8a898;   /* Darker champagne                   */
+  --champagne:    #c9a87c;   /* Gold secondary                     */
+  --champagne-dk: #a98655;   /* Darker gold                        */
   --warm-grey:    #E4E3E1;   /* Light warm grey surface            */
   --near-black:   #231F20;   /* Rich charcoal — brand text colour  */
   --gold:         #c9a87c;   /* Warm gold accent                   */
@@ -1133,60 +1133,32 @@ select.form-control {
   z-index: 2;
 }
 
-/* Photo picker actions */
-.photo-picker-options {
+/* "Tap to add" placeholder label */
+.photo-add-btn {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
   width: 100%;
   height: 100%;
-  padding: 10px;
-  text-align: center;
-}
-
-.photo-picker-title {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--gray-500);
-  text-transform: uppercase;
-}
-
-.photo-picker-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.photo-source-btn,
-.photo-add-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 88px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--gray-300);
-  background: var(--white);
   font-size: 12px;
   font-weight: 600;
-  color: var(--navy);
+  letter-spacing: 0.06em;
+  color: var(--gray-400);
   cursor: pointer;
   user-select: none;
 }
-.photo-source-btn:active,
 .photo-add-btn:active { background: var(--gray-200); }
 
-/* Hidden file input */
+/* Hidden file input — using opacity 0 but keeping it accessible to the label's tap */
 .photo-file-inp {
   position: absolute;
-  width: 0;
-  height: 0;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
   opacity: 0;
-  pointer-events: none;
+  cursor: pointer;
+  z-index: -1;
 }
 
 /* ============================================================
@@ -1202,83 +1174,7 @@ select.form-control {
 /* ============================================================
    LOGIN SCREEN
    ============================================================ */
-/* ============================================================
-   LOGIN SCREEN (.lsn-*) — at body level, no conflicts
-   ============================================================ */
-.lsn {
-  position: fixed;
-  inset: 0;
-  z-index: 9000;
-  background: #0a1e2e;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px 32px;
-  overflow-y: auto;
-}
-.lsn-logo  { width: 80px; height: auto; display: block; margin: 0 auto 20px; filter: drop-shadow(0 4px 20px rgba(83,145,153,.45)); }
-.lsn-brand { font-family: Georgia, 'Times New Roman', serif; font-size: 42px; font-weight: 300; letter-spacing: 0.38em; color: #fff; text-transform: uppercase; margin-bottom: 8px; text-align: center; }
-.lsn-tag   { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: #D4C9BB; opacity: 0.6; margin-bottom: 44px; text-align: center; }
-.lsn-form  { display: flex; flex-direction: column; width: 100%; max-width: 320px; }
-.lsn-lbl   { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(212,201,187,.65); margin-bottom: 7px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-.lsn-fld {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 14px 16px;
-  background: rgba(255,255,255,.10);
-  border: 1px solid rgba(212,201,187,.25);
-  border-radius: 6px;
-  color: #ffffff;
-  font-size: 16px;
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  outline: none;
-  -webkit-appearance: none;
-  appearance: none;
-}
-.lsn-fld option { background: #0f2a40; color: #fff; }
-.lsn-fld:focus  { border-color: rgba(212,201,187,.7); background: rgba(255,255,255,.15); }
-#login-tech {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23D4C9BB' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 14px center;
-  background-color: rgba(255,255,255,.10);
-  padding-right: 38px;
-  cursor: pointer;
-}
-#login-pin::placeholder { color: rgba(255,255,255,.3); }
-.lsn-btn {
-  margin-top: 20px;
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 15px;
-  background: linear-gradient(135deg, #539199, #226683);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  box-shadow: 0 4px 20px rgba(83,145,153,.35);
-}
-.lsn-btn:active { opacity: 0.85; }
-.lsn-err {
-  margin-top: 10px;
-  color: #ff8080;
-  font-size: 12px;
-  text-align: center;
-  padding: 10px;
-  background: rgba(181,48,48,.2);
-  border-radius: 6px;
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-}
-
-/* ── OLD login classes kept for compat ── */
+/* Removed redundant .lsn classes to prevent conflicts */
 /* ============================================================
    LOGIN SCREEN — fully self-contained, no class conflicts
    ============================================================ */
@@ -1316,11 +1212,14 @@ select.form-control {
 }
 
 .login-logo {
-  width: 76px;
+  width: 120px;
   height: auto;
-  margin: 0 auto 18px;
+  margin: 0 auto 24px;
   display: block;
-  filter: drop-shadow(0 4px 18px rgba(83,145,153,.45));
+  /* Use screen blend mode to hide the black background and show the original gold logo */
+  mix-blend-mode: screen;
+  filter: none !important;
+  -webkit-filter: none !important;
 }
 
 .login-brand {
@@ -1328,7 +1227,7 @@ select.form-control {
   font-size: 40px;
   font-weight: 300;
   letter-spacing: 0.38em;
-  color: #ffffff;
+  color: #c9a87c !important; /* Explicit OASIS Gold */
   text-transform: uppercase;
   margin-bottom: 8px;
 }
@@ -1432,45 +1331,6 @@ select.form-control {
   border-radius: 6px;
   margin-top: 8px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-}
-
-.qr-block {
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid rgba(212,201,187,.16);
-  text-align: center;
-}
-.qr-block p {
-  color: rgba(212,201,187,.92);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  margin-bottom: 12px;
-}
-.qr-block a {
-  display: inline-block;
-}
-.qr-block img {
-  width: 180px;
-  max-width: 100%;
-  display: block;
-  margin: 0 auto;
-  padding: 8px;
-  background: #fff;
-  border: 1px solid rgba(212,201,187,.24);
-  border-radius: 14px;
-  box-shadow: 0 8px 22px rgba(0,0,0,.18);
-}
-.qr-note {
-  color: rgba(212,201,187,.7);
-  font-size: 11px;
-  line-height: 1.45;
-  margin-top: 10px;
-}
-.qr-note strong {
-  color: #ffffff;
-  font-weight: 600;
 }
 
 /* Sign Out button in header */
@@ -1724,15 +1584,76 @@ select.form-control {
 }
 
 /* ============================================================
+   RESPONSIVE — mobile-first fit fixes
+   ============================================================ */
+@media (max-width: 520px) {
+  #app {
+    width: 100%;
+    max-width: 100%;
+    box-shadow: none;
+  }
+
+  .app-header {
+    padding: 0 12px;
+  }
+
+  .header-left {
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .header-sub {
+    margin-left: 0;
+    letter-spacing: 0.14em;
+    font-size: 8px;
+    line-height: 1.3;
+  }
+
+  .wo-bar {
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 10px 12px;
+  }
+
+  .wo-bar-title {
+    order: 3;
+    width: 100%;
+    text-align: left;
+    letter-spacing: 0.08em;
+    font-size: 15px;
+  }
+
+  .wo-sec-bd {
+    padding: 14px;
+  }
+
+  .wo-grid,
+  .photo-ba-row,
+  .photo-extra-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lsi-main {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .photo-slot > div[style*="display:flex"] > * {
+    flex: 1 1 120px;
+    text-align: center;
+  }
+
+  .card-body .btn,
+  .wo-bar .btn {
+    white-space: normal;
+  }
+}
+
+/* ============================================================
    RESPONSIVE — Larger screens show as mobile frame
    ============================================================ */
 @media (min-width: 480px) {
   body { background: #0a1e2e; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
   #app { border-radius: 24px; max-height: 900px; }
-  .login-screen { 
-    border-radius: 24px; 
-    width: 400px;
-    height: 700px;
-    max-height: 90vh;
-  }
+  .login-screen { border-radius: 24px; position: absolute; }
 }
