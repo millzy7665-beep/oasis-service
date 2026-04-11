@@ -756,18 +756,25 @@ class Router {
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
     const isMainAdmin = user && user.role === 'admin';
+    this._clientViewMode = this._clientViewMode || 'all';
 
     content.innerHTML = `
       <div class="section-header">
         <div class="section-title">Clients</div>
         <div style="display:flex; gap:8px;">
-          ${isMainAdmin ? '<button class="btn btn-secondary btn-sm" onclick="bulkImportClients()">Bulk Import</button>' : ''}
+          ${isMainAdmin ? '<button class="btn btn-secondary btn-sm" onclick="importRouteSchedule()">Import Route Sheet</button>' : ''}
           ${isAdmin ? '<button class="btn btn-primary btn-sm" onclick="quickAddClient()">+ Add Client</button>' : ''}
         </div>
       </div>
 
+      <div style="display:flex; gap:6px; padding:0 16px 8px; flex-wrap:wrap;">
+        <button class="btn btn-sm ${this._clientViewMode === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('all')">All</button>
+        <button class="btn btn-sm ${this._clientViewMode === 'byRoute' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('byRoute')">By Route</button>
+        <button class="btn btn-sm ${this._clientViewMode === 'byDay' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('byDay')">By Day</button>
+      </div>
+
       <div class="search-bar" style="margin: 0 16px 12px;">
-        <input type="text" id="client-search" placeholder="Search 280+ clients..." oninput="router.filterClients(this.value)" class="form-control">
+        <input type="text" id="client-search" placeholder="Search clients..." oninput="router.filterClients(this.value)" class="form-control">
       </div>
 
       <div id="clients-list">
@@ -776,24 +783,51 @@ class Router {
     `;
   }
 
+  setClientView(mode) {
+    this._clientViewMode = mode;
+    this.renderClients();
+  }
+
   filterClients(query) {
     const list = document.getElementById('clients-list');
     if (!list) return;
     list.innerHTML = this.renderClientsList(query);
   }
 
+  renderClientCard(client, isAdmin) {
+    const daysLabel = (client.serviceDays && client.serviceDays.length) ? client.serviceDays.map(d => d.substring(0,3)).join(', ') : '';
+    const routeLabel = client.route || '';
+    const metaParts = [client.address, routeLabel, daysLabel].filter(Boolean);
+
+    return `
+      <div class="list-item">
+        <div class="list-item-avatar">${client.name.charAt(0).toUpperCase()}</div>
+        <div class="list-item-info">
+          <div class="list-item-name">${escapeHtml(client.name)}</div>
+          <div class="list-item-sub">${escapeHtml(client.address)}</div>
+          ${daysLabel ? `<div class="list-item-sub" style="font-size:11px; color:#2196F3;">${escapeHtml(routeLabel ? routeLabel + ' · ' + daysLabel : daysLabel)}</div>` : ''}
+        </div>
+        <div class="list-item-actions">
+          <button class="btn btn-icon" onclick="openMap('${escapeHtml(client.address)}')" title="View on Map">📍</button>
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${escapeHtml(client.id)}')">Edit</button>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
   renderClientsList(query = '') {
     const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
-    const currentUser = auth.getCurrentUser();
-    const scopedClients = allClients;
+    const mode = this._clientViewMode || 'all';
 
-    const clients = query
-      ? scopedClients.filter(c =>
+    let clients = query
+      ? allClients.filter(c =>
           c.name.toLowerCase().includes(query.toLowerCase()) ||
-          c.address.toLowerCase().includes(query.toLowerCase())
+          c.address.toLowerCase().includes(query.toLowerCase()) ||
+          (c.technician || '').toLowerCase().includes(query.toLowerCase()) ||
+          (c.route || '').toLowerCase().includes(query.toLowerCase())
         )
-      : scopedClients;
+      : allClients;
 
     if (clients.length === 0) {
       return `
@@ -805,20 +839,80 @@ class Router {
       `;
     }
 
-    return clients.map(client => `
-      <div class="list-item">
-        <div class="list-item-avatar">${client.name.charAt(0).toUpperCase()}</div>
-        <div class="list-item-info">
-          <div class="list-item-name">${client.name}</div>
-          <div class="list-item-sub">${client.address}</div>
-        </div>
-        <div class="list-item-actions">
-          <button class="btn btn-icon" onclick="openMap('${client.address}')" title="View on Map">📍</button>
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
-          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${client.id}')">Delete</button>` : ''}
-        </div>
-      </div>
-    `).join('');
+    if (mode === 'all' || query) {
+      clients.sort((a, b) => (a.technician || 'ZZZ').localeCompare(b.technician || 'ZZZ') || a.name.localeCompare(b.name));
+      return clients.map(c => this.renderClientCard(c, isAdmin)).join('');
+    }
+
+    const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+    if (mode === 'byRoute') {
+      const byTech = {};
+      clients.forEach(c => {
+        const tech = c.technician || 'Unassigned';
+        if (!byTech[tech]) byTech[tech] = {};
+        const days = (c.serviceDays && c.serviceDays.length) ? c.serviceDays : ['Unscheduled'];
+        days.forEach(day => {
+          if (!byTech[tech][day]) byTech[tech][day] = [];
+          byTech[tech][day].push(c);
+        });
+      });
+
+      let html = '';
+      Object.keys(byTech).sort().forEach(tech => {
+        const techDays = byTech[tech];
+        const totalClients = new Set();
+        Object.values(techDays).forEach(arr => arr.forEach(c => totalClients.add(c.id)));
+        html += `<div style="background:#1a237e; color:#fff; padding:10px 16px; font-weight:600; font-size:15px; margin-top:8px;">👤 ${escapeHtml(tech)} <span style="font-weight:400; font-size:12px; opacity:0.8;">(${totalClients.size} clients)</span></div>`;
+
+        const sortedDays = Object.keys(techDays).sort((a, b) => {
+          const ai = DAY_ORDER.indexOf(a); const bi = DAY_ORDER.indexOf(b);
+          return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+        });
+
+        sortedDays.forEach(day => {
+          const dayClients = techDays[day].sort((a, b) => a.name.localeCompare(b.name));
+          html += `<div style="background:#e3f2fd; padding:6px 16px; font-weight:600; font-size:13px; color:#1565c0;">📅 ${escapeHtml(day)} (${dayClients.length})</div>`;
+          html += dayClients.map(c => this.renderClientCard(c, isAdmin)).join('');
+        });
+      });
+      return html;
+    }
+
+    if (mode === 'byDay') {
+      const byDay = {};
+      clients.forEach(c => {
+        const days = (c.serviceDays && c.serviceDays.length) ? c.serviceDays : ['Unscheduled'];
+        days.forEach(day => {
+          if (!byDay[day]) byDay[day] = [];
+          byDay[day].push(c);
+        });
+      });
+
+      const sortedDays = Object.keys(byDay).sort((a, b) => {
+        const ai = DAY_ORDER.indexOf(a); const bi = DAY_ORDER.indexOf(b);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      });
+
+      let html = '';
+      sortedDays.forEach(day => {
+        const dayClients = byDay[day].sort((a, b) => (a.technician || 'ZZZ').localeCompare(b.technician || 'ZZZ') || a.name.localeCompare(b.name));
+        html += `<div style="background:#1a237e; color:#fff; padding:10px 16px; font-weight:600; font-size:15px; margin-top:8px;">📅 ${escapeHtml(day)} <span style="font-weight:400; font-size:12px; opacity:0.8;">(${dayClients.length} visits)</span></div>`;
+
+        let currentTech = '';
+        dayClients.forEach(c => {
+          const tech = c.technician || 'Unassigned';
+          if (tech !== currentTech) {
+            currentTech = tech;
+            html += `<div style="background:#e3f2fd; padding:6px 16px; font-weight:600; font-size:13px; color:#1565c0;">👤 ${escapeHtml(tech)}</div>`;
+          }
+          html += this.renderClientCard(c, isAdmin);
+        });
+      });
+      return html;
+    }
+
+    return clients.map(c => this.renderClientCard(c, isAdmin)).join('');
   }
 
   renderWorkOrders() {
@@ -1251,6 +1345,9 @@ class Router {
 
   renderClientDetail(client) {
     const content = document.getElementById('main-content');
+    const allDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const clientDays = client.serviceDays || [];
+
     content.innerHTML = `
       <div class="wo-form">
         <div class="wo-bar">
@@ -1281,8 +1378,25 @@ class Router {
             </div>
 
             <div class="form-group">
-              <label class="form-label">Preferred Technician</label>
+              <label class="form-label">Assigned Technician</label>
               <input type="text" id="edit-client-tech" class="form-control" value="${escapeHtml(client.technician || '')}">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Route</label>
+              <input type="text" id="edit-client-route" class="form-control" value="${escapeHtml(client.route || '')}" placeholder="e.g. Route 1">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Service Days</label>
+              <div id="edit-client-days" style="display:flex; gap:6px; flex-wrap:wrap;">
+                ${allDays.map(day => `
+                  <label style="display:flex; align-items:center; gap:4px; padding:6px 10px; background:${clientDays.includes(day) ? '#2196F3' : '#e0e0e0'}; color:${clientDays.includes(day) ? '#fff' : '#333'}; border-radius:16px; font-size:13px; cursor:pointer;">
+                    <input type="checkbox" value="${day}" ${clientDays.includes(day) ? 'checked' : ''} style="display:none;" onchange="this.parentElement.style.background=this.checked?'#2196F3':'#e0e0e0'; this.parentElement.style.color=this.checked?'#fff':'#333';">
+                    ${day.substring(0, 3)}
+                  </label>
+                `).join('')}
+              </div>
             </div>
           </div>
         </div>
@@ -1709,6 +1823,149 @@ function cleanupTestClients() {
   }
 }
 
+// Route schedule import from XLSM file
+function importRouteSchedule() {
+  const content = document.getElementById('main-content');
+  content.innerHTML = `
+    <div class="wo-form">
+      <div class="wo-bar">
+        <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">\u2190 Back</button>
+        <div class="wo-bar-title">Import Route Sheet</div>
+      </div>
+      <div class="wo-sec">
+        <div class="wo-sec-hd">Upload Route Sheet (.xlsm / .xlsx)</div>
+        <div class="wo-sec-bd">
+          <p style="color:#666; font-size:13px; margin-bottom:12px;">Select your route schedule Excel file. The importer will read each ROUTE sheet tab and assign service days to matching clients.</p>
+          <p style="color:#666; font-size:13px; margin-bottom:12px;">Expected format: Each sheet named "ROUTE #" with Row 1 = tech name, Row 2 = day headers (MONDAY-SATURDAY), then alternating time/client rows.</p>
+          <div class="form-group">
+            <input type="file" id="route-file-input" accept=".xlsx,.xlsm,.xls" class="form-control" onchange="processRouteFile(this)">
+          </div>
+          <div id="route-import-status" style="margin-top:12px;"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function processRouteFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const statusEl = document.getElementById('route-import-status');
+  statusEl.innerHTML = '<p style="color:#2196F3;">Reading file...</p>';
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+
+      const techOverrides = {
+        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Stephon', 'ROUTE 3': 'Jermaine',
+        'ROUTE 4': 'Elvin', 'ROUTE 5': 'Donald', 'ROUTE 6': 'King',
+        'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
+      };
+
+      const DAY_ORDER = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
+      const routeEntries = [];
+
+      wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        const routeKey = sheetName.trim();
+        const techName = techOverrides[routeKey] || routeKey.replace(/ROUTE\s*#?\d*\s*/i, '').trim() || 'Unknown';
+        const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
+
+        const clientMap = {};
+        for (let row = 2; row < rows.length; row++) {
+          const cells = rows[row] || [];
+          const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
+          if (!hasText) continue;
+
+          cells.forEach((cell, colIdx) => {
+            if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
+              const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
+              const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
+              const key = firstName.substring(0, 50).toUpperCase();
+              if (!clientMap[key]) clientMap[key] = { name: firstName, info: lines.join(' '), days: [] };
+              const day = days[colIdx];
+              if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
+            }
+          });
+        }
+
+        Object.values(clientMap).forEach(entry => {
+          entry.days.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
+          routeEntries.push({
+            tech: techName,
+            route: routeKey.replace('ROUTE ', 'Route ').trim(),
+            name: entry.name,
+            info: entry.info,
+            days: entry.days.map(d => d.charAt(0) + d.slice(1).toLowerCase())
+          });
+        });
+      });
+
+      // Match route entries to existing clients
+      const clients = db.get('clients', []);
+      let matched = 0, created = 0;
+
+      routeEntries.forEach(entry => {
+        const searchTerms = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+        let bestMatch = null;
+        let bestScore = 0;
+
+        clients.forEach(client => {
+          const clientText = (client.name + ' ' + client.address).toLowerCase();
+          let score = 0;
+          searchTerms.forEach(term => {
+            if (clientText.includes(term)) score++;
+          });
+          if (client.technician && client.technician.toLowerCase() === entry.tech.toLowerCase()) score += 2;
+          if (score > bestScore && score >= Math.min(2, searchTerms.length)) {
+            bestScore = score;
+            bestMatch = client;
+          }
+        });
+
+        if (bestMatch) {
+          bestMatch.serviceDays = entry.days;
+          bestMatch.route = entry.route;
+          if (!bestMatch.technician) bestMatch.technician = entry.tech;
+          matched++;
+        } else {
+          clients.push({
+            id: 'c_' + Math.random().toString(36).substr(2, 9),
+            name: entry.name,
+            address: entry.info,
+            contact: '',
+            technician: entry.tech,
+            route: entry.route,
+            serviceDays: entry.days
+          });
+          created++;
+        }
+      });
+
+      db.set('clients', clients);
+
+      statusEl.innerHTML = `
+        <div style="background:#e8f5e9; padding:12px; border-radius:8px;">
+          <p style="color:#2e7d32; font-weight:600; margin-bottom:8px;">Import Complete</p>
+          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} route entries processed</p>
+          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated with schedule</p>
+          <p style="color:#333; font-size:13px;">\u2795 ${created} new clients created</p>
+          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.renderClients()">View Clients</button>
+        </div>
+      `;
+    } catch (err) {
+      statusEl.innerHTML = '<p style="color:#c62828;">Error reading file: ' + escapeHtml(err.message) + '</p>';
+      console.error('Route import error:', err);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 async function exportCompletedToExcel() {
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
@@ -1900,6 +2157,9 @@ function saveClientDetails(clientId) {
   const address = document.getElementById('edit-client-address').value;
   const contact = document.getElementById('edit-client-contact').value;
   const tech = document.getElementById('edit-client-tech').value;
+  const route = document.getElementById('edit-client-route') ? document.getElementById('edit-client-route').value : '';
+  const dayCheckboxes = document.querySelectorAll('#edit-client-days input[type=checkbox]');
+  const serviceDays = Array.from(dayCheckboxes).filter(cb => cb.checked).map(cb => cb.value);
 
   if (!name) {
     alert('Name is required');
@@ -1909,7 +2169,7 @@ function saveClientDetails(clientId) {
   const clients = db.get('clients', []);
   const index = clients.findIndex(c => c.id === clientId);
   if (index >= 0) {
-    clients[index] = { ...clients[index], name, address, contact, technician: tech };
+    clients[index] = { ...clients[index], name, address, contact, technician: tech, route, serviceDays };
     db.set('clients', clients);
 
     // Also update any matching workorders
@@ -4864,6 +5124,149 @@ function cleanupTestClients() {
   }
 }
 
+// Route schedule import from XLSM file
+function importRouteSchedule() {
+  const content = document.getElementById('main-content');
+  content.innerHTML = `
+    <div class="wo-form">
+      <div class="wo-bar">
+        <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">\u2190 Back</button>
+        <div class="wo-bar-title">Import Route Sheet</div>
+      </div>
+      <div class="wo-sec">
+        <div class="wo-sec-hd">Upload Route Sheet (.xlsm / .xlsx)</div>
+        <div class="wo-sec-bd">
+          <p style="color:#666; font-size:13px; margin-bottom:12px;">Select your route schedule Excel file. The importer will read each ROUTE sheet tab and assign service days to matching clients.</p>
+          <p style="color:#666; font-size:13px; margin-bottom:12px;">Expected format: Each sheet named "ROUTE #" with Row 1 = tech name, Row 2 = day headers (MONDAY-SATURDAY), then alternating time/client rows.</p>
+          <div class="form-group">
+            <input type="file" id="route-file-input" accept=".xlsx,.xlsm,.xls" class="form-control" onchange="processRouteFile(this)">
+          </div>
+          <div id="route-import-status" style="margin-top:12px;"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function processRouteFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const statusEl = document.getElementById('route-import-status');
+  statusEl.innerHTML = '<p style="color:#2196F3;">Reading file...</p>';
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+
+      const techOverrides = {
+        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Stephon', 'ROUTE 3': 'Jermaine',
+        'ROUTE 4': 'Elvin', 'ROUTE 5': 'Donald', 'ROUTE 6': 'King',
+        'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
+      };
+
+      const DAY_ORDER = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
+      const routeEntries = [];
+
+      wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        const routeKey = sheetName.trim();
+        const techName = techOverrides[routeKey] || routeKey.replace(/ROUTE\s*#?\d*\s*/i, '').trim() || 'Unknown';
+        const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
+
+        const clientMap = {};
+        for (let row = 2; row < rows.length; row++) {
+          const cells = rows[row] || [];
+          const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
+          if (!hasText) continue;
+
+          cells.forEach((cell, colIdx) => {
+            if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
+              const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
+              const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
+              const key = firstName.substring(0, 50).toUpperCase();
+              if (!clientMap[key]) clientMap[key] = { name: firstName, info: lines.join(' '), days: [] };
+              const day = days[colIdx];
+              if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
+            }
+          });
+        }
+
+        Object.values(clientMap).forEach(entry => {
+          entry.days.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
+          routeEntries.push({
+            tech: techName,
+            route: routeKey.replace('ROUTE ', 'Route ').trim(),
+            name: entry.name,
+            info: entry.info,
+            days: entry.days.map(d => d.charAt(0) + d.slice(1).toLowerCase())
+          });
+        });
+      });
+
+      // Match route entries to existing clients
+      const clients = db.get('clients', []);
+      let matched = 0, created = 0;
+
+      routeEntries.forEach(entry => {
+        const searchTerms = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+        let bestMatch = null;
+        let bestScore = 0;
+
+        clients.forEach(client => {
+          const clientText = (client.name + ' ' + client.address).toLowerCase();
+          let score = 0;
+          searchTerms.forEach(term => {
+            if (clientText.includes(term)) score++;
+          });
+          if (client.technician && client.technician.toLowerCase() === entry.tech.toLowerCase()) score += 2;
+          if (score > bestScore && score >= Math.min(2, searchTerms.length)) {
+            bestScore = score;
+            bestMatch = client;
+          }
+        });
+
+        if (bestMatch) {
+          bestMatch.serviceDays = entry.days;
+          bestMatch.route = entry.route;
+          if (!bestMatch.technician) bestMatch.technician = entry.tech;
+          matched++;
+        } else {
+          clients.push({
+            id: 'c_' + Math.random().toString(36).substr(2, 9),
+            name: entry.name,
+            address: entry.info,
+            contact: '',
+            technician: entry.tech,
+            route: entry.route,
+            serviceDays: entry.days
+          });
+          created++;
+        }
+      });
+
+      db.set('clients', clients);
+
+      statusEl.innerHTML = `
+        <div style="background:#e8f5e9; padding:12px; border-radius:8px;">
+          <p style="color:#2e7d32; font-weight:600; margin-bottom:8px;">Import Complete</p>
+          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} route entries processed</p>
+          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated with schedule</p>
+          <p style="color:#333; font-size:13px;">\u2795 ${created} new clients created</p>
+          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.renderClients()">View Clients</button>
+        </div>
+      `;
+    } catch (err) {
+      statusEl.innerHTML = '<p style="color:#c62828;">Error reading file: ' + escapeHtml(err.message) + '</p>';
+      console.error('Route import error:', err);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 async function exportCompletedToExcel() {
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
@@ -5055,6 +5458,9 @@ function saveClientDetails(clientId) {
   const address = document.getElementById('edit-client-address').value;
   const contact = document.getElementById('edit-client-contact').value;
   const tech = document.getElementById('edit-client-tech').value;
+  const route = document.getElementById('edit-client-route') ? document.getElementById('edit-client-route').value : '';
+  const dayCheckboxes = document.querySelectorAll('#edit-client-days input[type=checkbox]');
+  const serviceDays = Array.from(dayCheckboxes).filter(cb => cb.checked).map(cb => cb.value);
 
   if (!name) {
     alert('Name is required');
@@ -5064,7 +5470,7 @@ function saveClientDetails(clientId) {
   const clients = db.get('clients', []);
   const index = clients.findIndex(c => c.id === clientId);
   if (index >= 0) {
-    clients[index] = { ...clients[index], name, address, contact, technician: tech };
+    clients[index] = { ...clients[index], name, address, contact, technician: tech, route, serviceDays };
     db.set('clients', clients);
 
     // Also update any matching workorders
@@ -6571,6 +6977,149 @@ function cleanupTestClients() {
   }
 }
 
+// Route schedule import from XLSM file
+function importRouteSchedule() {
+  const content = document.getElementById('main-content');
+  content.innerHTML = `
+    <div class="wo-form">
+      <div class="wo-bar">
+        <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">\u2190 Back</button>
+        <div class="wo-bar-title">Import Route Sheet</div>
+      </div>
+      <div class="wo-sec">
+        <div class="wo-sec-hd">Upload Route Sheet (.xlsm / .xlsx)</div>
+        <div class="wo-sec-bd">
+          <p style="color:#666; font-size:13px; margin-bottom:12px;">Select your route schedule Excel file. The importer will read each ROUTE sheet tab and assign service days to matching clients.</p>
+          <p style="color:#666; font-size:13px; margin-bottom:12px;">Expected format: Each sheet named "ROUTE #" with Row 1 = tech name, Row 2 = day headers (MONDAY-SATURDAY), then alternating time/client rows.</p>
+          <div class="form-group">
+            <input type="file" id="route-file-input" accept=".xlsx,.xlsm,.xls" class="form-control" onchange="processRouteFile(this)">
+          </div>
+          <div id="route-import-status" style="margin-top:12px;"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function processRouteFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const statusEl = document.getElementById('route-import-status');
+  statusEl.innerHTML = '<p style="color:#2196F3;">Reading file...</p>';
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+
+      const techOverrides = {
+        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Stephon', 'ROUTE 3': 'Jermaine',
+        'ROUTE 4': 'Elvin', 'ROUTE 5': 'Donald', 'ROUTE 6': 'King',
+        'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
+      };
+
+      const DAY_ORDER = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
+      const routeEntries = [];
+
+      wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        const routeKey = sheetName.trim();
+        const techName = techOverrides[routeKey] || routeKey.replace(/ROUTE\s*#?\d*\s*/i, '').trim() || 'Unknown';
+        const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
+
+        const clientMap = {};
+        for (let row = 2; row < rows.length; row++) {
+          const cells = rows[row] || [];
+          const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
+          if (!hasText) continue;
+
+          cells.forEach((cell, colIdx) => {
+            if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
+              const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
+              const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
+              const key = firstName.substring(0, 50).toUpperCase();
+              if (!clientMap[key]) clientMap[key] = { name: firstName, info: lines.join(' '), days: [] };
+              const day = days[colIdx];
+              if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
+            }
+          });
+        }
+
+        Object.values(clientMap).forEach(entry => {
+          entry.days.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
+          routeEntries.push({
+            tech: techName,
+            route: routeKey.replace('ROUTE ', 'Route ').trim(),
+            name: entry.name,
+            info: entry.info,
+            days: entry.days.map(d => d.charAt(0) + d.slice(1).toLowerCase())
+          });
+        });
+      });
+
+      // Match route entries to existing clients
+      const clients = db.get('clients', []);
+      let matched = 0, created = 0;
+
+      routeEntries.forEach(entry => {
+        const searchTerms = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+        let bestMatch = null;
+        let bestScore = 0;
+
+        clients.forEach(client => {
+          const clientText = (client.name + ' ' + client.address).toLowerCase();
+          let score = 0;
+          searchTerms.forEach(term => {
+            if (clientText.includes(term)) score++;
+          });
+          if (client.technician && client.technician.toLowerCase() === entry.tech.toLowerCase()) score += 2;
+          if (score > bestScore && score >= Math.min(2, searchTerms.length)) {
+            bestScore = score;
+            bestMatch = client;
+          }
+        });
+
+        if (bestMatch) {
+          bestMatch.serviceDays = entry.days;
+          bestMatch.route = entry.route;
+          if (!bestMatch.technician) bestMatch.technician = entry.tech;
+          matched++;
+        } else {
+          clients.push({
+            id: 'c_' + Math.random().toString(36).substr(2, 9),
+            name: entry.name,
+            address: entry.info,
+            contact: '',
+            technician: entry.tech,
+            route: entry.route,
+            serviceDays: entry.days
+          });
+          created++;
+        }
+      });
+
+      db.set('clients', clients);
+
+      statusEl.innerHTML = `
+        <div style="background:#e8f5e9; padding:12px; border-radius:8px;">
+          <p style="color:#2e7d32; font-weight:600; margin-bottom:8px;">Import Complete</p>
+          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} route entries processed</p>
+          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated with schedule</p>
+          <p style="color:#333; font-size:13px;">\u2795 ${created} new clients created</p>
+          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.renderClients()">View Clients</button>
+        </div>
+      `;
+    } catch (err) {
+      statusEl.innerHTML = '<p style="color:#c62828;">Error reading file: ' + escapeHtml(err.message) + '</p>';
+      console.error('Route import error:', err);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 async function exportCompletedToExcel() {
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
@@ -6762,6 +7311,9 @@ function saveClientDetails(clientId) {
   const address = document.getElementById('edit-client-address').value;
   const contact = document.getElementById('edit-client-contact').value;
   const tech = document.getElementById('edit-client-tech').value;
+  const route = document.getElementById('edit-client-route') ? document.getElementById('edit-client-route').value : '';
+  const dayCheckboxes = document.querySelectorAll('#edit-client-days input[type=checkbox]');
+  const serviceDays = Array.from(dayCheckboxes).filter(cb => cb.checked).map(cb => cb.value);
 
   if (!name) {
     alert('Name is required');
@@ -6771,7 +7323,7 @@ function saveClientDetails(clientId) {
   const clients = db.get('clients', []);
   const index = clients.findIndex(c => c.id === clientId);
   if (index >= 0) {
-    clients[index] = { ...clients[index], name, address, contact, technician: tech };
+    clients[index] = { ...clients[index], name, address, contact, technician: tech, route, serviceDays };
     db.set('clients', clients);
 
     // Also update any matching workorders
