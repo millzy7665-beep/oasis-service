@@ -68,6 +68,11 @@ class DB {
 
   // Called once on startup — listen for Firestore changes and update localStorage + UI
   startRealtimeSync() {
+    // Track known notification IDs so we only alert on truly new ones
+    const knownNotificationIds = new Set(
+      (JSON.parse(this.storage.getItem('oasis_notifications') || '[]')).map(n => n.id)
+    );
+
     SYNCED_KEYS.forEach(key => {
       firestore.collection('app_data').doc(key).onSnapshot(snapshot => {
         if (!snapshot.exists) return;
@@ -79,6 +84,15 @@ class DB {
         if (JSON.stringify(remoteData) !== JSON.stringify(localData)) {
           this.storage.setItem(key, JSON.stringify(remoteData));
           console.log(`[Sync] ${key} updated from Firestore`);
+
+          // Present device notifications for new incoming notifications
+          if (key === 'oasis_notifications' && typeof notificationManager !== 'undefined') {
+            const newItems = (remoteData || []).filter(n => !knownNotificationIds.has(n.id));
+            newItems.forEach(n => {
+              knownNotificationIds.add(n.id);
+              notificationManager.presentLiveNotification(n);
+            });
+          }
 
           // Re-render current view so user sees live changes
           if (typeof router !== 'undefined' && router.currentView) {
@@ -102,6 +116,11 @@ class DB {
         }).catch(() => {});
       }
     });
+
+    // Request notification permission early
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
   }
 }
 
