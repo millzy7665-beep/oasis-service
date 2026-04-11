@@ -1,0 +1,33 @@
+{
+  "name": "Oasis",
+  "short_name": "Oasis",
+  "description": "Unified OASIS service, chem sheet, and repair work order app",
+  "id": "./index.html?app=service-repair",
+  "start_url": "./index.html?source=pwa-service-repair",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "portrait",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": [
+    "business",
+    "utilities"
+  ],
+  "screenshots": []
+}

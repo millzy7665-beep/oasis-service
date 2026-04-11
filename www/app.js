@@ -1959,73 +1959,130 @@ function processRouteFile(input) {
   const statusEl = document.getElementById('route-import-status');
   statusEl.innerHTML = '<p style="color:#2196F3;">Reading file...</p>';
 
+  // Map route sheet tech names to app auth names
+  const TECH_NAME_MAP = {
+    'king': 'Kingsley',
+    'stephon': 'Elvin'
+  };
+  function normalizeTechName(name) {
+    const lower = (name || '').trim().toLowerCase();
+    return TECH_NAME_MAP[lower] || (name || '').trim();
+  }
+
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
       const data = new Uint8Array(e.target.result);
       const wb = XLSX.read(data, { type: 'array' });
+      const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
-      const techOverrides = {
-        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
-        'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
-        'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
-      };
+      let routeEntries = [];
 
-      const DAY_ORDER = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
-      const routeEntries = [];
+      // Detect format: flat table (Day, Route #, Route Name, Client Name, Address) vs multi-tab
+      const firstSheet = wb.Sheets[wb.SheetNames[0]];
+      const firstRow = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' })[0] || [];
+      const headers = firstRow.map(h => String(h).toLowerCase().trim());
+      const isFlat = headers.includes('day') && headers.includes('client name');
 
-      wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
-        const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-        const routeKey = sheetName.trim();
-        const techName = techOverrides[routeKey] || routeKey.replace(/ROUTE\s*#?\d*\s*/i, '').trim() || 'Unknown';
-        const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
-
+      if (isFlat) {
+        // Flat format: each row is one visit (day + tech + client + address)
+        const rows = XLSX.utils.sheet_to_json(firstSheet);
         const clientMap = {};
-        for (let row = 2; row < rows.length; row++) {
-          const cells = rows[row] || [];
-          const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
-          if (!hasText) continue;
 
-          cells.forEach((cell, colIdx) => {
-            if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
-              const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
-              const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
-              const key = firstName.substring(0, 50).toUpperCase();
-              if (!clientMap[key]) clientMap[key] = { name: firstName, info: lines.join(' '), days: [] };
-              const day = days[colIdx];
-              if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
-            }
-          });
-        }
+        rows.forEach(row => {
+          const day = (row['Day'] || '').trim();
+          const routeNum = String(row['Route #'] || '').trim();
+          const techRaw = (row['Route Name'] || '').trim();
+          const tech = normalizeTechName(techRaw);
+          const clientName = (row['Client Name'] || '').trim();
+          const address = (row['Address'] || '').trim();
+          if (!clientName || !day) return;
 
+          // Normalize day name
+          const normalDay = day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
+          const key = (tech + '|' + clientName + '|' + address).toUpperCase();
+
+          if (!clientMap[key]) {
+            clientMap[key] = {
+              tech: tech,
+              route: 'Route ' + routeNum,
+              name: clientName,
+              address: address,
+              days: []
+            };
+          }
+          if (!clientMap[key].days.includes(normalDay)) {
+            clientMap[key].days.push(normalDay);
+          }
+        });
+
+        // Sort days and build entries
         Object.values(clientMap).forEach(entry => {
           entry.days.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          routeEntries.push({
-            tech: techName,
-            route: routeKey.replace('ROUTE ', 'Route ').trim(),
-            name: entry.name,
-            info: entry.info,
-            days: entry.days.map(d => d.charAt(0) + d.slice(1).toLowerCase())
+          routeEntries.push(entry);
+        });
+      } else {
+        // Multi-tab format: each sheet is a route
+        const techOverrides = {
+          'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
+          'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
+          'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
+        };
+
+        wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
+          const ws = wb.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+          const routeKey = sheetName.trim();
+          const techName = techOverrides[routeKey] || normalizeTechName(routeKey.replace(/ROUTE\s*#?\d*\s*/i, ''));
+          const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
+
+          const clientMap = {};
+          for (let row = 2; row < rows.length; row++) {
+            const cells = rows[row] || [];
+            const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
+            if (!hasText) continue;
+            cells.forEach((cell, colIdx) => {
+              if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
+                const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
+                const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
+                const key = firstName.substring(0, 50).toUpperCase();
+                if (!clientMap[key]) clientMap[key] = { name: firstName, address: lines.join(' '), days: [] };
+                const day = days[colIdx];
+                if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
+              }
+            });
+          }
+
+          Object.values(clientMap).forEach(entry => {
+            entry.days.sort((a, b) => DAY_ORDER.map(d=>d.toUpperCase()).indexOf(a.toUpperCase()) - DAY_ORDER.map(d=>d.toUpperCase()).indexOf(b.toUpperCase()));
+            routeEntries.push({
+              tech: techName,
+              route: routeKey.replace('ROUTE ', 'Route ').trim(),
+              name: entry.name,
+              address: entry.address,
+              days: entry.days.map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
+            });
           });
         });
-      });
+      }
 
-      // Match route entries to existing clients
+      // Clear old serviceDays from all clients first
       const clients = db.get('clients', []);
+      clients.forEach(c => { c.serviceDays = []; c.route = ''; });
+
       let matched = 0, created = 0;
 
       routeEntries.forEach(entry => {
-        const searchTerms = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+        const searchName = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+        const searchAddr = entry.address.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+        const searchTerms = (searchName + ' ' + searchAddr).split(/\s+/).filter(w => w.length > 2);
         let bestMatch = null;
         let bestScore = 0;
 
         clients.forEach(client => {
           const clientText = (client.name + ' ' + client.address).toLowerCase();
           let score = 0;
-          searchTerms.forEach(term => {
-            if (clientText.includes(term)) score++;
-          });
+          searchTerms.forEach(term => { if (clientText.includes(term)) score++; });
           if (client.technician && client.technician.toLowerCase() === entry.tech.toLowerCase()) score += 2;
           if (score > bestScore && score >= Math.min(2, searchTerms.length)) {
             bestScore = score;
@@ -2034,15 +2091,19 @@ function processRouteFile(input) {
         });
 
         if (bestMatch) {
-          bestMatch.serviceDays = entry.days;
+          // Merge days (don't overwrite, accumulate)
+          const existing = bestMatch.serviceDays || [];
+          entry.days.forEach(d => { if (!existing.includes(d)) existing.push(d); });
+          existing.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
+          bestMatch.serviceDays = existing;
           bestMatch.route = entry.route;
-          if (!bestMatch.technician) bestMatch.technician = entry.tech;
+          bestMatch.technician = entry.tech;
           matched++;
         } else {
           clients.push({
             id: 'c_' + Math.random().toString(36).substr(2, 9),
             name: entry.name,
-            address: entry.info,
+            address: entry.address,
             contact: '',
             technician: entry.tech,
             route: entry.route,
@@ -2054,13 +2115,18 @@ function processRouteFile(input) {
 
       db.set('clients', clients);
 
+      // Count unique clients with schedule
+      const scheduled = clients.filter(c => c.serviceDays && c.serviceDays.length > 0).length;
+
       statusEl.innerHTML = `
         <div style="background:#e8f5e9; padding:12px; border-radius:8px;">
           <p style="color:#2e7d32; font-weight:600; margin-bottom:8px;">Import Complete</p>
-          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} route entries processed</p>
-          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated with schedule</p>
+          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} unique route entries processed</p>
+          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated</p>
           <p style="color:#333; font-size:13px;">\u2795 ${created} new clients created</p>
-          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.renderClients()">View Clients</button>
+          <p style="color:#333; font-size:13px;">\ud83d\udcc5 ${scheduled} clients now have scheduled service days</p>
+          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.setClientView('byRoute'); router.renderClients();">View By Route</button>
+          <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="router.navigate('routes')">View Routes</button>
         </div>
       `;
     } catch (err) {
@@ -5260,73 +5326,130 @@ function processRouteFile(input) {
   const statusEl = document.getElementById('route-import-status');
   statusEl.innerHTML = '<p style="color:#2196F3;">Reading file...</p>';
 
+  // Map route sheet tech names to app auth names
+  const TECH_NAME_MAP = {
+    'king': 'Kingsley',
+    'stephon': 'Elvin'
+  };
+  function normalizeTechName(name) {
+    const lower = (name || '').trim().toLowerCase();
+    return TECH_NAME_MAP[lower] || (name || '').trim();
+  }
+
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
       const data = new Uint8Array(e.target.result);
       const wb = XLSX.read(data, { type: 'array' });
+      const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
-      const techOverrides = {
-        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
-        'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
-        'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
-      };
+      let routeEntries = [];
 
-      const DAY_ORDER = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
-      const routeEntries = [];
+      // Detect format: flat table (Day, Route #, Route Name, Client Name, Address) vs multi-tab
+      const firstSheet = wb.Sheets[wb.SheetNames[0]];
+      const firstRow = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' })[0] || [];
+      const headers = firstRow.map(h => String(h).toLowerCase().trim());
+      const isFlat = headers.includes('day') && headers.includes('client name');
 
-      wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
-        const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-        const routeKey = sheetName.trim();
-        const techName = techOverrides[routeKey] || routeKey.replace(/ROUTE\s*#?\d*\s*/i, '').trim() || 'Unknown';
-        const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
-
+      if (isFlat) {
+        // Flat format: each row is one visit (day + tech + client + address)
+        const rows = XLSX.utils.sheet_to_json(firstSheet);
         const clientMap = {};
-        for (let row = 2; row < rows.length; row++) {
-          const cells = rows[row] || [];
-          const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
-          if (!hasText) continue;
 
-          cells.forEach((cell, colIdx) => {
-            if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
-              const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
-              const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
-              const key = firstName.substring(0, 50).toUpperCase();
-              if (!clientMap[key]) clientMap[key] = { name: firstName, info: lines.join(' '), days: [] };
-              const day = days[colIdx];
-              if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
-            }
-          });
-        }
+        rows.forEach(row => {
+          const day = (row['Day'] || '').trim();
+          const routeNum = String(row['Route #'] || '').trim();
+          const techRaw = (row['Route Name'] || '').trim();
+          const tech = normalizeTechName(techRaw);
+          const clientName = (row['Client Name'] || '').trim();
+          const address = (row['Address'] || '').trim();
+          if (!clientName || !day) return;
 
+          // Normalize day name
+          const normalDay = day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
+          const key = (tech + '|' + clientName + '|' + address).toUpperCase();
+
+          if (!clientMap[key]) {
+            clientMap[key] = {
+              tech: tech,
+              route: 'Route ' + routeNum,
+              name: clientName,
+              address: address,
+              days: []
+            };
+          }
+          if (!clientMap[key].days.includes(normalDay)) {
+            clientMap[key].days.push(normalDay);
+          }
+        });
+
+        // Sort days and build entries
         Object.values(clientMap).forEach(entry => {
           entry.days.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          routeEntries.push({
-            tech: techName,
-            route: routeKey.replace('ROUTE ', 'Route ').trim(),
-            name: entry.name,
-            info: entry.info,
-            days: entry.days.map(d => d.charAt(0) + d.slice(1).toLowerCase())
+          routeEntries.push(entry);
+        });
+      } else {
+        // Multi-tab format: each sheet is a route
+        const techOverrides = {
+          'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
+          'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
+          'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
+        };
+
+        wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
+          const ws = wb.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+          const routeKey = sheetName.trim();
+          const techName = techOverrides[routeKey] || normalizeTechName(routeKey.replace(/ROUTE\s*#?\d*\s*/i, ''));
+          const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
+
+          const clientMap = {};
+          for (let row = 2; row < rows.length; row++) {
+            const cells = rows[row] || [];
+            const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
+            if (!hasText) continue;
+            cells.forEach((cell, colIdx) => {
+              if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
+                const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
+                const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
+                const key = firstName.substring(0, 50).toUpperCase();
+                if (!clientMap[key]) clientMap[key] = { name: firstName, address: lines.join(' '), days: [] };
+                const day = days[colIdx];
+                if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
+              }
+            });
+          }
+
+          Object.values(clientMap).forEach(entry => {
+            entry.days.sort((a, b) => DAY_ORDER.map(d=>d.toUpperCase()).indexOf(a.toUpperCase()) - DAY_ORDER.map(d=>d.toUpperCase()).indexOf(b.toUpperCase()));
+            routeEntries.push({
+              tech: techName,
+              route: routeKey.replace('ROUTE ', 'Route ').trim(),
+              name: entry.name,
+              address: entry.address,
+              days: entry.days.map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
+            });
           });
         });
-      });
+      }
 
-      // Match route entries to existing clients
+      // Clear old serviceDays from all clients first
       const clients = db.get('clients', []);
+      clients.forEach(c => { c.serviceDays = []; c.route = ''; });
+
       let matched = 0, created = 0;
 
       routeEntries.forEach(entry => {
-        const searchTerms = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+        const searchName = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+        const searchAddr = entry.address.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+        const searchTerms = (searchName + ' ' + searchAddr).split(/\s+/).filter(w => w.length > 2);
         let bestMatch = null;
         let bestScore = 0;
 
         clients.forEach(client => {
           const clientText = (client.name + ' ' + client.address).toLowerCase();
           let score = 0;
-          searchTerms.forEach(term => {
-            if (clientText.includes(term)) score++;
-          });
+          searchTerms.forEach(term => { if (clientText.includes(term)) score++; });
           if (client.technician && client.technician.toLowerCase() === entry.tech.toLowerCase()) score += 2;
           if (score > bestScore && score >= Math.min(2, searchTerms.length)) {
             bestScore = score;
@@ -5335,15 +5458,19 @@ function processRouteFile(input) {
         });
 
         if (bestMatch) {
-          bestMatch.serviceDays = entry.days;
+          // Merge days (don't overwrite, accumulate)
+          const existing = bestMatch.serviceDays || [];
+          entry.days.forEach(d => { if (!existing.includes(d)) existing.push(d); });
+          existing.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
+          bestMatch.serviceDays = existing;
           bestMatch.route = entry.route;
-          if (!bestMatch.technician) bestMatch.technician = entry.tech;
+          bestMatch.technician = entry.tech;
           matched++;
         } else {
           clients.push({
             id: 'c_' + Math.random().toString(36).substr(2, 9),
             name: entry.name,
-            address: entry.info,
+            address: entry.address,
             contact: '',
             technician: entry.tech,
             route: entry.route,
@@ -5355,13 +5482,18 @@ function processRouteFile(input) {
 
       db.set('clients', clients);
 
+      // Count unique clients with schedule
+      const scheduled = clients.filter(c => c.serviceDays && c.serviceDays.length > 0).length;
+
       statusEl.innerHTML = `
         <div style="background:#e8f5e9; padding:12px; border-radius:8px;">
           <p style="color:#2e7d32; font-weight:600; margin-bottom:8px;">Import Complete</p>
-          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} route entries processed</p>
-          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated with schedule</p>
+          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} unique route entries processed</p>
+          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated</p>
           <p style="color:#333; font-size:13px;">\u2795 ${created} new clients created</p>
-          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.renderClients()">View Clients</button>
+          <p style="color:#333; font-size:13px;">\ud83d\udcc5 ${scheduled} clients now have scheduled service days</p>
+          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.setClientView('byRoute'); router.renderClients();">View By Route</button>
+          <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="router.navigate('routes')">View Routes</button>
         </div>
       `;
     } catch (err) {
@@ -7113,73 +7245,130 @@ function processRouteFile(input) {
   const statusEl = document.getElementById('route-import-status');
   statusEl.innerHTML = '<p style="color:#2196F3;">Reading file...</p>';
 
+  // Map route sheet tech names to app auth names
+  const TECH_NAME_MAP = {
+    'king': 'Kingsley',
+    'stephon': 'Elvin'
+  };
+  function normalizeTechName(name) {
+    const lower = (name || '').trim().toLowerCase();
+    return TECH_NAME_MAP[lower] || (name || '').trim();
+  }
+
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
       const data = new Uint8Array(e.target.result);
       const wb = XLSX.read(data, { type: 'array' });
+      const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
-      const techOverrides = {
-        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
-        'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
-        'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
-      };
+      let routeEntries = [];
 
-      const DAY_ORDER = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
-      const routeEntries = [];
+      // Detect format: flat table (Day, Route #, Route Name, Client Name, Address) vs multi-tab
+      const firstSheet = wb.Sheets[wb.SheetNames[0]];
+      const firstRow = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' })[0] || [];
+      const headers = firstRow.map(h => String(h).toLowerCase().trim());
+      const isFlat = headers.includes('day') && headers.includes('client name');
 
-      wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
-        const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-        const routeKey = sheetName.trim();
-        const techName = techOverrides[routeKey] || routeKey.replace(/ROUTE\s*#?\d*\s*/i, '').trim() || 'Unknown';
-        const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
-
+      if (isFlat) {
+        // Flat format: each row is one visit (day + tech + client + address)
+        const rows = XLSX.utils.sheet_to_json(firstSheet);
         const clientMap = {};
-        for (let row = 2; row < rows.length; row++) {
-          const cells = rows[row] || [];
-          const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
-          if (!hasText) continue;
 
-          cells.forEach((cell, colIdx) => {
-            if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
-              const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
-              const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
-              const key = firstName.substring(0, 50).toUpperCase();
-              if (!clientMap[key]) clientMap[key] = { name: firstName, info: lines.join(' '), days: [] };
-              const day = days[colIdx];
-              if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
-            }
-          });
-        }
+        rows.forEach(row => {
+          const day = (row['Day'] || '').trim();
+          const routeNum = String(row['Route #'] || '').trim();
+          const techRaw = (row['Route Name'] || '').trim();
+          const tech = normalizeTechName(techRaw);
+          const clientName = (row['Client Name'] || '').trim();
+          const address = (row['Address'] || '').trim();
+          if (!clientName || !day) return;
 
+          // Normalize day name
+          const normalDay = day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
+          const key = (tech + '|' + clientName + '|' + address).toUpperCase();
+
+          if (!clientMap[key]) {
+            clientMap[key] = {
+              tech: tech,
+              route: 'Route ' + routeNum,
+              name: clientName,
+              address: address,
+              days: []
+            };
+          }
+          if (!clientMap[key].days.includes(normalDay)) {
+            clientMap[key].days.push(normalDay);
+          }
+        });
+
+        // Sort days and build entries
         Object.values(clientMap).forEach(entry => {
           entry.days.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          routeEntries.push({
-            tech: techName,
-            route: routeKey.replace('ROUTE ', 'Route ').trim(),
-            name: entry.name,
-            info: entry.info,
-            days: entry.days.map(d => d.charAt(0) + d.slice(1).toLowerCase())
+          routeEntries.push(entry);
+        });
+      } else {
+        // Multi-tab format: each sheet is a route
+        const techOverrides = {
+          'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
+          'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
+          'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
+        };
+
+        wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
+          const ws = wb.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+          const routeKey = sheetName.trim();
+          const techName = techOverrides[routeKey] || normalizeTechName(routeKey.replace(/ROUTE\s*#?\d*\s*/i, ''));
+          const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
+
+          const clientMap = {};
+          for (let row = 2; row < rows.length; row++) {
+            const cells = rows[row] || [];
+            const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
+            if (!hasText) continue;
+            cells.forEach((cell, colIdx) => {
+              if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
+                const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
+                const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
+                const key = firstName.substring(0, 50).toUpperCase();
+                if (!clientMap[key]) clientMap[key] = { name: firstName, address: lines.join(' '), days: [] };
+                const day = days[colIdx];
+                if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
+              }
+            });
+          }
+
+          Object.values(clientMap).forEach(entry => {
+            entry.days.sort((a, b) => DAY_ORDER.map(d=>d.toUpperCase()).indexOf(a.toUpperCase()) - DAY_ORDER.map(d=>d.toUpperCase()).indexOf(b.toUpperCase()));
+            routeEntries.push({
+              tech: techName,
+              route: routeKey.replace('ROUTE ', 'Route ').trim(),
+              name: entry.name,
+              address: entry.address,
+              days: entry.days.map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
+            });
           });
         });
-      });
+      }
 
-      // Match route entries to existing clients
+      // Clear old serviceDays from all clients first
       const clients = db.get('clients', []);
+      clients.forEach(c => { c.serviceDays = []; c.route = ''; });
+
       let matched = 0, created = 0;
 
       routeEntries.forEach(entry => {
-        const searchTerms = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+        const searchName = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+        const searchAddr = entry.address.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+        const searchTerms = (searchName + ' ' + searchAddr).split(/\s+/).filter(w => w.length > 2);
         let bestMatch = null;
         let bestScore = 0;
 
         clients.forEach(client => {
           const clientText = (client.name + ' ' + client.address).toLowerCase();
           let score = 0;
-          searchTerms.forEach(term => {
-            if (clientText.includes(term)) score++;
-          });
+          searchTerms.forEach(term => { if (clientText.includes(term)) score++; });
           if (client.technician && client.technician.toLowerCase() === entry.tech.toLowerCase()) score += 2;
           if (score > bestScore && score >= Math.min(2, searchTerms.length)) {
             bestScore = score;
@@ -7188,15 +7377,19 @@ function processRouteFile(input) {
         });
 
         if (bestMatch) {
-          bestMatch.serviceDays = entry.days;
+          // Merge days (don't overwrite, accumulate)
+          const existing = bestMatch.serviceDays || [];
+          entry.days.forEach(d => { if (!existing.includes(d)) existing.push(d); });
+          existing.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
+          bestMatch.serviceDays = existing;
           bestMatch.route = entry.route;
-          if (!bestMatch.technician) bestMatch.technician = entry.tech;
+          bestMatch.technician = entry.tech;
           matched++;
         } else {
           clients.push({
             id: 'c_' + Math.random().toString(36).substr(2, 9),
             name: entry.name,
-            address: entry.info,
+            address: entry.address,
             contact: '',
             technician: entry.tech,
             route: entry.route,
@@ -7208,13 +7401,18 @@ function processRouteFile(input) {
 
       db.set('clients', clients);
 
+      // Count unique clients with schedule
+      const scheduled = clients.filter(c => c.serviceDays && c.serviceDays.length > 0).length;
+
       statusEl.innerHTML = `
         <div style="background:#e8f5e9; padding:12px; border-radius:8px;">
           <p style="color:#2e7d32; font-weight:600; margin-bottom:8px;">Import Complete</p>
-          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} route entries processed</p>
-          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated with schedule</p>
+          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} unique route entries processed</p>
+          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated</p>
           <p style="color:#333; font-size:13px;">\u2795 ${created} new clients created</p>
-          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.renderClients()">View Clients</button>
+          <p style="color:#333; font-size:13px;">\ud83d\udcc5 ${scheduled} clients now have scheduled service days</p>
+          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.setClientView('byRoute'); router.renderClients();">View By Route</button>
+          <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="router.navigate('routes')">View Routes</button>
         </div>
       `;
     } catch (err) {

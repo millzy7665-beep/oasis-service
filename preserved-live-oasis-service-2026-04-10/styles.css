@@ -1149,13 +1149,16 @@ select.form-control {
 }
 .photo-add-btn:active { background: var(--gray-200); }
 
-/* Hidden file input */
+/* Hidden file input — using opacity 0 but keeping it accessible to the label's tap */
 .photo-file-inp {
   position: absolute;
-  width: 0;
-  height: 0;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
   opacity: 0;
-  pointer-events: none;
+  cursor: pointer;
+  z-index: -1;
 }
 
 /* ============================================================
