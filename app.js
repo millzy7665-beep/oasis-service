@@ -640,17 +640,51 @@ class Router {
     const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
 
     // Work orders for dashboard - admin sees all, techs see their own
-    const myRepairOrders = visibleRepairOrders.filter(r => (r.status || 'open') !== 'completed')
+    const myRepairOrders = visibleRepairOrders.filter(r => {
+      const s = (r.status || 'open');
+      return s !== 'completed' && s !== 'pending';
+    }).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+    const myPendingOrders = visibleRepairOrders.filter(r => (r.status || 'open') === 'pending')
       .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+    // Jet/Mark completion stats
+    const todayDateStr = new Date().toISOString().split('T')[0];
+    const todayCompletedOrders = visibleRepairOrders.filter(r => r.status === 'completed' && r.date === todayDateStr);
+
+    // Weekly completed: Monday to Sunday
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - mondayOffset);
+    weekStart.setHours(0, 0, 0, 0);
+    const weeklyCompletedOrders = visibleRepairOrders.filter(r => {
+      if (r.status !== 'completed' || !r.date) return false;
+      const d = new Date(r.date + 'T00:00:00');
+      return d >= weekStart && d <= now;
+    });
 
     content.innerHTML = `
       <div class="wave-banner">
         <div class="wave-banner-eyebrow">Welcome back</div>
         <div class="wave-banner-title">${userName}</div>
-        <div class="wave-banner-sub">${todayStr} • ${myRouteClients.length} stops today</div>
+        <div class="wave-banner-sub">${todayStr}${isOfficeUser && !isAdmin ? '' : ` • ${myRouteClients.length} stops today`}</div>
       </div>
 
       <div class="stats-grid">
+        ${isOfficeUser && !isAdmin ? `
+        <div class="stat-card">
+          <div class="stat-icon">✅</div>
+          <div class="stat-value">${todayCompletedOrders.length}</div>
+          <div class="stat-label">Today's Completed</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">📊</div>
+          <div class="stat-value">${weeklyCompletedOrders.length}</div>
+          <div class="stat-label">Weekly Completed</div>
+        </div>
+        ` : `
         <div class="stat-card" onclick="router.navigate('routes')">
           <div class="stat-icon">🗺️</div>
           <div class="stat-value">${myRouteClients.length}</div>
@@ -661,12 +695,37 @@ class Router {
           <div class="stat-value">${myTotalClients}</div>
           <div class="stat-label">Total Visits</div>
         </div>
+        `}
         <div class="stat-card">
           <div class="stat-icon">🛠️</div>
           <div class="stat-value">${myRepairOrders.length}</div>
           <div class="stat-label">Open Work Orders</div>
         </div>
+        <div class="stat-card">
+          <div class="stat-icon">⏳</div>
+          <div class="stat-value">${myPendingOrders.length}</div>
+          <div class="stat-label">Pending Orders</div>
+        </div>
       </div>
+
+      ${myPendingOrders.length > 0 ? `
+      <div class="section-header">
+        <div class="section-title">${isAdmin ? 'All Pending Work Orders' : 'My Pending Work Orders'}</div>
+      </div>
+      ${myPendingOrders.map(order => `
+        <div class="list-item" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')" style="cursor:pointer;">
+          <div class="list-item-avatar" style="background:#fff8e1; color:#f57f17;">⏳</div>
+          <div class="list-item-info">
+            <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
+            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
+            <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
+          </div>
+          <div class="list-item-actions">
+            <span style="font-size:11px; padding:3px 8px; border-radius:12px; background:#fff8e1; color:#f57f17;">pending</span>
+          </div>
+        </div>
+      `).join('')}
+      ` : ''}
 
       ${myRepairOrders.length > 0 ? `
       <div class="section-header">
@@ -3536,6 +3595,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <select id="repair-status">
               <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
               <option value="in-progress" ${order.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
+              <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Pending</option>
               <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
             </select>
           </div>
@@ -3766,8 +3826,8 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   if (!order) return;
 
   order.status = document.getElementById('repair-status')?.value || order.status || 'open';
-  if (order.status !== 'completed') {
-    showToast('Please set status to Completed before saving');
+  if (order.status !== 'completed' && order.status !== 'pending') {
+    showToast('Please set status to Completed or Pending before saving');
     return;
   }
 
@@ -3781,7 +3841,7 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  showToast('Completed work order saved');
+  showToast(order.status === 'completed' ? 'Completed work order saved' : 'Pending work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -7018,6 +7078,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <select id="repair-status">
               <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
               <option value="in-progress" ${order.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
+              <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Pending</option>
               <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
             </select>
           </div>
@@ -7154,8 +7215,8 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   if (!order) return;
 
   order.status = document.getElementById('repair-status')?.value || order.status || 'open';
-  if (order.status !== 'completed') {
-    showToast('Please set status to Completed before saving');
+  if (order.status !== 'completed' && order.status !== 'pending') {
+    showToast('Please set status to Completed or Pending before saving');
     return;
   }
 
@@ -7169,7 +7230,7 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  showToast('Completed work order saved');
+  showToast(order.status === 'completed' ? 'Completed work order saved' : 'Pending work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
