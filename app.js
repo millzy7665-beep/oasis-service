@@ -699,9 +699,7 @@ class Router {
     const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
     const currentUser = auth.getCurrentUser();
-    const scopedClients = isAdmin
-      ? allClients
-      : allClients.filter(client => (client.technician || '') === (currentUser?.name || ''));
+    const scopedClients = allClients;
 
     const clients = query
       ? scopedClients.filter(c =>
@@ -788,9 +786,7 @@ class Router {
     const isAdmin = auth.isAdmin();
     const canShare = auth.canShare();
 
-    let workorders = (currentUser && currentUser.role === 'admin')
-      ? allWorkorders
-      : allWorkorders.filter(wo => wo.technician === currentUser.name);
+    let workorders = allWorkorders;
 
     if (isAdmin) {
       workorders = this.applyStatusFilter(workorders);
@@ -2509,9 +2505,9 @@ function renderRepairOrdersList(statusFilter = 'all') {
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  let orders = (currentUser && currentUser.role === 'admin')
-    ? allOrders
-    : allOrders.filter(o => o.assignedTo === currentUser.name);
+  let orders = allOrders; // All techs see all orders
+
+
 
   if (isAdmin) {
     if (statusFilter === 'completed') {
@@ -5678,9 +5674,9 @@ function renderRepairOrdersList(statusFilter = 'all') {
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  let orders = (currentUser && currentUser.role === 'admin')
-    ? allOrders
-    : allOrders.filter(o => o.assignedTo === currentUser.name);
+  let orders = allOrders; // All techs see all orders
+
+
 
   if (isAdmin) {
     if (statusFilter === 'completed') {
