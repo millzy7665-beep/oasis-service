@@ -553,7 +553,7 @@ class Router {
     if (routesBtn) {
       const label = routesBtn.querySelector('.nav-label');
       const icon = routesBtn.querySelector('.nav-icon');
-      if (isOfficeUser) { if (label) label.textContent = 'Repairs'; if (icon) icon.textContent = '🛠️'; }
+      if (isOfficeUser) { if (label) label.textContent = 'Work Orders'; if (icon) icon.textContent = '🛠️'; }
       else { if (label) label.textContent = 'Routes'; if (icon) icon.textContent = '🗺️'; }
     }
     if (woBtn) {
@@ -1104,32 +1104,15 @@ class Router {
         <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Create Work Order</div></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download Excel</button>` : ''}
-          <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
-          <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
+          <button class="btn btn-primary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
         </div>
       </div>
 
-      <div style="display:flex;gap:8px;margin:0 16px 12px;flex-wrap:wrap;">
-        <button class="btn btn-sm ${this.adminJobStatusFilter === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setAdminJobStatusFilter('all')">All</button>
-        <button class="btn btn-sm ${this.adminJobStatusFilter === 'pending' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setAdminJobStatusFilter('pending')">Open / Pending <span style="opacity:.7">(${chemOpen + repairOpen + repairProgress})</span></button>
-        <button class="btn btn-sm ${this.adminJobStatusFilter === 'completed' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setAdminJobStatusFilter('completed')">Completed <span style="opacity:.7">(${chemDone + repairDone})</span></button>
-      </div>
-
-      <div class="section-header" style="margin-top:4px">
-        <div class="section-title" style="font-size:15px;">Chem Sheets</div>
-      </div>
-
-      <div id="workorders-list">
-        ${this.renderWorkOrdersList()}
-      </div>
-
-      <div class="section-header" style="margin-top:10px">
-        <div class="section-title" style="font-size:15px;">Repair Work Orders</div>
-      </div>
-
-      <div class="card">
-        <div class="card-body">
-          ${renderRepairOrdersList(this.adminJobStatusFilter)}
+      <div style="padding:16px;">
+        <div class="empty-state">
+          <div class="empty-icon">🛠️</div>
+          <div class="empty-title">Create a new work order</div>
+          <div class="empty-subtitle">Tap the + Work Order button above to get started</div>
         </div>
       </div>
     `;
