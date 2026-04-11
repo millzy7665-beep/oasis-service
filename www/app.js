@@ -543,11 +543,23 @@ class Router {
     document.querySelectorAll('.nav-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === this.currentView);
     });
-    // Hide Work Orders tab for field techs (only Admin, Jet, Mark can see it)
     const user = auth.getCurrentUser();
-    const canSeeWorkOrders = auth.isAdmin() || (user && (user.name === 'Jet' || user.name === 'Mark'));
+    const isOfficeUser = auth.isAdmin() || (user && (user.name === 'Jet' || user.name === 'Mark'));
+    // Hide Work Orders tab for field techs
     const woBtn = document.querySelector('.nav-item[data-view="workorders"]');
-    if (woBtn) woBtn.style.display = canSeeWorkOrders ? '' : 'none';
+    if (woBtn) woBtn.style.display = isOfficeUser ? '' : 'none';
+    // Rename nav labels for office users
+    const routesBtn = document.querySelector('.nav-item[data-view="routes"]');
+    if (routesBtn) {
+      const label = routesBtn.querySelector('.nav-label');
+      const icon = routesBtn.querySelector('.nav-icon');
+      if (isOfficeUser) { if (label) label.textContent = 'Repairs'; if (icon) icon.textContent = '🛠️'; }
+      else { if (label) label.textContent = 'Routes'; if (icon) icon.textContent = '🗺️'; }
+    }
+    if (woBtn) {
+      const label = woBtn.querySelector('.nav-label');
+      if (label && isOfficeUser) label.textContent = 'Create WO';
+    }
   }
 
   setAdminJobStatusFilter(value = 'all') {
@@ -755,6 +767,11 @@ class Router {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
+    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
+
+    // Office users see Repair Visits instead of Routes
+    if (isOfficeUser) { return this.renderRepairVisits(); }
+
     const allClients = db.get('clients', []);
     const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
@@ -865,28 +882,61 @@ class Router {
     return this.renderRouteClients([], 'all', 'all');
   }
 
+  renderRepairVisits() {
+    const content = document.getElementById('main-content');
+    const isAdmin = auth.isAdmin();
+    const canShare = auth.canShare();
+    const allRepair = typeof getRepairOrders === 'function' ? getRepairOrders() : [];
+    const openCount = allRepair.filter(r => (r.status || 'open') !== 'completed').length;
+    const doneCount = allRepair.filter(r => (r.status || '') === 'completed').length;
+    this._repairFilter = this._repairFilter || 'all';
+
+    content.innerHTML = `
+      <div class="section-header">
+        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">\u2190</button><div class="section-title">Repair Visits</div></div>
+        <button class="btn btn-primary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin:0 16px 12px;flex-wrap:wrap;">
+        <button class="btn btn-sm ${this._repairFilter === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='all'; router.renderRepairVisits();">All (${allRepair.length})</button>
+        <button class="btn btn-sm ${this._repairFilter === 'pending' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='pending'; router.renderRepairVisits();">Open (${openCount})</button>
+        <button class="btn btn-sm ${this._repairFilter === 'completed' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='completed'; router.renderRepairVisits();">Completed (${doneCount})</button>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          ${renderRepairOrdersList(this._repairFilter)}
+        </div>
+      </div>
+    `;
+  }
+
   renderClients() {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
     const isMainAdmin = user && user.role === 'admin';
+    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
     this._clientViewMode = this._clientViewMode || 'all';
     if (!isAdmin && this._clientViewMode === 'byRoute') this._clientViewMode = 'all';
+    // Office users only see All view
+    if (isOfficeUser) this._clientViewMode = 'all';
 
     content.innerHTML = `
       <div class="section-header">
-        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">${isAdmin ? 'Clients' : (user ? user.name + "'s Clients" : 'My Clients')}</div></div>
+        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">${isOfficeUser ? 'Clients' : (user ? user.name + "'s Clients" : 'My Clients')}</div></div>
         <div style="display:flex; gap:8px;">
           ${isMainAdmin ? '<button class="btn btn-secondary btn-sm" onclick="importRouteSchedule()">Import Route Sheet</button>' : ''}
           ${isAdmin ? '<button class="btn btn-primary btn-sm" onclick="quickAddClient()">+ Add Client</button>' : ''}
         </div>
       </div>
 
+      ${isOfficeUser ? '' : `
       <div style="display:flex; gap:6px; padding:0 16px 8px; flex-wrap:wrap;">
         <button class="btn btn-sm ${this._clientViewMode === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('all')">All</button>
-        ${isAdmin ? `<button class="btn btn-sm ${this._clientViewMode === 'byRoute' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('byRoute')">By Route</button>` : ''}
         <button class="btn btn-sm ${this._clientViewMode === 'byDay' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('byDay')">By Day</button>
       </div>
+      `}
 
       <div class="search-bar" style="margin: 0 16px 12px;">
         <input type="text" id="client-search" placeholder="Search clients..." oninput="router.filterClients(this.value)" class="form-control">
@@ -1051,11 +1101,11 @@ class Router {
 
     content.innerHTML = `
       <div class="section-header">
-        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Service & Repair Jobs</div></div>
+        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Create Work Order</div></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download Excel</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
-          <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Repair Order</button>
+          <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
         </div>
       </div>
 
