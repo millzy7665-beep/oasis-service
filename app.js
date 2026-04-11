@@ -862,10 +862,11 @@ class Router {
     const isAdmin = auth.isAdmin();
     const isMainAdmin = user && user.role === 'admin';
     this._clientViewMode = this._clientViewMode || 'all';
+    if (!isAdmin && this._clientViewMode === 'byRoute') this._clientViewMode = 'all';
 
     content.innerHTML = `
       <div class="section-header">
-        <div class="section-title">Clients</div>
+        <div class="section-title">${isAdmin ? 'Clients' : (user ? user.name + "'s Clients" : 'My Clients')}</div>
         <div style="display:flex; gap:8px;">
           ${isMainAdmin ? '<button class="btn btn-secondary btn-sm" onclick="importRouteSchedule()">Import Route Sheet</button>' : ''}
           ${isAdmin ? '<button class="btn btn-primary btn-sm" onclick="quickAddClient()">+ Add Client</button>' : ''}
@@ -874,7 +875,7 @@ class Router {
 
       <div style="display:flex; gap:6px; padding:0 16px 8px; flex-wrap:wrap;">
         <button class="btn btn-sm ${this._clientViewMode === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('all')">All</button>
-        <button class="btn btn-sm ${this._clientViewMode === 'byRoute' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('byRoute')">By Route</button>
+        ${isAdmin ? `<button class="btn btn-sm ${this._clientViewMode === 'byRoute' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('byRoute')">By Route</button>` : ''}
         <button class="btn btn-sm ${this._clientViewMode === 'byDay' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('byDay')">By Day</button>
       </div>
 
@@ -923,16 +924,22 @@ class Router {
   renderClientsList(query = '') {
     const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
+    const user = auth.getCurrentUser();
     const mode = this._clientViewMode || 'all';
 
+    // Techs see only their assigned clients; admin sees all
+    let baseClients = isAdmin
+      ? allClients
+      : allClients.filter(c => c.technician && user && c.technician.toLowerCase() === user.name.toLowerCase());
+
     let clients = query
-      ? allClients.filter(c =>
+      ? baseClients.filter(c =>
           c.name.toLowerCase().includes(query.toLowerCase()) ||
           c.address.toLowerCase().includes(query.toLowerCase()) ||
           (c.technician || '').toLowerCase().includes(query.toLowerCase()) ||
           (c.route || '').toLowerCase().includes(query.toLowerCase())
         )
-      : allClients;
+      : baseClients;
 
     if (clients.length === 0) {
       return `
@@ -953,10 +960,10 @@ class Router {
 
     if (mode === 'byRoute') {
       const byTech = {};
-      clients.forEach(c => {
+      clients.filter(c => c.serviceDays && c.serviceDays.length).forEach(c => {
         const tech = c.technician || 'Unassigned';
         if (!byTech[tech]) byTech[tech] = {};
-        const days = (c.serviceDays && c.serviceDays.length) ? c.serviceDays : ['Unscheduled'];
+        const days = c.serviceDays;
         days.forEach(day => {
           if (!byTech[tech][day]) byTech[tech][day] = [];
           byTech[tech][day].push(c);
@@ -986,8 +993,8 @@ class Router {
 
     if (mode === 'byDay') {
       const byDay = {};
-      clients.forEach(c => {
-        const days = (c.serviceDays && c.serviceDays.length) ? c.serviceDays : ['Unscheduled'];
+      clients.filter(c => c.serviceDays && c.serviceDays.length).forEach(c => {
+        const days = c.serviceDays;
         days.forEach(day => {
           if (!byDay[day]) byDay[day] = [];
           byDay[day].push(c);
