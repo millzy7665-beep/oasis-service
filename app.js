@@ -1206,11 +1206,12 @@ class Router {
     content.innerHTML = `
       <div class="section-header">
         <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Create Work Order</div></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="downloadCompletedWorkOrders()">📥 Download WO</button>` : ''}
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="downloadBulkChemSheets()">📥 Download Chem Sheets</button>` : ''}
-          <button class="btn btn-primary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
-          ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ Chem Sheet</button>` : ''}
+        <div style="display:flex;gap:8px;align-items:flex-start;">
+          ${isAdmin ? `<div style="display:flex;gap:6px;flex-wrap:wrap;"><button class="btn btn-secondary btn-sm" onclick="downloadCompletedWorkOrders()">📥 Download WO</button><button class="btn btn-secondary btn-sm" onclick="downloadBulkChemSheets()">📥 Chem Sheets</button></div>` : ''}
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <button class="btn btn-primary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
+            ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ Chem Sheet</button>` : ''}
+          </div>
         </div>
       </div>
 
