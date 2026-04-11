@@ -826,6 +826,14 @@ class Router {
     const isAdmin = auth.isAdmin();
     const canShare = auth.canShare();
 
+    const allChem = db.get('workorders', []);
+    const allRepair = getRepairOrders();
+    const chemOpen = allChem.filter(w => (w.status || 'pending') !== 'completed').length;
+    const chemDone = allChem.filter(w => (w.status || 'pending') === 'completed').length;
+    const repairOpen = allRepair.filter(r => (r.status || 'open') === 'open').length;
+    const repairProgress = allRepair.filter(r => (r.status || '') === 'in-progress').length;
+    const repairDone = allRepair.filter(r => (r.status || '') === 'completed').length;
+
     content.innerHTML = `
       <div class="section-header">
         <div class="section-title">Service & Repair Jobs</div>
@@ -836,27 +844,22 @@ class Router {
         </div>
       </div>
 
-      ${isAdmin ? `
-      <div class="card" style="margin: 0 16px 12px;">
-        <div class="card-body">
-          <div class="form-row" style="margin-bottom:0;">
-            <label for="admin-job-status-filter">Filter jobs by status</label>
-            <select id="admin-job-status-filter" onchange="router.setAdminJobStatusFilter(this.value)">
-              <option value="all" ${this.adminJobStatusFilter === 'all' ? 'selected' : ''}>All jobs</option>
-              <option value="pending" ${this.adminJobStatusFilter === 'pending' ? 'selected' : ''}>Pending / Open</option>
-              <option value="completed" ${this.adminJobStatusFilter === 'completed' ? 'selected' : ''}>Completed only</option>
-            </select>
-          </div>
-        </div>
+      <div style="display:flex;gap:8px;margin:0 16px 12px;flex-wrap:wrap;">
+        <button class="btn btn-sm ${this.adminJobStatusFilter === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setAdminJobStatusFilter('all')">All</button>
+        <button class="btn btn-sm ${this.adminJobStatusFilter === 'pending' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setAdminJobStatusFilter('pending')">Open / Pending <span style="opacity:.7">(${chemOpen + repairOpen + repairProgress})</span></button>
+        <button class="btn btn-sm ${this.adminJobStatusFilter === 'completed' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setAdminJobStatusFilter('completed')">Completed <span style="opacity:.7">(${chemDone + repairDone})</span></button>
       </div>
-      ` : ''}
+
+      <div class="section-header" style="margin-top:4px">
+        <div class="section-title" style="font-size:15px;">Chem Sheets</div>
+      </div>
 
       <div id="workorders-list">
         ${this.renderWorkOrdersList()}
       </div>
 
       <div class="section-header" style="margin-top:10px">
-        <div class="section-title">Repair Work Orders</div>
+        <div class="section-title" style="font-size:15px;">Repair Work Orders</div>
       </div>
 
       <div class="card">
@@ -873,18 +876,15 @@ class Router {
     const isAdmin = auth.isAdmin();
     const canShare = auth.canShare();
 
-    let workorders = allWorkorders;
-
-    if (isAdmin) {
-      workorders = this.applyStatusFilter(workorders);
-    }
+    let workorders = this.applyStatusFilter(allWorkorders);
 
     if (workorders.length === 0) {
-      const emptyTitle = isAdmin && this.adminJobStatusFilter === 'completed'
-        ? 'No completed jobs found'
-        : isAdmin && this.adminJobStatusFilter === 'pending'
-          ? 'No pending or open jobs found'
-          : 'No jobs found';
+      const filter = this.adminJobStatusFilter || 'all';
+      const emptyTitle = filter === 'completed'
+        ? 'No completed chem sheets'
+        : filter === 'pending'
+          ? 'No open or pending chem sheets'
+          : 'No chem sheets found';
 
       return `
         <div class="empty-state">
@@ -1067,6 +1067,7 @@ class Router {
               <label for="wo-status">Job Status</label>
               <select id="wo-status">
                 <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Pending</option>
+                <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
                 <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
               </select>
             </div>
@@ -2595,30 +2596,26 @@ function renderRepairOrdersList(statusFilter = 'all') {
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  let orders = allOrders; // All techs see all orders
+  let orders = allOrders;
 
-
-
-  if (isAdmin) {
-    if (statusFilter === 'completed') {
-      orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
-    } else if (statusFilter === 'pending') {
-      orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
-    }
+  if (statusFilter === 'completed') {
+    orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+  } else if (statusFilter === 'pending') {
+    orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
   }
 
   if (!orders.length) {
-    const emptyTitle = isAdmin && statusFilter === 'completed'
+    const emptyTitle = statusFilter === 'completed'
       ? 'No completed repair orders'
-      : isAdmin && statusFilter === 'pending'
-        ? 'No pending or open repair orders'
+      : statusFilter === 'pending'
+        ? 'No open or pending repair orders'
         : 'No repair work orders';
 
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
         <div class="empty-title">${emptyTitle}</div>
-        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a repair order' : 'Create one to manage service repairs in the same app'}</div>
+        <div class="empty-subtitle">Try a different filter or create a repair order</div>
       </div>
     `;
   }
@@ -5767,30 +5764,26 @@ function renderRepairOrdersList(statusFilter = 'all') {
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  let orders = allOrders; // All techs see all orders
+  let orders = allOrders;
 
-
-
-  if (isAdmin) {
-    if (statusFilter === 'completed') {
-      orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
-    } else if (statusFilter === 'pending') {
-      orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
-    }
+  if (statusFilter === 'completed') {
+    orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+  } else if (statusFilter === 'pending') {
+    orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
   }
 
   if (!orders.length) {
-    const emptyTitle = isAdmin && statusFilter === 'completed'
+    const emptyTitle = statusFilter === 'completed'
       ? 'No completed repair orders'
-      : isAdmin && statusFilter === 'pending'
-        ? 'No pending or open repair orders'
+      : statusFilter === 'pending'
+        ? 'No open or pending repair orders'
         : 'No repair work orders';
 
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
         <div class="empty-title">${emptyTitle}</div>
-        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a repair order' : 'Create one to manage service repairs in the same app'}</div>
+        <div class="empty-subtitle">Try a different filter or create a repair order</div>
       </div>
     `;
   }
