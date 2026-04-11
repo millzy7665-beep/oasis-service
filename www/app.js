@@ -1592,8 +1592,11 @@ function cleanupTestClients() {
 }
 
 async function exportCompletedToExcel() {
-  const completedChemSheets = db.get('workorders', []).filter(wo => wo.status === 'completed');
-  const completedRepairOrders = getRepairOrders().filter(order => order.status === 'completed');
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
+
+  const completedChemSheets = sortByNewest(db.get('workorders', []).filter(wo => isCompleted(wo.status)));
+  const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
 
   if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
     showToast('No completed chem sheets or repair orders to export');
@@ -1606,11 +1609,25 @@ async function exportCompletedToExcel() {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'OASIS Service App';
     workbook.created = new Date();
+    workbook.modified = new Date();
 
-    const styleHeader = (sheet) => {
-      sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-      sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+    const styleHeader = (sheet, columnCount) => {
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
       sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = {
+        from: { row: 1, column: 1 },
+        to: { row: 1, column: columnCount }
+      };
+    };
+
+    const formatBody = (sheet) => {
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        row.alignment = { vertical: 'top', wrapText: true };
+      });
     };
 
     const chemKeys = [
@@ -1655,14 +1672,14 @@ async function exportCompletedToExcel() {
 
     chemColumns.push({ header: 'Service Notes', key: 'notes', width: 40 });
     chemSheet.columns = chemColumns;
-    styleHeader(chemSheet);
+    styleHeader(chemSheet, chemColumns.length);
 
     completedChemSheets.forEach(wo => {
       const rowData = {
-        date: wo.date,
-        client: wo.clientName,
-        address: wo.address,
-        tech: wo.technician,
+        date: wo.date || '',
+        client: wo.clientName || '',
+        address: wo.address || '',
+        tech: wo.technician || '',
         timeIn: wo.timeIn || wo.time || '',
         timeOut: wo.timeOut || '',
         pCl: wo.readings?.pool?.chlorine || '',
@@ -1685,9 +1702,9 @@ async function exportCompletedToExcel() {
     if (chemSheet.rowCount === 1) {
       chemSheet.addRow({ client: 'No completed chem sheets' });
     }
+    formatBody(chemSheet);
 
-    const repairSheet = workbook.addWorksheet('Repair Orders');
-    repairSheet.columns = [
+    const repairColumns = [
       { header: 'Date', key: 'date', width: 12 },
       { header: 'Client', key: 'client', width: 25 },
       { header: 'Address', key: 'address', width: 35 },
@@ -1703,7 +1720,10 @@ async function exportCompletedToExcel() {
       { header: 'Work Summary', key: 'summary', width: 40 },
       { header: 'Notes', key: 'notes', width: 40 }
     ];
-    styleHeader(repairSheet);
+
+    const repairSheet = workbook.addWorksheet('Repair Orders');
+    repairSheet.columns = repairColumns;
+    styleHeader(repairSheet, repairColumns.length);
 
     completedRepairOrders.forEach(order => {
       repairSheet.addRow({
@@ -1727,6 +1747,7 @@ async function exportCompletedToExcel() {
     if (repairSheet.rowCount === 1) {
       repairSheet.addRow({ client: 'No completed repair orders' });
     }
+    formatBody(repairSheet);
 
     const buffer = await workbook.xlsx.writeBuffer();
 
@@ -4086,8 +4107,11 @@ function cleanupTestClients() {
 }
 
 async function exportCompletedToExcel() {
-  const completedChemSheets = db.get('workorders', []).filter(wo => wo.status === 'completed');
-  const completedRepairOrders = getRepairOrders().filter(order => order.status === 'completed');
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
+
+  const completedChemSheets = sortByNewest(db.get('workorders', []).filter(wo => isCompleted(wo.status)));
+  const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
 
   if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
     showToast('No completed chem sheets or repair orders to export');
@@ -4100,11 +4124,25 @@ async function exportCompletedToExcel() {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'OASIS Service App';
     workbook.created = new Date();
+    workbook.modified = new Date();
 
-    const styleHeader = (sheet) => {
-      sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-      sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+    const styleHeader = (sheet, columnCount) => {
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
       sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = {
+        from: { row: 1, column: 1 },
+        to: { row: 1, column: columnCount }
+      };
+    };
+
+    const formatBody = (sheet) => {
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        row.alignment = { vertical: 'top', wrapText: true };
+      });
     };
 
     const chemKeys = [
@@ -4149,14 +4187,14 @@ async function exportCompletedToExcel() {
 
     chemColumns.push({ header: 'Service Notes', key: 'notes', width: 40 });
     chemSheet.columns = chemColumns;
-    styleHeader(chemSheet);
+    styleHeader(chemSheet, chemColumns.length);
 
     completedChemSheets.forEach(wo => {
       const rowData = {
-        date: wo.date,
-        client: wo.clientName,
-        address: wo.address,
-        tech: wo.technician,
+        date: wo.date || '',
+        client: wo.clientName || '',
+        address: wo.address || '',
+        tech: wo.technician || '',
         timeIn: wo.timeIn || wo.time || '',
         timeOut: wo.timeOut || '',
         pCl: wo.readings?.pool?.chlorine || '',
@@ -4179,9 +4217,9 @@ async function exportCompletedToExcel() {
     if (chemSheet.rowCount === 1) {
       chemSheet.addRow({ client: 'No completed chem sheets' });
     }
+    formatBody(chemSheet);
 
-    const repairSheet = workbook.addWorksheet('Repair Orders');
-    repairSheet.columns = [
+    const repairColumns = [
       { header: 'Date', key: 'date', width: 12 },
       { header: 'Client', key: 'client', width: 25 },
       { header: 'Address', key: 'address', width: 35 },
@@ -4197,7 +4235,10 @@ async function exportCompletedToExcel() {
       { header: 'Work Summary', key: 'summary', width: 40 },
       { header: 'Notes', key: 'notes', width: 40 }
     ];
-    styleHeader(repairSheet);
+
+    const repairSheet = workbook.addWorksheet('Repair Orders');
+    repairSheet.columns = repairColumns;
+    styleHeader(repairSheet, repairColumns.length);
 
     completedRepairOrders.forEach(order => {
       repairSheet.addRow({
@@ -4221,6 +4262,7 @@ async function exportCompletedToExcel() {
     if (repairSheet.rowCount === 1) {
       repairSheet.addRow({ client: 'No completed repair orders' });
     }
+    formatBody(repairSheet);
 
     const buffer = await workbook.xlsx.writeBuffer();
 
@@ -5786,8 +5828,11 @@ function cleanupTestClients() {
 }
 
 async function exportCompletedToExcel() {
-  const completedChemSheets = db.get('workorders', []).filter(wo => wo.status === 'completed');
-  const completedRepairOrders = getRepairOrders().filter(order => order.status === 'completed');
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
+
+  const completedChemSheets = sortByNewest(db.get('workorders', []).filter(wo => isCompleted(wo.status)));
+  const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
 
   if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
     showToast('No completed chem sheets or repair orders to export');
@@ -5800,11 +5845,25 @@ async function exportCompletedToExcel() {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'OASIS Service App';
     workbook.created = new Date();
+    workbook.modified = new Date();
 
-    const styleHeader = (sheet) => {
-      sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-      sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+    const styleHeader = (sheet, columnCount) => {
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
       sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = {
+        from: { row: 1, column: 1 },
+        to: { row: 1, column: columnCount }
+      };
+    };
+
+    const formatBody = (sheet) => {
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        row.alignment = { vertical: 'top', wrapText: true };
+      });
     };
 
     const chemKeys = [
@@ -5849,14 +5908,14 @@ async function exportCompletedToExcel() {
 
     chemColumns.push({ header: 'Service Notes', key: 'notes', width: 40 });
     chemSheet.columns = chemColumns;
-    styleHeader(chemSheet);
+    styleHeader(chemSheet, chemColumns.length);
 
     completedChemSheets.forEach(wo => {
       const rowData = {
-        date: wo.date,
-        client: wo.clientName,
-        address: wo.address,
-        tech: wo.technician,
+        date: wo.date || '',
+        client: wo.clientName || '',
+        address: wo.address || '',
+        tech: wo.technician || '',
         timeIn: wo.timeIn || wo.time || '',
         timeOut: wo.timeOut || '',
         pCl: wo.readings?.pool?.chlorine || '',
@@ -5879,9 +5938,9 @@ async function exportCompletedToExcel() {
     if (chemSheet.rowCount === 1) {
       chemSheet.addRow({ client: 'No completed chem sheets' });
     }
+    formatBody(chemSheet);
 
-    const repairSheet = workbook.addWorksheet('Repair Orders');
-    repairSheet.columns = [
+    const repairColumns = [
       { header: 'Date', key: 'date', width: 12 },
       { header: 'Client', key: 'client', width: 25 },
       { header: 'Address', key: 'address', width: 35 },
@@ -5897,7 +5956,10 @@ async function exportCompletedToExcel() {
       { header: 'Work Summary', key: 'summary', width: 40 },
       { header: 'Notes', key: 'notes', width: 40 }
     ];
-    styleHeader(repairSheet);
+
+    const repairSheet = workbook.addWorksheet('Repair Orders');
+    repairSheet.columns = repairColumns;
+    styleHeader(repairSheet, repairColumns.length);
 
     completedRepairOrders.forEach(order => {
       repairSheet.addRow({
@@ -5921,6 +5983,7 @@ async function exportCompletedToExcel() {
     if (repairSheet.rowCount === 1) {
       repairSheet.addRow({ client: 'No completed repair orders' });
     }
+    formatBody(repairSheet);
 
     const buffer = await workbook.xlsx.writeBuffer();
 
