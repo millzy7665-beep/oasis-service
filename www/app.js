@@ -891,6 +891,66 @@ class Router {
     const doneCount = allRepair.filter(r => (r.status || '') === 'completed').length;
     this._repairFilter = this._repairFilter || 'all';
 
+    // Build day-based view
+    let dayViewHTML = '';
+    if (this._repairFilter === 'byday') {
+      // Group orders by date
+      const grouped = {};
+      allRepair.forEach(order => {
+        const dateKey = order.date || 'Unscheduled';
+        if (!grouped[dateKey]) grouped[dateKey] = [];
+        grouped[dateKey].push(order);
+      });
+      // Sort date keys (Unscheduled last)
+      const sortedDates = Object.keys(grouped).sort((a, b) => {
+        if (a === 'Unscheduled') return 1;
+        if (b === 'Unscheduled') return -1;
+        return new Date(a) - new Date(b);
+      });
+      if (sortedDates.length === 0) {
+        dayViewHTML = `<div class="empty-state"><div class="empty-icon">🛠️</div><div class="empty-title">No work orders</div><div class="empty-subtitle">Create a work order to get started</div></div>`;
+      } else {
+        dayViewHTML = sortedDates.map(dateKey => {
+          const orders = grouped[dateKey];
+          let label = dateKey;
+          if (dateKey !== 'Unscheduled') {
+            const d = new Date(dateKey + 'T00:00:00');
+            const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            label = `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
+          }
+          const openInDay = orders.filter(o => (o.status || 'open') !== 'completed').length;
+          const doneInDay = orders.filter(o => (o.status || '') === 'completed').length;
+          return `
+            <div style="margin-bottom:16px;">
+              <div style="font-weight:600;font-size:15px;padding:8px 0;border-bottom:2px solid var(--primary-color, #2196F3);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+                <span>📅 ${label}</span>
+                <span style="font-size:12px;font-weight:400;color:#666;">${openInDay} open · ${doneInDay} done</span>
+              </div>
+              ${orders.map(order => `
+                <div class="job-card" style="margin-bottom:8px;">
+                  <div class="job-card-header"><div>
+                    <div class="job-card-title">${escapeHtml(order.clientName || 'Repair Job')}</div>
+                    <div class="job-card-customer">${escapeHtml(order.jobType || 'General Repair')}</div>
+                    <div class="job-meta"><div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div></div>
+                  </div></div>
+                  <div class="job-card-body">
+                    <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
+                    <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
+                  </div>
+                  <div class="job-card-footer">
+                    <button class="btn ${order.status === 'completed' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">${order.status === 'completed' ? 'Completed' : 'Open'}</button>
+                    ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
+                    ${auth.getCurrentUser().role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
     content.innerHTML = `
       <div class="section-header">
         <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">\u2190</button><div class="section-title">Repair Visits</div></div>
@@ -899,13 +959,14 @@ class Router {
 
       <div style="display:flex;gap:8px;margin:0 16px 12px;flex-wrap:wrap;">
         <button class="btn btn-sm ${this._repairFilter === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='all'; router.renderRepairVisits();">All (${allRepair.length})</button>
+        <button class="btn btn-sm ${this._repairFilter === 'byday' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='byday'; router.renderRepairVisits();">By Day</button>
         <button class="btn btn-sm ${this._repairFilter === 'pending' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='pending'; router.renderRepairVisits();">Open (${openCount})</button>
         <button class="btn btn-sm ${this._repairFilter === 'completed' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='completed'; router.renderRepairVisits();">Completed (${doneCount})</button>
       </div>
 
       <div class="card">
         <div class="card-body">
-          ${renderRepairOrdersList(this._repairFilter)}
+          ${this._repairFilter === 'byday' ? dayViewHTML : renderRepairOrdersList(this._repairFilter)}
         </div>
       </div>
     `;
@@ -986,8 +1047,9 @@ class Router {
     const user = auth.getCurrentUser();
     const mode = this._clientViewMode || 'all';
 
-    // Techs see only their assigned clients; admin sees all
-    let baseClients = isAdmin
+    // Office users (admin, Jet, Mark) see all clients; field techs see only their own
+    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
+    let baseClients = isOfficeUser
       ? allClients
       : allClients.filter(c => c.technician && user && c.technician.toLowerCase() === user.name.toLowerCase());
 
