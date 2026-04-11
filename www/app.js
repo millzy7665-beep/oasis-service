@@ -3497,7 +3497,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     time: '',
     timeIn: '',
     timeOut: '',
-    assignedTo: auth.getCurrentUser()?.name || '',
+    assignedTo: '',
     status: 'open',
     jobType: '',
     summary: '',
@@ -3568,6 +3568,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <div class="wo-fld">
               <div class="wo-fld-lbl">Assigned Tech</div>
               <select id="repair-tech" class="wo-fld-inp">
+                <option value="" ${!order.assignedTo ? 'selected' : ''}>Unassigned</option>
                 ${Object.entries(auth.users)
                   .sort((a, b) => a[1].name.localeCompare(b[1].name))
                   .map(([id, user]) => `<option value="${user.name}" ${user.name === (order.assignedTo || '') ? 'selected' : ''}>${user.name}</option>`).join('')}
@@ -3827,10 +3828,6 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   if (!order) return;
 
   order.status = document.getElementById('repair-status')?.value || order.status || 'open';
-  if (order.status !== 'completed' && order.status !== 'pending') {
-    showToast('Please set status to Completed or Pending before saving');
-    return;
-  }
 
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
@@ -3842,7 +3839,8 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  showToast(order.status === 'completed' ? 'Completed work order saved' : 'Pending work order saved');
+  const statusLabels = { completed: 'Completed', pending: 'Pending', 'in-progress': 'In Progress', open: 'Open' };
+  showToast((statusLabels[order.status] || 'Work') + ' order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -6980,7 +6978,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     time: '',
     timeIn: '',
     timeOut: '',
-    assignedTo: auth.getCurrentUser()?.name || '',
+    assignedTo: '',
     status: 'open',
     jobType: '',
     summary: '',
@@ -7051,6 +7049,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <div class="wo-fld">
               <div class="wo-fld-lbl">Assigned Tech</div>
               <select id="repair-tech" class="wo-fld-inp">
+                <option value="" ${!order.assignedTo ? 'selected' : ''}>Unassigned</option>
                 ${Object.entries(auth.users)
                   .sort((a, b) => a[1].name.localeCompare(b[1].name))
                   .map(([id, user]) => `<option value="${user.name}" ${user.name === (order.assignedTo || '') ? 'selected' : ''}>${user.name}</option>`).join('')}
@@ -7216,10 +7215,6 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   if (!order) return;
 
   order.status = document.getElementById('repair-status')?.value || order.status || 'open';
-  if (order.status !== 'completed' && order.status !== 'pending') {
-    showToast('Please set status to Completed or Pending before saving');
-    return;
-  }
 
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
@@ -7231,7 +7226,8 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  showToast(order.status === 'completed' ? 'Completed work order saved' : 'Pending work order saved');
+  const statusLabels = { completed: 'Completed', pending: 'Pending', 'in-progress': 'In Progress', open: 'Open' };
+  showToast((statusLabels[order.status] || 'Work') + ' order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
