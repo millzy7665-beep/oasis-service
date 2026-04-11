@@ -3179,12 +3179,11 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
           <span class="wo-chev">▼</span>
         </div>
         <div class="wo-sec-bd" data-active-repair-id="${activeOrderId}">
-          <div class="form-row">
-            <label for="repair-client">Client</label>
-            <select id="repair-client" onchange="onRepairClientChange()">
-              <option value="">— Search client —</option>
-              ${[...clients].sort((a, b) => a.name.localeCompare(b.name)).map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
-            </select>
+          <div class="form-row" style="position:relative;">
+            <label for="repair-client-search">Client</label>
+            <input type="hidden" id="repair-client" value="${escapeHtml(order.clientId || presetClientId || '')}">
+            <input type="text" id="repair-client-search" class="form-control" placeholder="Type to search clients..." value="${escapeHtml(order.clientName || '')}" autocomplete="off" oninput="filterRepairClientDropdown(this.value)" onfocus="filterRepairClientDropdown(this.value)">
+            <div id="repair-client-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:100; max-height:200px; overflow-y:auto; background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
           </div>
 
           <div class="form-row">
@@ -3283,16 +3282,56 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 }
 
 function onRepairClientChange() {
-  const select = document.getElementById('repair-client');
+  const hiddenInput = document.getElementById('repair-client');
+  const searchInput = document.getElementById('repair-client-search');
   const address = document.getElementById('repair-address');
   const title = document.getElementById('repair-bar-title');
-  if (!select || !address) return;
+  if (!hiddenInput || !address) return;
 
-  const client = db.get('clients', []).find(item => item.id === select.value);
+  const client = db.get('clients', []).find(item => item.id === hiddenInput.value);
   if (client) {
     address.value = client.address || '';
+    if (searchInput) searchInput.value = client.name || '';
     if (title) title.textContent = client.name || 'Repair Order';
   }
+}
+
+
+function filterRepairClientDropdown(query) {
+  const dropdown = document.getElementById('repair-client-dropdown');
+  if (!dropdown) return;
+  const clients = [...db.get('clients', [])].sort((a, b) => a.name.localeCompare(b.name));
+  const q = (query || '').toLowerCase();
+  const filtered = q ? clients.filter(c => c.name.toLowerCase().includes(q) || (c.address || '').toLowerCase().includes(q)) : clients;
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = '<div style="padding:10px 14px;color:#999;font-size:13px;">No clients found</div>';
+  } else {
+    dropdown.innerHTML = filtered.map(c => `
+      <div style="padding:10px 14px;cursor:pointer;font-size:14px;border-bottom:1px solid #f0f0f0;" onmousedown="selectRepairClient('${escapeHtml(c.id)}','${escapeHtml(c.name)}')">${escapeHtml(c.name)}<span style="display:block;font-size:11px;color:#888;">${escapeHtml(c.address || '')}</span></div>
+    `).join('');
+  }
+  dropdown.style.display = 'block';
+
+  setTimeout(() => {
+    const searchInput = document.getElementById('repair-client-search');
+    if (searchInput && !searchInput._blurBound) {
+      searchInput._blurBound = true;
+      searchInput.addEventListener('blur', () => {
+        setTimeout(() => { if (dropdown) dropdown.style.display = 'none'; }, 200);
+      });
+    }
+  }, 0);
+}
+
+function selectRepairClient(clientId, clientName) {
+  const hiddenInput = document.getElementById('repair-client');
+  const searchInput = document.getElementById('repair-client-search');
+  const dropdown = document.getElementById('repair-client-dropdown');
+  if (hiddenInput) hiddenInput.value = clientId;
+  if (searchInput) searchInput.value = clientName;
+  if (dropdown) dropdown.style.display = 'none';
+  onRepairClientChange();
 }
 
 function collectRepairOrderFromForm(orderId = '') {
@@ -6537,12 +6576,11 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
           <span class="wo-chev">▼</span>
         </div>
         <div class="wo-sec-bd" data-active-repair-id="${activeOrderId}">
-          <div class="form-row">
-            <label for="repair-client">Client</label>
-            <select id="repair-client" onchange="onRepairClientChange()">
-              <option value="">— Search client —</option>
-              ${[...clients].sort((a, b) => a.name.localeCompare(b.name)).map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
-            </select>
+          <div class="form-row" style="position:relative;">
+            <label for="repair-client-search">Client</label>
+            <input type="hidden" id="repair-client" value="${escapeHtml(order.clientId || presetClientId || '')}">
+            <input type="text" id="repair-client-search" class="form-control" placeholder="Type to search clients..." value="${escapeHtml(order.clientName || '')}" autocomplete="off" oninput="filterRepairClientDropdown(this.value)" onfocus="filterRepairClientDropdown(this.value)">
+            <div id="repair-client-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:100; max-height:200px; overflow-y:auto; background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
           </div>
 
           <div class="form-row">
@@ -6641,14 +6679,16 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 }
 
 function onRepairClientChange() {
-  const select = document.getElementById('repair-client');
+  const hiddenInput = document.getElementById('repair-client');
+  const searchInput = document.getElementById('repair-client-search');
   const address = document.getElementById('repair-address');
   const title = document.getElementById('repair-bar-title');
-  if (!select || !address) return;
+  if (!hiddenInput || !address) return;
 
-  const client = db.get('clients', []).find(item => item.id === select.value);
+  const client = db.get('clients', []).find(item => item.id === hiddenInput.value);
   if (client) {
     address.value = client.address || '';
+    if (searchInput) searchInput.value = client.name || '';
     if (title) title.textContent = client.name || 'Repair Order';
   }
 }
