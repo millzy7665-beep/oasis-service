@@ -2073,31 +2073,22 @@ function processRouteFile(input) {
       let matched = 0, created = 0;
 
       routeEntries.forEach(entry => {
-        const searchName = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-        const searchAddr = entry.address.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-        const searchTerms = (searchName + ' ' + searchAddr).split(/\s+/).filter(w => w.length > 2);
-        let bestMatch = null;
-        let bestScore = 0;
+        // Match on name + address + tech to avoid collisions between same-name clients
+        const eName = entry.name.toLowerCase().trim();
+        const eAddr = entry.address.toLowerCase().trim();
+        const eTech = entry.tech.toLowerCase().trim();
+        let match = clients.find(c =>
+          c.name && c.name.toLowerCase().trim() === eName &&
+          c.address && c.address.toLowerCase().trim() === eAddr &&
+          c.technician && c.technician.toLowerCase().trim() === eTech
+        );
 
-        clients.forEach(client => {
-          const clientText = (client.name + ' ' + client.address).toLowerCase();
-          let score = 0;
-          searchTerms.forEach(term => { if (clientText.includes(term)) score++; });
-          if (client.technician && client.technician.toLowerCase() === entry.tech.toLowerCase()) score += 2;
-          if (score > bestScore && score >= Math.min(2, searchTerms.length)) {
-            bestScore = score;
-            bestMatch = client;
-          }
-        });
-
-        if (bestMatch) {
-          // Merge days (don't overwrite, accumulate)
-          const existing = bestMatch.serviceDays || [];
+        if (match) {
+          const existing = match.serviceDays || [];
           entry.days.forEach(d => { if (!existing.includes(d)) existing.push(d); });
           existing.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          bestMatch.serviceDays = existing;
-          bestMatch.route = entry.route;
-          bestMatch.technician = entry.tech;
+          match.serviceDays = existing;
+          match.route = entry.route;
           matched++;
         } else {
           clients.push({
@@ -5440,31 +5431,22 @@ function processRouteFile(input) {
       let matched = 0, created = 0;
 
       routeEntries.forEach(entry => {
-        const searchName = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-        const searchAddr = entry.address.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-        const searchTerms = (searchName + ' ' + searchAddr).split(/\s+/).filter(w => w.length > 2);
-        let bestMatch = null;
-        let bestScore = 0;
+        // Match on name + address + tech to avoid collisions between same-name clients
+        const eName = entry.name.toLowerCase().trim();
+        const eAddr = entry.address.toLowerCase().trim();
+        const eTech = entry.tech.toLowerCase().trim();
+        let match = clients.find(c =>
+          c.name && c.name.toLowerCase().trim() === eName &&
+          c.address && c.address.toLowerCase().trim() === eAddr &&
+          c.technician && c.technician.toLowerCase().trim() === eTech
+        );
 
-        clients.forEach(client => {
-          const clientText = (client.name + ' ' + client.address).toLowerCase();
-          let score = 0;
-          searchTerms.forEach(term => { if (clientText.includes(term)) score++; });
-          if (client.technician && client.technician.toLowerCase() === entry.tech.toLowerCase()) score += 2;
-          if (score > bestScore && score >= Math.min(2, searchTerms.length)) {
-            bestScore = score;
-            bestMatch = client;
-          }
-        });
-
-        if (bestMatch) {
-          // Merge days (don't overwrite, accumulate)
-          const existing = bestMatch.serviceDays || [];
+        if (match) {
+          const existing = match.serviceDays || [];
           entry.days.forEach(d => { if (!existing.includes(d)) existing.push(d); });
           existing.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          bestMatch.serviceDays = existing;
-          bestMatch.route = entry.route;
-          bestMatch.technician = entry.tech;
+          match.serviceDays = existing;
+          match.route = entry.route;
           matched++;
         } else {
           clients.push({
@@ -7359,31 +7341,22 @@ function processRouteFile(input) {
       let matched = 0, created = 0;
 
       routeEntries.forEach(entry => {
-        const searchName = entry.name.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-        const searchAddr = entry.address.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-        const searchTerms = (searchName + ' ' + searchAddr).split(/\s+/).filter(w => w.length > 2);
-        let bestMatch = null;
-        let bestScore = 0;
+        // Match on name + address + tech to avoid collisions between same-name clients
+        const eName = entry.name.toLowerCase().trim();
+        const eAddr = entry.address.toLowerCase().trim();
+        const eTech = entry.tech.toLowerCase().trim();
+        let match = clients.find(c =>
+          c.name && c.name.toLowerCase().trim() === eName &&
+          c.address && c.address.toLowerCase().trim() === eAddr &&
+          c.technician && c.technician.toLowerCase().trim() === eTech
+        );
 
-        clients.forEach(client => {
-          const clientText = (client.name + ' ' + client.address).toLowerCase();
-          let score = 0;
-          searchTerms.forEach(term => { if (clientText.includes(term)) score++; });
-          if (client.technician && client.technician.toLowerCase() === entry.tech.toLowerCase()) score += 2;
-          if (score > bestScore && score >= Math.min(2, searchTerms.length)) {
-            bestScore = score;
-            bestMatch = client;
-          }
-        });
-
-        if (bestMatch) {
-          // Merge days (don't overwrite, accumulate)
-          const existing = bestMatch.serviceDays || [];
+        if (match) {
+          const existing = match.serviceDays || [];
           entry.days.forEach(d => { if (!existing.includes(d)) existing.push(d); });
           existing.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          bestMatch.serviceDays = existing;
-          bestMatch.route = entry.route;
-          bestMatch.technician = entry.tech;
+          match.serviceDays = existing;
+          match.route = entry.route;
           matched++;
         } else {
           clients.push({
