@@ -1124,8 +1124,9 @@ class Router {
       <div class="section-header">
         <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Create Work Order</div></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download Excel</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="downloadCompletedWorkOrders()">📥 Download WOs</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
+          ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ Chem Sheet</button>` : ''}
         </div>
       </div>
 
@@ -1133,7 +1134,7 @@ class Router {
         <div class="empty-state">
           <div class="empty-icon">🛠️</div>
           <div class="empty-title">Create a new work order</div>
-          <div class="empty-subtitle">Tap the + Work Order button above to get started</div>
+          <div class="empty-subtitle">Tap + Work Order or + Chem Sheet above to get started</div>
         </div>
       </div>
     `;
@@ -2370,6 +2371,59 @@ async function exportCompletedToExcel() {
   } catch (error) {
     console.error('Excel export failed:', error);
     showToast('Excel export failed');
+  }
+}
+
+
+async function downloadCompletedWorkOrders() {
+  const allRepair = getRepairOrders();
+  const completed = allRepair.filter(r =>
+    (r.status || '').toLowerCase() === 'completed' &&
+    r.assignedTo && (r.assignedTo === 'Jet' || r.assignedTo === 'Mark')
+  ).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+  if (completed.length === 0) {
+    showToast('No completed work orders from Jet or Mark to download');
+    return;
+  }
+
+  showToast('Generating Excel...');
+
+  try {
+    const wb = XLSX.utils.book_new();
+
+    const rows = completed.map(order => ({
+      'Date': order.date || '',
+      'Client': order.clientName || '',
+      'Address': order.address || '',
+      'Assigned To': order.assignedTo || '',
+      'Job Type': order.jobType || '',
+      'Status': order.status || '',
+      'Time In': order.timeIn || order.time || '',
+      'Time Out': order.timeOut || '',
+      'Labour Hours': order.labourHours || '',
+      'Materials': order.materials || '',
+      'Parts Summary': order.partsSummary || '',
+      'Work Summary': order.summary || '',
+      'Notes': order.notes || ''
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+
+    ws['!cols'] = [
+      { wch: 12 }, { wch: 25 }, { wch: 35 }, { wch: 15 },
+      { wch: 20 }, { wch: 12 }, { wch: 10 }, { wch: 10 },
+      { wch: 12 }, { wch: 30 }, { wch: 40 }, { wch: 40 }, { wch: 40 }
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Completed Work Orders');
+
+    const filename = `OASIS_Work_Orders_${new Date().toISOString().split('T')[0]}.xlsx`;
+    XLSX.writeFile(wb, filename);
+    showToast(`Downloaded ${completed.length} completed work orders`);
+  } catch (error) {
+    console.error('Download failed:', error);
+    showToast('Download failed - check console');
   }
 }
 
