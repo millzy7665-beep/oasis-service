@@ -1828,7 +1828,6 @@ async function exportCompletedToExcel() {
       { header: 'Address', key: 'address', width: 35 },
       { header: 'Technician', key: 'tech', width: 18 },
       { header: 'Job Type', key: 'jobType', width: 20 },
-      { header: 'Priority', key: 'priority', width: 12 },
       { header: 'Status', key: 'status', width: 12 },
       { header: 'Time In', key: 'timeIn', width: 10 },
       { header: 'Time Out', key: 'timeOut', width: 10 },
@@ -1850,7 +1849,6 @@ async function exportCompletedToExcel() {
         address: order.address || '',
         tech: order.assignedTo || '',
         jobType: order.jobType || '',
-        priority: order.priority || '',
         status: order.status || '',
         timeIn: order.timeIn || order.time || '',
         timeOut: order.timeOut || '',
@@ -2634,7 +2632,6 @@ function renderRepairOrdersList(statusFilter = 'all') {
       </div>
       <div class="job-card-body">
         <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
-        <div class="detail-row"><div class="detail-label">Priority</div><div class="detail-value">${escapeHtml(order.priority || 'Normal')}</div></div>
         <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
       </div>
       <div class="job-card-footer">
@@ -2662,7 +2659,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     assignedTo: auth.getCurrentUser()?.name || '',
     status: 'open',
     jobType: '',
-    priority: 'Normal',
     summary: '',
     materials: '',
     partsItems: [],
@@ -2734,14 +2730,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
           </div>
 
-          <div class="form-row">
-            <label for="repair-priority">Priority</label>
-            <select id="repair-priority">
-              <option value="Low" ${order.priority === 'Low' ? 'selected' : ''}>Low</option>
-              <option value="Normal" ${order.priority === 'Normal' ? 'selected' : ''}>Normal</option>
-              <option value="High" ${order.priority === 'High' ? 'selected' : ''}>High</option>
-            </select>
-          </div>
 
           <div class="form-row">
             <label for="repair-status">Status</label>
@@ -2867,7 +2855,6 @@ function collectRepairOrderFromForm(orderId = '') {
     assignedTo: document.getElementById('repair-tech')?.value || '',
     status: document.getElementById('repair-status')?.value || 'open',
     jobType: document.getElementById('repair-type')?.value || '',
-    priority: document.getElementById('repair-priority')?.value || 'Normal',
     summary: document.getElementById('repair-summary')?.value || '',
     materials: document.getElementById('repair-materials')?.value || '',
     partsItems: partItems,
@@ -3026,7 +3013,7 @@ async function shareRepairPDF(orderId) {
   addField('Job Type', order.jobType, col2, gridY);
   gridY += 12;
   addField('Assigned Tech', order.assignedTo, col1, gridY);
-  addField('Status / Priority', `${order.status} / ${order.priority}`, col2, gridY);
+  addField('Status', order.status, col2, gridY);
   gridY += 12;
   addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
   addField('Labour Hours', order.labourHours || '—', col2, gridY);
@@ -4996,7 +4983,6 @@ async function exportCompletedToExcel() {
       { header: 'Address', key: 'address', width: 35 },
       { header: 'Technician', key: 'tech', width: 18 },
       { header: 'Job Type', key: 'jobType', width: 20 },
-      { header: 'Priority', key: 'priority', width: 12 },
       { header: 'Status', key: 'status', width: 12 },
       { header: 'Time In', key: 'timeIn', width: 10 },
       { header: 'Time Out', key: 'timeOut', width: 10 },
@@ -5018,7 +5004,6 @@ async function exportCompletedToExcel() {
         address: order.address || '',
         tech: order.assignedTo || '',
         jobType: order.jobType || '',
-        priority: order.priority || '',
         status: order.status || '',
         timeIn: order.timeIn || order.time || '',
         timeOut: order.timeOut || '',
@@ -5802,7 +5787,6 @@ function renderRepairOrdersList(statusFilter = 'all') {
       </div>
       <div class="job-card-body">
         <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
-        <div class="detail-row"><div class="detail-label">Priority</div><div class="detail-value">${escapeHtml(order.priority || 'Normal')}</div></div>
         <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
       </div>
       <div class="job-card-footer">
@@ -5830,7 +5814,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     assignedTo: auth.getCurrentUser()?.name || '',
     status: 'open',
     jobType: '',
-    priority: 'Normal',
     summary: '',
     materials: '',
     partsItems: [],
@@ -5902,14 +5885,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
           </div>
 
-          <div class="form-row">
-            <label for="repair-priority">Priority</label>
-            <select id="repair-priority">
-              <option value="Low" ${order.priority === 'Low' ? 'selected' : ''}>Low</option>
-              <option value="Normal" ${order.priority === 'Normal' ? 'selected' : ''}>Normal</option>
-              <option value="High" ${order.priority === 'High' ? 'selected' : ''}>High</option>
-            </select>
-          </div>
 
           <div class="form-row">
             <label for="repair-status">Status</label>
@@ -6035,7 +6010,6 @@ function collectRepairOrderFromForm(orderId = '') {
     assignedTo: document.getElementById('repair-tech')?.value || '',
     status: document.getElementById('repair-status')?.value || 'open',
     jobType: document.getElementById('repair-type')?.value || '',
-    priority: document.getElementById('repair-priority')?.value || 'Normal',
     summary: document.getElementById('repair-summary')?.value || '',
     materials: document.getElementById('repair-materials')?.value || '',
     partsItems: partItems,
@@ -6194,7 +6168,7 @@ async function shareRepairPDF(orderId) {
   addField('Job Type', order.jobType, col2, gridY);
   gridY += 12;
   addField('Assigned Tech', order.assignedTo, col1, gridY);
-  addField('Status / Priority', `${order.status} / ${order.priority}`, col2, gridY);
+  addField('Status', order.status, col2, gridY);
   gridY += 12;
   addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
   addField('Labour Hours', order.labourHours || '—', col2, gridY);
@@ -6716,7 +6690,6 @@ async function exportCompletedToExcel() {
       { header: 'Address', key: 'address', width: 35 },
       { header: 'Technician', key: 'tech', width: 18 },
       { header: 'Job Type', key: 'jobType', width: 20 },
-      { header: 'Priority', key: 'priority', width: 12 },
       { header: 'Status', key: 'status', width: 12 },
       { header: 'Time In', key: 'timeIn', width: 10 },
       { header: 'Time Out', key: 'timeOut', width: 10 },
@@ -6738,7 +6711,6 @@ async function exportCompletedToExcel() {
         address: order.address || '',
         tech: order.assignedTo || '',
         jobType: order.jobType || '',
-        priority: order.priority || '',
         status: order.status || '',
         timeIn: order.timeIn || order.time || '',
         timeOut: order.timeOut || '',
