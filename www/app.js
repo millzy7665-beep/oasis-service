@@ -3475,6 +3475,26 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <div id="repair-client-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:100; max-height:200px; overflow-y:auto; background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
           </div>
 
+          <div style="margin-bottom:10px;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="toggleNewClientForm()">+ New Client</button>
+          </div>
+          <div id="new-client-form" style="display:none; background:#f5f5f5; padding:12px; border-radius:8px; margin-bottom:12px; border:1px solid #e0e0e0;">
+            <div style="font-weight:600; font-size:14px; margin-bottom:8px;">Add New Client</div>
+            <div class="form-row">
+              <label for="new-client-name">Client Name *</label>
+              <input type="text" id="new-client-name" class="form-control" placeholder="Client name">
+            </div>
+            <div class="form-row">
+              <label for="new-client-address">Address *</label>
+              <input type="text" id="new-client-address" class="form-control" placeholder="Service address">
+            </div>
+            <div class="form-row">
+              <label for="new-client-contact">Contact / Email</label>
+              <input type="text" id="new-client-contact" class="form-control" placeholder="Optional">
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveNewClientFromWO()" style="width:100%; margin-top:4px;">Save & Use This Client</button>
+          </div>
+
           <div class="form-row">
             <label for="repair-address">Address</label>
             <input id="repair-address" type="text" value="${escapeHtml(order.address || '')}">
@@ -3585,6 +3605,62 @@ function onRepairClientChange() {
   }
 }
 
+
+
+function toggleNewClientForm() {
+  const form = document.getElementById('new-client-form');
+  if (!form) return;
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+function saveNewClientFromWO() {
+  const name = (document.getElementById('new-client-name')?.value || '').trim();
+  const address = (document.getElementById('new-client-address')?.value || '').trim();
+  const contact = (document.getElementById('new-client-contact')?.value || '').trim();
+
+  if (!name) {
+    showToast('Client name is required');
+    return;
+  }
+  if (!address) {
+    showToast('Address is required');
+    return;
+  }
+
+  const clients = db.get('clients', []);
+  const newClient = {
+    id: 'c' + Date.now(),
+    name: name,
+    address: address,
+    contact: contact,
+    technician: '',
+    route: '',
+    serviceDays: []
+  };
+
+  clients.push(newClient);
+  db.set('clients', clients);
+
+  // Auto-select the new client in the work order form
+  const hiddenInput = document.getElementById('repair-client');
+  const searchInput = document.getElementById('repair-client-search');
+  const addressField = document.getElementById('repair-address');
+  const title = document.getElementById('repair-bar-title');
+
+  if (hiddenInput) hiddenInput.value = newClient.id;
+  if (searchInput) searchInput.value = newClient.name;
+  if (addressField) addressField.value = newClient.address;
+  if (title) title.textContent = newClient.name;
+
+  // Hide the new client form and clear fields
+  const form = document.getElementById('new-client-form');
+  if (form) form.style.display = 'none';
+  if (document.getElementById('new-client-name')) document.getElementById('new-client-name').value = '';
+  if (document.getElementById('new-client-address')) document.getElementById('new-client-address').value = '';
+  if (document.getElementById('new-client-contact')) document.getElementById('new-client-contact').value = '';
+
+  showToast(`Client "${newClient.name}" added and selected`);
+}
 
 function filterRepairClientDropdown(query) {
   const dropdown = document.getElementById('repair-client-dropdown');
@@ -6879,6 +6955,26 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <input type="hidden" id="repair-client" value="${escapeHtml(order.clientId || presetClientId || '')}">
             <input type="text" id="repair-client-search" class="form-control" placeholder="Type to search clients..." value="${escapeHtml(order.clientName || '')}" autocomplete="off" oninput="filterRepairClientDropdown(this.value)" onfocus="filterRepairClientDropdown(this.value)">
             <div id="repair-client-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:100; max-height:200px; overflow-y:auto; background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
+          </div>
+
+          <div style="margin-bottom:10px;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="toggleNewClientForm()">+ New Client</button>
+          </div>
+          <div id="new-client-form" style="display:none; background:#f5f5f5; padding:12px; border-radius:8px; margin-bottom:12px; border:1px solid #e0e0e0;">
+            <div style="font-weight:600; font-size:14px; margin-bottom:8px;">Add New Client</div>
+            <div class="form-row">
+              <label for="new-client-name">Client Name *</label>
+              <input type="text" id="new-client-name" class="form-control" placeholder="Client name">
+            </div>
+            <div class="form-row">
+              <label for="new-client-address">Address *</label>
+              <input type="text" id="new-client-address" class="form-control" placeholder="Service address">
+            </div>
+            <div class="form-row">
+              <label for="new-client-contact">Contact / Email</label>
+              <input type="text" id="new-client-contact" class="form-control" placeholder="Optional">
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveNewClientFromWO()" style="width:100%; margin-top:4px;">Save & Use This Client</button>
           </div>
 
           <div class="form-row">
