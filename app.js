@@ -671,6 +671,7 @@ class Router {
         }
       </div>
 
+      ${isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark')) ? `
       <div class="section-header">
         <div class="section-title">Notifications${unreadNotifications ? ` (${unreadNotifications} new)` : ''}</div>
       </div>
@@ -678,6 +679,7 @@ class Router {
       <div id="dashboard-notifications">
         ${notificationManager.renderDashboardPanel()}
       </div>
+      ` : ''}
 
     `;
   }
