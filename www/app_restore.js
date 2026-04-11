@@ -587,7 +587,7 @@ class Router {
         <input type="text" id="admin-search-completed" class="form-control" placeholder="Search by client or tech..." oninput="router.filterCompletedJobs(this.value)">
       </div>
       <div id="completed-jobs-results" style="padding: 0 15px; margin-top: 15px;">
-        ${this.generateCompletedJobsHtml('')}
+        \${this.generateCompletedJobsHtml('')}
       </div>
     `;
   }
@@ -604,20 +604,20 @@ class Router {
     const allWorkorders = db.get('workorders', []);
     const allRepairOrders = db.get('repairOrders', []);
     const currentUser = auth.getCurrentUser();
-
+    
     let completedJobs = [
       ...allWorkorders.filter(j => j.status === 'completed'),
       ...allRepairOrders.filter(j => j.status === 'completed')
     ];
 
     if (term) {
-      completedJobs = completedJobs.filter(j =>
-        (j.clientName && j.clientName.toLowerCase().includes(term)) ||
+      completedJobs = completedJobs.filter(j => 
+        (j.clientName && j.clientName.toLowerCase().includes(term)) || 
         ((j.technician || j.assignedTo) && (j.technician || j.assignedTo).toLowerCase().includes(term)) ||
         (j.date && j.date.includes(term))
       );
     }
-
+    
     completedJobs.sort((a, b) => new Date(b.date) - new Date(a.date));
 
     if (completedJobs.length === 0) {
@@ -634,29 +634,25 @@ class Router {
         const shareCmd = isRepair ? `shareRepairPDF('${escapeHtml(job.id)}')` : `shareReport('${job.id}')`;
         const deleteCmd = isRepair ? `deleteRepairOrder('${escapeHtml(job.id)}')` : `deleteWorkOrder('${job.id}')`;
 
-        return `
+        return \`
         <div class="job-card job-card-completed" style="margin-bottom:12px;">
             <div class="job-card-header">
                 <div>
-                    <div class="job-card-title">${title}</div>
-                    <div class="job-card-customer">${subtitle}</div>
+                    <div class="job-card-title">\${title}</div>
+                    <div class="job-card-customer">\${subtitle}</div>
                     <div class="job-meta">
-                        <div class="job-meta-item">📅 ${date}</div>
-                        <div class="job-meta-item">👤 ${tech}</div>
+                        <div class="job-meta-item">📅 \${date}</div>
+                        <div class="job-meta-item">👤 \${tech}</div>
                     </div>
                 </div>
             </div>
             <div class="job-card-footer">
-                <button class="btn btn-secondary btn-sm" onclick="${openCmd}">Open</button>
-                <button class="btn btn-secondary btn-sm" onclick="${shareCmd}">PDF</button>
-                <button class="btn btn-secondary btn-sm btn-outline-danger" onclick="${deleteCmd}">Delete</button>
-            </div>
-        </div>`;
-                <button class="btn btn-primary btn-sm" onclick="${shareCmd}">Share</button>
-                <button class="btn btn-danger btn-sm" onclick="${deleteCmd}">Delete</button>
+                <button class="btn btn-secondary btn-sm" onclick="\${openCmd}">Open</button>
+                <button class="btn btn-primary btn-sm" onclick="\${shareCmd}">Share</button>
+                <button class="btn btn-danger btn-sm" onclick="\${deleteCmd}">Delete</button>
             </div>
         </div>
-        ;
+        \`;
     };
 
     return completedJobs.map(jobToCard).join('');
@@ -2234,8 +2230,8 @@ function renderRepairOrdersList() {
   const canShare = auth.canShare();
 
   // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  let orders = isAdmin
-    ? allOrders
+  let orders = isAdmin 
+    ? allOrders 
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
   // Hide completed repair orders from the main active list for everyone
@@ -4555,8 +4551,8 @@ function renderRepairOrdersList() {
   const canShare = auth.canShare();
 
   // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  let orders = isAdmin
-    ? allOrders
+  let orders = isAdmin 
+    ? allOrders 
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
   // Hide completed repair orders from the main active list for everyone
@@ -4834,7 +4830,7 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) return;
   order.status = document.getElementById('repair-status')?.value || order.status;
-
+  
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
 
@@ -6187,7 +6183,7 @@ function saveWorkOrderForm(orderId) {
     showToast('Work order not found');
     return;
   }
-
+  
   order.status = document.getElementById('wo-status')?.value || order.status;
   workOrderManager.saveOrder(order);
   router.navigate('workorders');

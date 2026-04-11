@@ -1,15 +1,13 @@
 {
-  "name": "OASIS Service and Repair",
-  "short_name": "OASIS S&R",
-  "description": "Unified OASIS service, chem sheet, and repair work order app",
-  "id": "./index.html?app=service-repair",
-  "start_url": "./index.html?source=pwa-service-repair",
+  "name": "OASIS Service",
+  "short_name": "OASIS",
+  "description": "OASIS Luxury Pool & Watershape Service App",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui", "browser"],
   "orientation": "portrait",
-  "background_color": "#000000",
-  "theme_color": "#000000",
+  "background_color": "#0a1e2e",
+  "theme_color": "#0a1e2e",
   "lang": "en",
   "icons": [
     {

@@ -1,9 +1,8 @@
 {
-  "name": "OASIS Technician",
-  "short_name": "Technician",
-  "description": "OASIS Technician app for team work orders",
-  "id": "./?app=technician",
-  "start_url": "./?source=pwa-technician",
+  "name": "OASIS Technician Work Orders",
+  "short_name": "OASIS Tech",
+  "description": "Separate technician work order app for OASIS",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
@@ -12,13 +11,13 @@
   "lang": "en",
   "icons": [
     {
-      "src": "icon-192.png",
+      "src": "../icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "icon-512.png",
+      "src": "../icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

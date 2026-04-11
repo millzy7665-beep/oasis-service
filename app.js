@@ -1,6243 +1,1637 @@
-// OASIS Service and Repair App - Unified Version
-// Features: Login, Dashboard, Clients, Chem Sheets, Repair Orders, Settings
-// PDF generation with local save instead of email
+'use strict';
 
-// ==========================================
-// FIREBASE & DATA MANAGEMENT (DB)
-// ==========================================
-const firebaseConfig = {
-  apiKey: "AIzaSyAo3vP7Myf08Q8KqoFlcgGNOZp2mX2R-38",
-  authDomain: "oasis-service-app-69def.firebaseapp.com",
-  projectId: "oasis-service-app-69def",
-  storageBucket: "oasis-service-app-69def.firebasestorage.app",
-  messagingSenderId: "156557428291",
-  appId: "1:156557428291:web:243524f03403d05c65f6f6",
-  measurementId: "G-THQ9YGZ0B5"
+/* ── Version / localStorage reset ─────────────────────────────── */
+const APP_MODE = window.APP_MODE || 'pool';
+const STORAGE_PREFIX = window.APP_STORAGE_PREFIX || 'psp_';
+const STORAGE_VERSION_KEY = `${STORAGE_PREFIX}version`;
+const SESSION_KEY = `${STORAGE_PREFIX}session`;
+const APP_VERSION = APP_MODE === 'tech'
+  ? 'v17-oasis-2026-tech-simplified'
+  : 'v17-oasis-2026-pool-separate';
+(function() {
+  const storedVersion = localStorage.getItem(STORAGE_VERSION_KEY);
+  if (!storedVersion || storedVersion !== APP_VERSION) {
+    localStorage.setItem(STORAGE_VERSION_KEY, APP_VERSION);
+  }
+})();
+
+/* ── AUTH ──────────────────────────────────────────────────────── */
+const Auth = {
+  current: null,
+  load() {
+    try { this.current = JSON.parse(sessionStorage.getItem(SESSION_KEY)) || null; } catch { this.current = null; }
+  },
+  signIn(techId) {
+    const t = DB.getTechnician(techId);
+    if (!t) return false;
+    this.current = { techId, name: t.name, isAdmin: !!t.isAdmin };
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(this.current));
+    return true;
+  },
+  signOut() { this.current = null; sessionStorage.removeItem(SESSION_KEY); },
+  get isAdmin() { return !!(this.current && this.current.isAdmin); },
+  get techId()  { return this.current ? this.current.techId : null; },
 };
 
-// Initialize Firebase if not already initialized
-if (typeof firebase !== 'undefined' && !firebase.apps.length) {
-  firebase.initializeApp(firebaseConfig);
-}
-const firestore = typeof firebase !== 'undefined' ? firebase.firestore() : null;
-
-class DB {
-  constructor() {
-    this.storage = window.localStorage;
-    this.syncKeys = ['workorders', 'clients', 'repairOrders', 'apk_download_link'];
-    this.isSyncing = false;
-    this.initFirebaseSync();
-  }
-
-  initFirebaseSync() {
-    if (!firestore) return;
-
-    firestore.collection('app_data').doc('shared_state').onSnapshot((doc) => {
-      if (doc.exists) {
-        const data = doc.data();
-        this.isSyncing = true;
-        let requiresReRender = false;
-
-        for (const key of this.syncKeys) {
-          if (data[key] !== undefined) {
-            const currentVal = this.get(key);
-            const newValStr = JSON.stringify(data[key]);
-            if (JSON.stringify(currentVal) !== newValStr) {
-              this.storage.setItem(key, newValStr);
-              requiresReRender = true;
-
-              // Notify admin of completed chem sheets or repair orders if logged in
-              if ((key === 'workorders' || key === 'repairOrders') && typeof auth !== 'undefined' && auth.isAdmin()) {
-                const typeName = key === 'workorders' ? 'Chem Sheet' : 'Repair Order';
-                const oldCompleted = (currentVal || []).filter(o => o.status === 'completed').length;
-                const newCompleted = (data[key] || []).filter(o => o.status === 'completed').length;
-                if (newCompleted > oldCompleted) {
-                  const latest = data[key].filter(o => o.status === 'completed').pop();
-                  if (typeof showToast === 'function') {
-                    showToast(`Completed ${typeName} saved for ${latest.clientName || 'Client'}!`);
-                  }
-                }
-              }
-            }
-          }
-        }
-        this.isSyncing = false;
-
-        // Re-render UI to show new sync data
-        if (requiresReRender && typeof router !== 'undefined' && router.currentView) {
-          router.navigate(router.currentView, false);
-        }
-      }
-    });
-  }
-
-  get(key, defaultValue = null) {
-    try {
-      const item = this.storage.getItem(key);
-      return item ? JSON.parse(item) : defaultValue;
-    } catch (e) {
-      return defaultValue;
-    }
-  }
-
-  set(key, value) {
-    try {
-      this.storage.setItem(key, JSON.stringify(value));
-
-      // Push to cloud if it's a shared key and we aren't currently receiving a sync
-      if (!this.isSyncing && this.syncKeys.includes(key) && firestore) {
-         firestore.collection('app_data').doc('shared_state').set({
-           [key]: value
-         }, { merge: true }).catch(err => console.error("Firebase sync error:", err));
-      }
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  remove(key) {
-    this.storage.removeItem(key);
-  }
-
-  clear() {
-    this.storage.clear();
-  }
-}
-
-const db = new DB();
-
-// ==========================================
-// AUTHENTICATION
-// ==========================================
-class Auth {
-  constructor() {
-    this.currentUser = null;
-    this.users = {
-      't1': { role: 'technician', name: 'Ace' },
-      't2': { role: 'technician', name: 'Ariel' },
-      't3': { role: 'technician', name: 'Donald' },
-      't4': { role: 'technician', name: 'Elvin' },
-      't5': { role: 'technician', name: 'Jermaine' },
-      't6': { role: 'technician', name: 'Kadeem' },
-      't7': { role: 'technician', name: 'Kingsley' },
-      't8': { role: 'technician', name: 'Malik' },
-      't9': { role: 'technician', name: 'Jet' },
-      't10': { role: 'technician', name: 'Mark' },
-      'admin': { role: 'admin', name: 'Chris Mills' }
-    };
-  }
-
-  login(username, pin) {
-    const user = this.users[username];
-    if (user) {
-      // Jet and Mark specific PIN
-      if ((username === 't9' || username === 't10') && pin === '1234') {
-        this.currentUser = { ...user, username };
-        db.set('currentUser', this.currentUser);
-        return true;
-      }
-
-      // Default PINs
-      const requiredPin = (user.role === 'admin') ? '0000' : '1111';
-      if (pin === requiredPin) {
-        this.currentUser = { ...user, username };
-        db.set('currentUser', this.currentUser);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  logout() {
-    this.currentUser = null;
-    db.remove('currentUser');
-  }
-
-  getCurrentUser() {
-    if (!this.currentUser) {
-      this.currentUser = db.get('currentUser');
-    }
-    // Safety check: refresh user data from roster to ensure RBAC role is always up-to-date
-    if (this.currentUser && this.currentUser.username) {
-      const freshData = this.users[this.currentUser.username];
-      if (freshData) {
-        this.currentUser = { ...freshData, username: this.currentUser.username };
-      }
-    }
-    return this.currentUser;
-  }
-
-  isLoggedIn() {
-    return !!this.getCurrentUser();
-  }
-
-  isAdmin() {
-    const user = this.getCurrentUser();
-    return user && user.role === 'admin';
-  }
-
-  canShare() {
-    const user = this.getCurrentUser();
-    if (!user) return false;
-    // Chris (admin), Jet (t9), Mark (t10)
-    return user.username === 'admin' || user.username === 't9' || user.username === 't10';
-  }
-}
-
-const auth = new Auth();
-
-// ==========================================
-// MODAL SYSTEM
-// ==========================================
-class Modal {
-  constructor() {
-    this.currentModal = null;
-  }
-
-  show(modalId) {
-    this.hide();
-    this.currentModal = document.getElementById(modalId);
-    if (this.currentModal) {
-      this.currentModal.classList.remove('hidden');
-    }
-  }
-
-  hide() {
-    if (this.currentModal) {
-      this.currentModal.classList.add('hidden');
-      this.currentModal = null;
-    }
-  }
-
-  confirm(message, callback) {
-    if (confirm(message)) {
-      callback();
-    }
-  }
-}
-
-const modal = new Modal();
-
-// ==========================================
-// ROUTER
-// ==========================================
-class Router {
-  constructor() {
-    this.routes = {
-      'dashboard': this.renderDashboard.bind(this),
-      'routes': this.renderRoutes.bind(this),
-      'clients': this.renderClients.bind(this),
-      'workorders': this.renderWorkOrders.bind(this),
-      'settings': this.renderSettings.bind(this),
-      'completed_jobs': this.renderCompletedJobs.bind(this)
-    };
-    this.currentView = 'dashboard';
-    this.history = ['dashboard'];
-  }
-
-  navigate(view, pushHistory = true) {
-    console.log('Navigating to:', view);
-    this.currentView = view;
-    if (pushHistory && this.history[this.history.length - 1] !== view) {
-      this.history.push(view);
-    }
-    if (this.routes[view]) {
-      try {
-        this.routes[view]();
-      } catch (e) {
-        console.error('Navigation error for view:', view, e);
-        // Fallback UI if rendering fails
-        document.getElementById('main-content').innerHTML = `
-          <div class="empty-state">
-            <div class="empty-title">Page Error</div>
-            <div class="empty-subtitle">Something went wrong while loading this page.</div>
-            <button class="btn btn-primary" onclick="location.reload()">Refresh App</button>
-          </div>
-        `;
-      }
-    }
-    this.updateNav();
-  }
-
-  goBack() {
-    if (this.history.length > 1) {
-      this.history.pop(); // Remove current view
-      const prevView = this.history[this.history.length - 1];
-      this.navigate(prevView, false);
-    }
-  }
-
-  updateNav() {
-    document.querySelectorAll('.nav-item').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.view === this.currentView);
-    });
-  }
-
-  renderDashboard() {
-    const content = document.getElementById('main-content');
-    if (!content) return;
-
-    const user = auth.getCurrentUser();
-    const userName = user ? user.name : 'Technician';
-    const repairOrders = typeof getRepairOrders === 'function' ? getRepairOrders() : [];
-
-    const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-
-    content.innerHTML = `
-      <div class="wave-banner">
-        <div class="wave-banner-eyebrow">Welcome back</div>
-        <div class="wave-banner-title">${userName}</div>
-        <div class="wave-banner-sub">Ready for today's service and repair jobs • ${todayStr}</div>
-      </div>
-
-      <div class="stats-grid">
-        <div class="stat-card" onclick="router.navigate('workorders')">
-          <div class="stat-icon">🧪</div>
-          <div class="stat-value">${db.get('workorders', []).length}</div>
-          <div class="stat-label">Chem Sheets</div>
-        </div>
-        <div class="stat-card" onclick="router.navigate('workorders')">
-          <div class="stat-icon">🛠️</div>
-          <div class="stat-value">${repairOrders.length}</div>
-          <div class="stat-label">Repair Orders</div>
-        </div>
-        <div class="stat-card" onclick="router.navigate('clients')">
-          <div class="stat-icon">👥</div>
-          <div class="stat-value">${db.get('clients', []).length}</div>
-          <div class="stat-label">Clients</div>
-        </div>
-      </div>
-
-      <div class="section-header">
-        <div class="section-title">Today's Schedule</div>
-      </div>
-
-      <div id="today-schedule">
-        ${this.renderTodaySchedule()}
-      </div>
-    `;
-  }
-
-  renderTodaySchedule() {
-    const allWorkorders = db.get('workorders', []);
-    const currentUser = auth.getCurrentUser();
-
-    // Filter by tech unless admin
-    const workorders = (auth.isAdmin())
-      ? allWorkorders
-      : allWorkorders.filter(wo => wo.technician === currentUser.name);
-
-    const today = new Date().toDateString();
-    const todayOrders = workorders.filter(wo => new Date(wo.date).toDateString() === today);
-
-    if (todayOrders.length === 0) {
-      return `
-        <div class="empty-state">
-          <div class="empty-icon">📅</div>
-          <div class="empty-title">No jobs today</div>
-          <div class="empty-subtitle">Enjoy your day off!</div>
-        </div>
-      `;
-    }
-
-    return todayOrders.map(wo => `
-      <div class="schedule-item">
-        <div class="schedule-time">${wo.time || 'TBD'}</div>
-        <div class="schedule-info">
-          <div class="schedule-name">${wo.clientName}</div>
-          <div class="schedule-detail">${wo.address}</div>
-        </div>
-        <div class="schedule-dot ${wo.status === 'completed' ? 'completed' : wo.status === 'in-progress' ? 'in-progress' : 'pending'}"></div>
-      </div>
-    `).join('');
-  }
-
-  renderRoutes() {
-    const content = document.getElementById('main-content');
-    content.innerHTML = `
-      <div class="section-header">
-        <div class="section-title">Daily Routes</div>
-        <button class="btn btn-primary btn-sm" onclick="router.createRoute()">+ New Route</button>
-      </div>
-
-      <div id="routes-list">
-        ${this.renderRoutesList()}
-      </div>
-    `;
-  }
-
-  renderRoutesList() {
-    const routes = db.get('routes', []);
-    if (routes.length === 0) {
-      return `
-        <div class="empty-state">
-          <div class="empty-icon">🗺️</div>
-          <div class="empty-title">No routes planned</div>
-          <div class="empty-subtitle">Create your first daily route</div>
-        </div>
-      `;
-    }
-
-    return routes.map(route => `
-      <div class="list-item">
-        <div class="list-item-avatar">📍</div>
-        <div class="list-item-info">
-          <div class="list-item-name">${route.name}</div>
-          <div class="list-item-sub">${route.stops.length} stops • ${route.date}</div>
-        </div>
-        <div class="list-item-actions">
-          <button class="btn btn-secondary btn-sm" onclick="router.viewRoute('${route.id}')">View</button>
-        </div>
-      </div>
-    `).join('');
-  }
-
-  renderClients() {
-    const content = document.getElementById('main-content');
-    const user = auth.getCurrentUser();
-    const isAdmin = auth.isAdmin();
-    const isMainAdmin = user && user.username === 'admin';
-
-    content.innerHTML = `
-      <div class="section-header">
-        <div class="section-title">Clients</div>
-        <div style="display:flex; gap:8px;">
-          ${isMainAdmin ? '<button class="btn btn-secondary btn-sm" onclick="bulkImportClients()">Bulk Import</button>' : ''}
-          ${isAdmin ? '<button class="btn btn-primary btn-sm" onclick="quickAddClient()">+ Add Client</button>' : ''}
-        </div>
-      </div>
-
-      <div class="search-bar" style="margin: 0 16px 12px;">
-        <input type="text" id="client-search" placeholder="Search 280+ clients..." oninput="router.filterClients(this.value)" class="form-control">
-      </div>
-
-      <div id="clients-list">
-        ${this.renderClientsList()}
-      </div>
-    `;
-  }
-
-  filterClients(query) {
-    const list = document.getElementById('clients-list');
-    if (!list) return;
-    list.innerHTML = this.renderClientsList(query);
-  }
-
-  renderClientsList(query = '') {
-    const allClients = db.get('clients', []);
-    const isAdmin = auth.isAdmin();
-
-    const clients = query
-      ? allClients.filter(c =>
-          c.name.toLowerCase().includes(query.toLowerCase()) ||
-          c.address.toLowerCase().includes(query.toLowerCase())
-        )
-      : allClients;
-
-    if (clients.length === 0) {
-      return `
-        <div class="empty-state">
-          <div class="empty-icon">👥</div>
-          <div class="empty-title">No clients found</div>
-          <div class="empty-subtitle">${isAdmin ? 'Try a different search or add a client' : 'Check back later for client list'}</div>
-        </div>
-      `;
-    }
-
-    return clients.map(client => `
-      <div class="list-item">
-        <div class="list-item-avatar">${client.name.charAt(0).toUpperCase()}</div>
-        <div class="list-item-info">
-          <div class="list-item-name">${client.name}</div>
-          <div class="list-item-sub">${client.address}</div>
-        </div>
-        <div class="list-item-actions">
-          <button class="btn btn-icon" onclick="openMap('${client.address}')" title="View on Map">📍</button>
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
-          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${client.id}')">Delete</button>` : ''}
-        </div>
-      </div>
-    `).join('');
-  }
-
-  renderWorkOrders() {
-    const content = document.getElementById('main-content');
-    const isAdmin = auth.isAdmin();
-
-    content.innerHTML = `
-      <div class="section-header">
-        <div class="section-title">Service & Repair Jobs</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Download Completed Orders</button>
-          <button class="btn btn-secondary btn-sm" onclick="router.navigate(\'completed_jobs\')">🔍 Search Completed Jobs</button>` : ''}
-          <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
-          <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Repair Order</button>
-        </div>
-      </div>
-
-      <div id="workorders-list">
-        ${this.renderWorkOrdersList()}
-      </div>
-
-      <div class="section-header" style="margin-top:10px">
-        <div class="section-title">Repair Work Orders</div>
-      </div>
-
-      <div class="card">
-        <div class="card-body">
-          ${renderRepairOrdersList()}
-        </div>
-      </div>
-    `;
-  }
-
-  renderWorkOrdersList() {
-    const allWorkorders = db.get('workorders', []);
-    const currentUser = auth.getCurrentUser();
-    const isAdmin = auth.isAdmin();
-    const canShare = auth.canShare();
-
-    // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-    const workorders = (auth.isAdmin())
-      ? allWorkorders
-      : allWorkorders.filter(wo => wo.technician === currentUser.name);
-
-    if (workorders.length === 0) {
-      return `
-        <div class="empty-state">
-          <div class="empty-icon">🧪</div>
-          <div class="empty-title">No jobs found</div>
-          <div class="empty-subtitle">${isAdmin ? 'No active jobs' : 'Check back later for your assigned jobs'}</div>
-        </div>
-      `;
-    }
-
-    if (isAdmin) {
-      // Grouping logic for Admin (Chris)
-      const techs = [...new Set(workorders.map(wo => wo.technician || 'Unassigned'))].sort();
-
-      return techs.map(tech => {
-        const techJobs = workorders.filter(wo => (wo.technician || 'Unassigned') === tech);
-        const completed = techJobs.filter(wo => wo.status === 'completed');
-        const pending = techJobs.filter(wo => wo.status !== 'completed');
-
-        return `
-          <div class="wo-group">
-            <div class="wo-group-hd" onclick="toggleAccordion(this)">
-              <span>👤 ${tech} (${completed.length} Completed / ${pending.length} Pending)</span>
-              <span class="wo-chev">▼</span>
-            </div>
-            <div class="wo-sec-bd">
-              <div class="job-list-compact">
-                ${techJobs.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('')}
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-
-    return workorders.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('');
-  }
-
-  renderJobCard(wo, canShare, isAdmin, currentUser) {
-    const isCompleted = wo.status === 'completed';
-    return `
-      <div class="job-card ${isCompleted ? 'job-card-completed' : ''}">
-        <div class="job-card-header">
-          <div>
-            <div class="job-card-title">${wo.clientName}</div>
-            <div class="job-card-customer">${wo.address}</div>
-            <div class="job-meta">
-              <div class="job-meta-item">📅 ${wo.date}</div>
-              <div class="job-meta-item">⏰ ${wo.time || 'TBD'}</div>
-              ${currentUser.username === 'admin' ? `<div class="job-meta-item">👤 ${wo.technician || 'Unknown'}</div>` : ''}
-            </div>
-          </div>
-          <button class="btn btn-icon" onclick="openMap('${wo.address}')" title="View on Map">📍</button>
-        </div>
-        <div class="job-card-body">
-          <div class="badge badge-${wo.status || 'pending'}">${wo.status || 'pending'}</div>
-        </div>
-        <div class="job-card-footer">
-          <button class="btn btn-secondary btn-sm" onclick="router.viewWorkOrder('${wo.id}')">Open</button>
-          ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareReport('${wo.id}')">Share</button>` : ''}
-          ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteWorkOrder('${wo.id}')">Delete</button>` : ''}
-        </div>
-      </div>
-    `;
-  }
-
-
-  renderCompletedJobs() {
-    const content = document.getElementById('main-content');
-    const isAdmin = auth.isAdmin();
-    if (!isAdmin) {
-       this.navigate('dashboard');
-       return;
-    }
-
-    content.innerHTML = `
-      <div class="section-header">
-        <div class="section-title">Completed Jobs History</div>
-        <button class="btn btn-secondary btn-sm" onclick="router.goBack()">← Back</button>
-      </div>
-      <div style="padding: 15px 15px 0;">
-        <input type="text" id="admin-search-completed" class="form-control" placeholder="Search by client or tech..." oninput="router.filterCompletedJobs(this.value)">
-      </div>
-      <div id="completed-jobs-results" style="padding: 0 15px; margin-top: 15px;">
-        \${this.generateCompletedJobsHtml('')}
-      </div>
-    `;
-  }
-
-  filterCompletedJobs(term) {
-    const container = document.getElementById('completed-jobs-results');
-    if (container) {
-      container.innerHTML = this.generateCompletedJobsHtml(term);
-    }
-  }
-
-  generateCompletedJobsHtml(term) {
-    term = (term || '').toLowerCase().trim();
-    const allWorkorders = db.get('workorders', []);
-    const allRepairOrders = db.get('repairOrders', []);
-    const currentUser = auth.getCurrentUser();
-    
-    let completedJobs = [
-      ...allWorkorders.filter(j => j.status === 'completed'),
-      ...allRepairOrders.filter(j => j.status === 'completed')
-    ];
-
-    if (term) {
-      completedJobs = completedJobs.filter(j => 
-        (j.clientName && j.clientName.toLowerCase().includes(term)) || 
-        ((j.technician || j.assignedTo) && (j.technician || j.assignedTo).toLowerCase().includes(term)) ||
-        (j.date && j.date.includes(term))
-      );
-    }
-    
-    completedJobs.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-    if (completedJobs.length === 0) {
-      return `<div class="empty-state"><div class="empty-title">No completed jobs found for '${term}'</div></div>`;
-    }
-
-    const jobToCard = (job) => {
-        const isRepair = !!job.jobType;
-        const title = escapeHtml(job.clientName || 'Job');
-        const subtitle = escapeHtml(isRepair ? job.jobType : job.address);
-        const tech = escapeHtml(job.technician || job.assignedTo || '');
-        const date = escapeHtml(job.date || '');
-        const openCmd = isRepair ? `renderRepairOrderForm('${escapeHtml(job.id)}')` : `router.viewWorkOrder('${job.id}')`;
-        const shareCmd = isRepair ? `shareRepairPDF('${escapeHtml(job.id)}')` : `shareReport('${job.id}')`;
-        const deleteCmd = isRepair ? `deleteRepairOrder('${escapeHtml(job.id)}')` : `deleteWorkOrder('${job.id}')`;
-
-        return \`
-        <div class="job-card job-card-completed" style="margin-bottom:12px;">
-            <div class="job-card-header">
-                <div>
-                    <div class="job-card-title">\${title}</div>
-                    <div class="job-card-customer">\${subtitle}</div>
-                    <div class="job-meta">
-                        <div class="job-meta-item">📅 \${date}</div>
-                        <div class="job-meta-item">👤 \${tech}</div>
-                    </div>
-                </div>
-            </div>
-            <div class="job-card-footer">
-                <button class="btn btn-secondary btn-sm" onclick="\${openCmd}">Open</button>
-                <button class="btn btn-primary btn-sm" onclick="\${shareCmd}">Share</button>
-                <button class="btn btn-danger btn-sm" onclick="\${deleteCmd}">Delete</button>
-            </div>
-        </div>
-        \`;
-    };
-
-    return completedJobs.map(jobToCard).join('');
-  }
-
-  renderSettings() {
-    const content = document.getElementById('main-content');
-    const user = auth.getCurrentUser();
-    const isAdmin = auth.isAdmin();
-    const isMainAdmin = user && user.username === 'admin';
-
-    content.innerHTML = `
-      <div class="section-header">
-        <div class="section-title">Settings</div>
-      </div>
-
-      <div class="card">
-        <div class="card-body">
-          <div class="detail-row">
-            <div class="detail-label">Current User</div>
-            <div class="detail-value">${user.name}</div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Role</div>
-            <div class="detail-value" style="text-transform: capitalize;">${user.role}</div>
-          </div>
-          <button class="btn btn-danger" onclick="auth.logout(); location.reload()" style="width: 100%; margin-top: 10px;">Sign Out</button>
-        </div>
-      </div>
-
-      ${isMainAdmin ? `
-      <div class="section-header" style="margin-top: 20px;">
-        <div class="section-title">Team Distribution</div>
-      </div>
-      <div class="card">
-        <div class="card-body">
-          <p style="font-size: 13px; color: var(--gray-600); margin-bottom: 12px;">
-            To share the app with your team, copy the link below or scan the QR code.
-          </p>
-          <div class="form-group" style="padding:0; margin-bottom:12px; display:none;">
-            <label class="form-label">APK Download Link</label>
-            <input type="text" id="apk-link-input" class="form-control" placeholder="Paste your Drive link here..." value="https://millzy7665-beep.github.io/oasis-service/">
-          </div>
-
-          <div id="qr-container" style="text-align: center; margin-top: 15px;">
-            <div style="background: white; padding: 10px; display: inline-block; border-radius: 8px;">
-              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https%3A%2F%2Fmillzy7665-beep.github.io%2Foasis-service%2F" alt="Scan to Download">
-            </div>
-            <p style="font-size: 11px; margin-top: 8px; color: var(--champagne-dk);">Scan with technician phone to download App</p>
-            <div style="margin-top: 12px; display: flex; justify-content: center; gap: 8px;">
-              <input type="text" id="apk-link-display" class="form-control form-control-sm" value="https://millzy7665-beep.github.io/oasis-service/" readonly>
-              <button class="btn btn-secondary btn-sm" onclick="copyApkLink()">Copy</button>
-            </div>
-            <div style="margin-top: 10px;">
-              <button class="btn btn-secondary btn-sm" onclick="shareAppLink()">Share Link</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      ` : ''}
-    `;
-  }
-
-  renderWorkOrderDetail(order) {
-    const pool = { ...defaultChemReadings(), ...(order.readings?.pool || {}) };
-    const spa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
-    const poolAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.pool || {}) };
-    const spaAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.spa || {}) };
-    const clients = db.get('clients', []);
-    const technician = order.technician || auth.getCurrentUser()?.name || '';
-    const timeIn = order.timeIn || order.time || '';
-    const timeOut = order.timeOut || '';
-    const timeSpent = calculateTimeSpent(timeIn, timeOut);
-    const workPerformed = order.workPerformed || '';
-    const followUpNotes = order.followUpNotes || order.notes || '';
-    const content = document.getElementById('main-content');
-
-    content.innerHTML = `
-      <div class="wo-form">
-        <div class="wo-bar">
-          <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
-          <div id="wo-client-name" class="wo-bar-title">${order.clientName || 'Chem Sheet'}</div>
-          <button class="btn btn-primary btn-sm" onclick="saveWorkOrderForm('${order.id}')">Save</button>
-        </div>
-
-        <div class="wo-sec">
-          <div class="wo-sec-hd">Customer & Service Details</div>
-          <div class="wo-sec-bd">
-            <div class="wo-hint">Capture the full original service log: pool and spa chemistry, chemicals added, and live LSI water balance.</div>
-
-            <div class="form-row">
-              <label for="wo-client">Customer</label>
-              <select id="wo-client" onchange="onChemClientChange()">
-                <option value="">— Select client —</option>
-                ${clients.map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
-              </select>
-            </div>
-
-            <div class="form-row">
-              <label for="wo-tech">Technician</label>
-              <select id="wo-tech">
-                ${Object.entries(auth.users)
-                  .sort((a, b) => a[1].name.localeCompare(b[1].name))
-                  .map(([id, user]) => `<option value="${user.name}" ${user.name === technician ? 'selected' : ''}>${user.name}</option>`).join('')}
-              </select>
-            </div>
-
-            <div class="form-row">
-              <label for="wo-date">Service Date</label>
-              <input id="wo-date" type="date" value="${order.date || ''}">
-            </div>
-
-            <div class="wo-grid" style="margin-bottom:10px; border-radius:var(--radius-sm);">
-              <div class="wo-fld">
-                <div class="wo-fld-lbl">Time In</div>
-                <input id="wo-time-in" class="wo-fld-inp" type="time" value="${timeIn}">
-              </div>
-              <div class="wo-fld">
-                <div class="wo-fld-lbl">Time Out</div>
-                <input id="wo-time-out" class="wo-fld-inp" type="time" value="${timeOut}">
-              </div>
-            </div>
-
-            <div id="wo-time-spent-hint" class="wo-hint" style="margin-top:-2px; margin-bottom:12px;">Time on site: ${timeSpent || 'Enter both times to calculate duration.'}</div>
-
-            <div class="form-row">
-              <label for="wo-address">Address</label>
-              <input id="wo-address" type="text" value="${order.address || ''}">
-            </div>
-
-            <div class="form-row">
-              <label for="wo-status">Job Status</label>
-              <select id="wo-status">
-                <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Pending</option>
-                <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <div class="wo-sec">
-          <div class="wo-sec-hd">Chemical Readings & Water Balance</div>
-          <div class="wo-sec-bd">
-            <div class="wo-blk-lbl">Pool</div>
-            <div class="wo-grid">
-              <div class="wo-fld"><div class="wo-fld-lbl">pH Level</div><input id="pool-ph" class="wo-fld-inp" type="number" step="0.1" value="${pool.ph || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Free Chlorine</div><input id="pool-chlorine" class="wo-fld-inp" type="number" step="0.1" value="${pool.chlorine || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Alkalinity</div><input id="pool-alkalinity" class="wo-fld-inp" type="number" value="${pool.alkalinity || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Cyanuric Acid</div><input id="pool-cya" class="wo-fld-inp" type="number" value="${pool.cya || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Calcium Hardness</div><input id="pool-calcium" class="wo-fld-inp" type="number" value="${pool.calcium || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Salt</div><input id="pool-salt" class="wo-fld-inp" type="number" value="${pool.salt || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Water Temp °F</div><input id="pool-temp" class="wo-fld-inp" type="number" value="${pool.temp || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">TDS</div><input id="pool-tds" class="wo-fld-inp" type="number" value="${pool.tds || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Phosphates</div><input id="pool-phosphates" class="wo-fld-inp" type="number" value="${pool.phosphates || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Borates</div><input id="pool-borates" class="wo-fld-inp" type="number" value="${pool.borates || ''}"></div>
-            </div>
-
-            <div class="wo-blk-lbl" style="margin-top:10px;">Spa</div>
-            <div class="wo-grid">
-              <div class="wo-fld"><div class="wo-fld-lbl">pH Level</div><input id="spa-ph" class="wo-fld-inp" type="number" step="0.1" value="${spa.ph || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Free Chlorine</div><input id="spa-chlorine" class="wo-fld-inp" type="number" step="0.1" value="${spa.chlorine || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Alkalinity</div><input id="spa-alkalinity" class="wo-fld-inp" type="number" value="${spa.alkalinity || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Cyanuric Acid</div><input id="spa-cya" class="wo-fld-inp" type="number" value="${spa.cya || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Calcium Hardness</div><input id="spa-calcium" class="wo-fld-inp" type="number" value="${spa.calcium || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Salt</div><input id="spa-salt" class="wo-fld-inp" type="number" value="${spa.salt || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Water Temp °F</div><input id="spa-temp" class="wo-fld-inp" type="number" value="${spa.temp || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">TDS</div><input id="spa-tds" class="wo-fld-inp" type="number" value="${spa.tds || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Phosphates</div><input id="spa-phosphates" class="wo-fld-inp" type="number" value="${spa.phosphates || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Borates</div><input id="spa-borates" class="wo-fld-inp" type="number" value="${spa.borates || ''}"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="wo-sec">
-          <div class="wo-sec-hd">Chemicals Added</div>
-          <div class="wo-sec-bd">
-            <div class="wo-blk-lbl">Pool Additions</div>
-            <div class="wo-grid">
-              <div class="wo-fld"><div class="wo-fld-lbl">Tabs</div><input id="pool-add-tabs" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.tabs || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Shock / Oxidizer</div><input id="pool-add-shock" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.shock || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Muriatic Acid</div><input id="pool-add-muriaticAcid" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.muriaticAcid || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Soda Ash</div><input id="pool-add-sodaAsh" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.sodaAsh || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Sodium Bicarb</div><input id="pool-add-sodiumBicarb" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.sodiumBicarb || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Calcium Increaser</div><input id="pool-add-calcium" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.calcium || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Stabilizer</div><input id="pool-add-stabilizer" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.stabilizer || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Salt</div><input id="pool-add-salt" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.salt || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Phosphate Remover</div><input id="pool-add-phosphateRemover" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.phosphateRemover || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Algaecide</div><input id="pool-add-algaecide" class="wo-fld-inp" type="number" inputmode="decimal" value="${poolAdded.algaecide || ''}"></div>
-              <div class="wo-fld" style="grid-column:1 / -1"><div class="wo-fld-lbl">Other / Notes</div><input id="pool-add-other" class="wo-fld-inp" type="text" value="${poolAdded.other || ''}"></div>
-            </div>
-
-            <div class="wo-blk-lbl" style="margin-top:10px;">Spa Additions</div>
-            <div class="wo-grid">
-              <div class="wo-fld"><div class="wo-fld-lbl">Tabs</div><input id="spa-add-tabs" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.tabs || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Shock / Oxidizer</div><input id="spa-add-shock" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.shock || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Muriatic Acid</div><input id="spa-add-muriaticAcid" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.muriaticAcid || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Soda Ash</div><input id="spa-add-sodaAsh" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.sodaAsh || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Sodium Bicarb</div><input id="spa-add-sodiumBicarb" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.sodiumBicarb || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Calcium Increaser</div><input id="spa-add-calcium" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.calcium || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Stabilizer</div><input id="spa-add-stabilizer" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.stabilizer || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Salt</div><input id="spa-add-salt" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.salt || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Phosphate Remover</div><input id="spa-add-phosphateRemover" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.phosphateRemover || ''}"></div>
-              <div class="wo-fld"><div class="wo-fld-lbl">Algaecide</div><input id="spa-add-algaecide" class="wo-fld-inp" type="number" inputmode="decimal" value="${spaAdded.algaecide || ''}"></div>
-              <div class="wo-fld" style="grid-column:1 / -1"><div class="wo-fld-lbl">Other / Notes</div><input id="spa-add-other" class="wo-fld-inp" type="text" value="${spaAdded.other || ''}"></div>
-            </div>
-          </div>
-        </div>
-
-        ${renderChemPhotoSection(order)}
-
-        <div class="wo-sec">
-          <div class="wo-sec-hd">Work Performed & Follow-Up</div>
-          <div class="wo-sec-bd">
-            <div class="form-row">
-              <label for="wo-work">Work Performed</label>
-              <textarea id="wo-work">${workPerformed}</textarea>
-            </div>
-
-            <div class="form-row">
-              <label for="wo-notes">Issues / Follow-Up Notes</label>
-              <textarea id="wo-notes">${followUpNotes}</textarea>
-            </div>
-          </div>
-        </div>
-
-        <div class="wo-sec">
-          <div class="wo-sec-hd wo-calc-hd">LSI Calculator & Dosing Recommendations</div>
-          <div class="wo-sec-bd">
-            <div id="chem-guidance-preview">${renderChemDosingSummary(order)}</div>
-          </div>
-        </div>
-
-        <div class="card" style="margin:12px;">
-          <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button class="btn btn-secondary" onclick="saveWorkOrderForm('${order.id}')">Save Changes</button>
-            ${auth.canShare() ? `<button class="btn send-report-btn" onclick="shareReport('${order.id}')">Share Report</button>` : ''}
-          </div>
-        </div>
-      </div>
-    `;
-
-    attachChemFieldListeners(order.id);
-  }
-
-  // Quick actions
-  createRoute() { showToast('Route planning can be added next.'); }
-  viewRoute(id) { showToast(`Route ${id} selected`); }
-  createWorkOrder(clientId = '') {
-    const clients = db.get('clients', []);
-    if (!clients.length) {
-      showToast('Add a client first');
-      this.renderClients();
-      return;
-    }
-
-    const selectedClientId = clientId || clients[0].id;
-    const order = workOrderManager.createOrder(selectedClientId);
-    if (order) {
-      this.renderWorkOrderDetail(order);
-      showToast('Chem sheet created');
-    }
-  }
-  viewWorkOrder(id) {
-    const order = workOrderManager.getOrder(id);
-    if (!order) {
-      showToast('Work order not found');
-      return;
-    }
-    this.renderWorkOrderDetail(order);
-  }
-  editWorkOrder(id) {
-    const order = workOrderManager.getOrder(id);
-    if (!order) {
-      showToast('Work order not found');
-      return;
-    }
-    this.renderWorkOrderDetail(order);
-  }
-  editClient(id) {
-    if (!auth.isAdmin()) {
-      showToast('Only admins can edit client details');
-      return;
-    }
-    const clients = db.get('clients', []);
-    const client = clients.find(item => item.id === id);
-    if (!client) {
-      showToast('Client not found');
-      return;
-    }
-    this.renderClientDetail(client);
-  }
-
-  renderClientDetail(client) {
-    const content = document.getElementById('main-content');
-    content.innerHTML = `
-      <div class="wo-form">
-        <div class="wo-bar">
-          <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">← Back</button>
-          <div class="wo-bar-title">Client Profile</div>
-          <button class="btn btn-primary btn-sm" onclick="saveClientDetails('${client.id}')">Save</button>
-        </div>
-
-        <div class="wo-sec">
-          <div class="wo-sec-hd">Individual Client Details</div>
-          <div class="wo-sec-bd">
-            <div class="form-group">
-              <label class="form-label">Client Name</label>
-              <input type="text" id="edit-client-name" class="form-control" value="${escapeHtml(client.name)}">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Service Address</label>
-              <div style="display:flex; gap:8px;">
-                <input type="text" id="edit-client-address" class="form-control" value="${escapeHtml(client.address)}">
-                <button class="btn btn-icon" onclick="openMap(document.getElementById('edit-client-address').value)">📍</button>
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Contact / Email</label>
-              <input type="email" id="edit-client-contact" class="form-control" value="${escapeHtml(client.contact || '')}">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Preferred Technician</label>
-              <input type="text" id="edit-client-tech" class="form-control" value="${escapeHtml(client.technician || '')}">
-            </div>
-          </div>
-        </div>
-
-        <div class="card" style="margin:16px;">
-          <div class="card-body" style="display:flex; gap:10px; flex-wrap:wrap;">
-            <button class="btn btn-primary" style="flex:1" onclick="saveClientDetails('${client.id}')">Save Changes</button>
-            <button class="btn btn-secondary" style="flex:1" onclick="shareClientDetails('${client.id}')">Share Profile</button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-}
-
-const router = new Router();
-
-// ==========================================
-// WORK ORDER MANAGEMENT
-// ==========================================
-class WorkOrderManager {
-  constructor() {
-    this.currentOrder = null;
-  }
-
-  createOrder(clientId) {
-    const clients = db.get('clients', []);
-    const client = clients.find(c => c.id === clientId);
-    if (!client) return null;
-
-    const order = {
-      id: Date.now().toString(),
-      clientId,
-      clientName: client.name,
-      address: client.address,
-      technician: auth.getCurrentUser()?.name || '',
-      date: new Date().toISOString().split('T')[0],
-      time: '',
-      timeIn: '',
-      timeOut: '',
-      status: 'pending',
-      readings: {
-        pool: defaultChemReadings(),
-        spa: defaultChemReadings()
-      },
-      chemicals: [],
-      chemicalsAdded: {
-        pool: defaultChemicalAdditions(),
-        spa: defaultChemicalAdditions()
-      },
-      lsi: {
-        pool: null,
-        spa: null
-      },
-      workPerformed: '',
-      followUpNotes: '',
-      notes: '',
-      photos: []
-    };
-
-    const orders = db.get('workorders', []);
-    orders.push(order);
-    db.set('workorders', orders);
-    return order;
-  }
-
-  saveOrder(order) {
-    const orders = db.get('workorders', []);
-    const index = orders.findIndex(o => o.id === order.id);
-    if (index >= 0) {
-      orders[index] = order;
-      db.set('workorders', orders);
-      return true;
-    }
-    return false;
-  }
-
-  getOrder(id) {
-    const orders = db.get('workorders', []);
-    return orders.find(o => o.id === id);
-  }
-
-  calculateDosing(readings = {}) {
-    const recommendations = [];
-    const ph = parseFloat(readings.ph);
-    const chlorine = parseFloat(readings.chlorine);
-    const alkalinity = parseFloat(readings.alkalinity);
-    const calcium = parseFloat(readings.calcium);
-    const cya = parseFloat(readings.cya);
-    const salt = parseFloat(readings.salt);
-    const phosphates = parseFloat(readings.phosphates);
-    const lsi = calculateLSI(readings);
-
-    if (Number.isFinite(ph) && ph < 7.2) {
-      recommendations.push({ chemical: 'Soda Ash', amount: '8–12 oz per 10,000 gal', reason: 'pH is running low' });
-    } else if (Number.isFinite(ph) && ph > 7.8) {
-      recommendations.push({ chemical: 'Muriatic Acid', amount: '12–16 oz per 10,000 gal', reason: 'pH is running high' });
-    }
-
-    if (Number.isFinite(chlorine) && chlorine < 1) {
-      recommendations.push({ chemical: 'Liquid Chlorine', amount: '0.5–1 gal per 10,000 gal', reason: 'Free chlorine is low' });
-    }
-
-    if (Number.isFinite(alkalinity) && alkalinity < 80) {
-      recommendations.push({ chemical: 'Sodium Bicarbonate', amount: '1.5 lb per 10,000 gal', reason: 'Alkalinity is low' });
-    } else if (Number.isFinite(alkalinity) && alkalinity > 120) {
-      recommendations.push({ chemical: 'Muriatic Acid', amount: '8–16 oz per 10,000 gal', reason: 'Alkalinity is high' });
-    }
-
-    if (Number.isFinite(calcium) && calcium < 200) {
-      recommendations.push({ chemical: 'Calcium Increaser', amount: '1.25 lb per 10,000 gal', reason: 'Calcium hardness is low' });
-    }
-
-    if (Number.isFinite(cya) && cya < 30) {
-      recommendations.push({ chemical: 'Stabilizer', amount: '13 oz per 10,000 gal', reason: 'Cyanuric acid is low' });
-    } else if (Number.isFinite(cya) && cya > 80) {
-      recommendations.push({ chemical: 'Dilution / Water Exchange', amount: 'Partial drain and refill', reason: 'Cyanuric acid is high' });
-    }
-
-    if (Number.isFinite(salt) && salt > 0 && salt < 2800) {
-      recommendations.push({ chemical: 'Pool Salt', amount: '40 lb bag as needed', reason: 'Salt is below ideal range' });
-    }
-
-    if (Number.isFinite(phosphates) && phosphates > 500) {
-      recommendations.push({ chemical: 'Phosphate Remover', amount: 'Per label dose', reason: 'Phosphates are elevated' });
-    }
-
-    if (lsi.score !== null && lsi.score < -0.3) {
-      recommendations.push({ chemical: 'Balance Adjustment', amount: 'Raise pH / alkalinity / calcium', reason: `LSI is low (${lsi.formatted})` });
-    } else if (lsi.score !== null && lsi.score > 0.3) {
-      recommendations.push({ chemical: 'Balance Adjustment', amount: 'Lower pH / alkalinity / calcium', reason: `LSI is high (${lsi.formatted})` });
-    }
-
-    return recommendations;
-  }
-
-  async generateReport(order) {
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF();
-    const filename = `OASIS_Service_Report_${(order.clientName || 'Client').replace(/[^a-z0-9]/gi, '_')}_${order.date || 'Date'}.pdf`;
-
-    const navy = [13, 43, 69];
-    const gold = [201, 168, 124];
-    const teal = [34, 102, 131];
-    const lightBeige = [248, 245, 241];
-
-    let logoData = null;
-    try {
-      logoData = await getImageDataUrl('oasis-logo.png');
-    } catch (e) {
-      console.warn('Logo load failed', e);
-    }
-
-    const renderHeader = () => {
-      doc.setFillColor(...navy);
-      doc.rect(0, 0, 210, 25, 'F');
-      doc.setFillColor(...gold);
-      doc.rect(0, 25, 210, 1, 'F');
-
-      if (logoData) {
-        doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
-      }
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('times', 'bold');
-      doc.setFontSize(22);
-      doc.text('O A S I S', 32, 17);
-
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      doc.text('SERVICE REPORT', 195, 14, { align: 'right' });
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
-      doc.setTextColor(...gold);
-      doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
-
-      return 35;
-    };
-
-    const renderFooter = () => {
-      const footerY = 278;
-      doc.setFillColor(...navy);
-      doc.rect(0, footerY, 210, 20, 'F');
-      doc.setFillColor(...gold);
-      doc.rect(0, footerY, 210, 0.5, 'F');
-
-      if (logoData) {
-        doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
-      }
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(12);
-      doc.setFont('times', 'bold');
-      doc.text('O A S I S', 30, footerY + 12);
-
-      doc.setFontSize(7);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(180, 180, 180);
-      doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'normal');
-      doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
-      doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
-    };
-
-    let y = renderHeader();
-
-    // Info Grid
-    doc.setFillColor(...lightBeige);
-    doc.rect(10, y, 190, 22, 'F');
-
-    let gridY = y + 7;
-    const col1 = 15;
-    const col2 = 110;
-
-    const addField = (label, value, x, currentY) => {
-      doc.setFontSize(6);
-      doc.setTextColor(120, 120, 120);
-      doc.setFont('helvetica', 'bold');
-      doc.text(label.toUpperCase(), x, currentY);
-      doc.setFontSize(9);
-      doc.setTextColor(...navy);
-      doc.setFont('helvetica', 'normal');
-      doc.text(String(value || '—'), x, currentY + 5);
-    };
-
-    addField('Customer', order.clientName, col1, gridY);
-    addField('Date', order.date, col2, gridY);
-    gridY += 12;
-    addField('Service Address', order.address, col1, gridY);
-    addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col2, gridY);
-
-    y += 28;
-
-    // Readings Table
-    doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'bold');
-    doc.text('CHEMICAL READINGS', 15, y + 5);
-    doc.text('POOL', 115, y + 5);
-    doc.text('SPA', 165, y + 5);
-    y += 7;
-
-    const params = [
-      { key: 'ph', label: 'pH Level' },
-      { key: 'chlorine', label: 'Free Chlorine' },
-      { key: 'alkalinity', label: 'Total Alkalinity' },
-      { key: 'cya', label: 'Cyanuric Acid' },
-      { key: 'calcium', label: 'Calcium Hardness' },
-      { key: 'salt', label: 'Salt Content' },
-      { key: 'temp', label: 'Water Temperature' }
-    ];
-
-    params.forEach((p, i) => {
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 248, 248);
-        doc.rect(10, y, 190, 5, 'F');
-      }
-      doc.setTextColor(...navy);
-      doc.setFontSize(7);
-      doc.setFont('helvetica', 'normal');
-      doc.text(p.label, 15, y + 3.5);
-      doc.text(String(order.readings?.pool?.[p.key] || '—'), 115, y + 3.5);
-      doc.text(String(order.readings?.spa?.[p.key] || '—'), 165, y + 3.5);
-      y += 5;
-    });
-
-    y += 4;
-
-    // Chemicals Added
-    doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text('CHEMICALS ADDED', 15, y + 5);
-    y += 10;
-
-    doc.setFontSize(7);
-    doc.setTextColor(...navy);
-    doc.setFont('helvetica', 'bold');
-    doc.text('POOL', 15, y);
-    doc.text('SPA', 110, y);
-    y += 2;
-    doc.setDrawColor(...gold);
-    doc.line(15, y, 100, y);
-    doc.line(110, y, 195, y);
-    y += 4;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(80, 80, 80);
-    const poolChems = getChemicalAdditionEntries(order.chemicalsAdded?.pool || []);
-    const spaChems = getChemicalAdditionEntries(order.chemicalsAdded?.spa || []);
-    const maxLines = Math.max(poolChems.length, spaChems.length, 1);
-
-    for(let i=0; i<maxLines; i++) {
-      if (y > 220) break;
-      doc.text(poolChems[i] || (i===0 ? 'None recorded' : ''), 15, y);
-      doc.text(spaChems[i] || (i===0 ? 'None recorded' : ''), 110, y);
-      y += 4.5;
-    }
-
-    y += 4;
-
-    // Notes
-    doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text('SERVICE NOTES', 15, y + 5);
-    y += 10;
-
-    doc.setTextColor(60, 60, 60);
-    doc.setFontSize(7);
-    const notesStr = `${order.workPerformed || ''} ${order.followUpNotes || order.notes || ''}`.trim();
-    const splitNotes = doc.splitTextToSize(notesStr || 'No additional notes for this visit.', 180);
-    doc.text(splitNotes, 15, y);
-    y += (splitNotes.length * 4.5) + 5;
-
-    // Photos (Compact)
-    const photos = normalizeChemPhotos(order.photos || []);
-    if (photos.some(p => p)) {
-      if (y > 230) {
-        // Skip photos if no room
-      } else {
-        doc.setFillColor(...navy);
-        doc.rect(10, y, 190, 7, 'F');
-        doc.setTextColor(255, 255, 255);
-        doc.text('SERVICE PHOTOS', 15, y + 5);
-        y += 10;
-
-        const pW = 40;
-        const pH = 30;
-        let pX = 15;
-        photos.forEach((p, i) => {
-          if (p && i < 4 && pX < 180) {
-            try {
-              doc.addImage(p, 'JPEG', pX, y, pW, pH);
-              doc.setFontSize(5);
-              doc.setTextColor(150, 150, 150);
-              doc.text(CHEM_PHOTO_LABELS[i], pX, y + pH + 3);
-            } catch(e) {}
-            pX += 45;
-          }
-        });
-      }
-    }
-
-    renderFooter();
-    sharePDF(doc, filename);
-  }
-
-}
-
-const workOrderManager = new WorkOrderManager();
-
-function migrateLegacyRepairData() {
-  const legacyClientsRaw = window.localStorage.getItem('oasis_repairs_clients');
-  const legacyOrdersRaw = window.localStorage.getItem('oasis_repairs_orders');
-
-  if (legacyClientsRaw) {
-    try {
-      const legacyClients = JSON.parse(legacyClientsRaw);
-      const currentClients = db.get('clients', []);
-      const mergedClients = [...currentClients];
-
-      legacyClients.forEach(client => {
-        const exists = mergedClients.some(item => item.id === client.id || (item.name === client.name && item.address === client.address));
-        if (!exists) {
-          mergedClients.push(client);
-        }
-      });
-
-      db.set('clients', mergedClients);
-    } catch (error) {
-      console.warn('Legacy repair clients migration failed', error);
-    }
-  }
-
-  if (legacyOrdersRaw && !db.get('repairOrders', null)) {
-    try {
-      db.set('repairOrders', JSON.parse(legacyOrdersRaw));
-    } catch (error) {
-      console.warn('Legacy repair orders migration failed', error);
-    }
-  }
-}
-
-function bulkImportClients() {
-  const data = prompt("Paste clients JSON here (Array of objects with name and address)");
-  if (!data) return;
-  try {
-    const newClients = JSON.parse(data);
-    if (!Array.isArray(newClients)) {
-      alert("Invalid format. Expected an array.");
-      return;
-    }
-    const clients = db.get('clients', []);
-    newClients.forEach(c => {
-      clients.unshift({
-        id: `c${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-        name: c.name || 'New Client',
-        address: c.address || '',
-        contact: c.contact || ''
-      });
-    });
-    db.set('clients', clients);
-    showToast(`${newClients.length} clients imported`);
-    router.renderClients();
-  } catch (e) {
-    alert("Error parsing JSON: " + e.message);
-  }
-}
-
-function cleanupTestClients() {
-  const testIds = ['c101', 'c102', 'c103', 'c104'];
-  const clients = db.get('clients', []);
-  const filtered = clients.filter(c => !testIds.includes(c.id));
-  if (filtered.length !== clients.length) {
-    db.set('clients', filtered);
-  }
-}
-
-async function exportCompletedToExcel() {
-  const allWorkorders = db.get('workorders', []);
-  const completed = allWorkorders.filter(wo => wo.status === 'completed');
-
-  if (completed.length === 0) {
-    showToast('No completed work orders to export');
-    return;
-  }
-
-  showToast('Generating Excel report...');
-
-  try {
-    const workbook = new ExcelJS.Workbook();
-    const ws = workbook.addWorksheet('OASIS Service Records');
-
-    const chemKeys = [
-      { key: 'tabs', label: 'Tabs' },
-      { key: 'shock', label: 'Shock/Oxidizer' },
-      { key: 'muriaticAcid', label: 'Muriatic Acid' },
-      { key: 'sodaAsh', label: 'Soda Ash' },
-      { key: 'sodiumBicarb', label: 'Sodium Bicarb' },
-      { key: 'calcium', label: 'Calcium Increaser' },
-      { key: 'stabilizer', label: 'Stabilizer' },
-      { key: 'salt', label: 'Salt' },
-      { key: 'phosphateRemover', label: 'Phosphate Remover' },
-      { key: 'algaecide', label: 'Algaecide' }
-    ];
-
-    // Define Columns
-    const columns = [
-      { header: 'Date', key: 'date', width: 12 },
-      { header: 'Client', key: 'client', width: 25 },
-      { header: 'Address', key: 'address', width: 35 },
-      { header: 'Technician', key: 'tech', width: 15 },
-      { header: 'Time In', key: 'timeIn', width: 10 },
-      { header: 'Time Out', key: 'timeOut', width: 10 },
-      { header: 'Pool Chlorine', key: 'pCl', width: 12 },
-      { header: 'Pool pH', key: 'pph', width: 10 },
-      { header: 'Pool Alk', key: 'palk', width: 10 }
-    ];
-
-    // Add columns for each pool chemical
-    chemKeys.forEach(ck => {
-      columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
-    });
-
-    columns.push(
-      { header: 'Spa Chlorine', key: 'sCl', width: 12 },
-      { header: 'Spa pH', key: 'sph', width: 10 },
-      { header: 'Spa Alk', key: 'salk', width: 10 }
-    );
-
-    // Add columns for each spa chemical
-    chemKeys.forEach(ck => {
-      columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
-    });
-
-    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
-
-    ws.columns = columns;
-
-    // Style Header
-    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
-
-    completed.forEach(wo => {
-      const rowData = {
-        date: wo.date,
-        client: wo.clientName,
-        address: wo.address,
-        tech: wo.technician,
-        timeIn: wo.timeIn || wo.time || '',
-        timeOut: wo.timeOut || '',
-        pCl: wo.readings?.pool?.chlorine || '',
-        pph: wo.readings?.pool?.ph || '',
-        palk: wo.readings?.pool?.alkalinity || '',
-        sCl: wo.readings?.spa?.chlorine || '',
-        sph: wo.readings?.spa?.ph || '',
-        salk: wo.readings?.spa?.alkalinity || '',
-        notes: (wo.workPerformed || '') + ' ' + (wo.followUpNotes || wo.notes || '')
-      };
-
-      // Populate pool chemical values
-      chemKeys.forEach(ck => {
-        rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || '';
-      });
-
-      // Populate spa chemical values
-      chemKeys.forEach(ck => {
-        rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || '';
-      });
-
-      ws.addRow(rowData);
-    });
-
-    const buffer = await workbook.xlsx.writeBuffer();
-
-    // Robust binary to base64 conversion
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = btoa(binary);
-    const filename = `OASIS_Service_Records_${new Date().toISOString().split('T')[0]}.xlsx`;
-
-    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast('Excel export ready');
-  } catch (error) {
-    console.error('Excel export failed:', error);
-    showToast('Excel export failed');
-  }
-}
-
-function openMap(address) {
-  if (!address) return;
-  let query = address;
-  if (!query.toLowerCase().includes('grand cayman')) {
-    query += ', Grand Cayman';
-  }
-  const encodedAddress = encodeURIComponent(query);
-  const url = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
-  window.open(url, '_blank');
-}
-
-function saveClientDetails(clientId) {
-  const name = document.getElementById('edit-client-name').value;
-  const address = document.getElementById('edit-client-address').value;
-  const contact = document.getElementById('edit-client-contact').value;
-  const tech = document.getElementById('edit-client-tech').value;
-
-  if (!name) {
-    alert('Name is required');
-    return;
-  }
-
-  const clients = db.get('clients', []);
-  const index = clients.findIndex(c => c.id === clientId);
-  if (index >= 0) {
-    clients[index] = { ...clients[index], name, address, contact, technician: tech };
-    db.set('clients', clients);
-
-    // Also update any matching workorders
-    const workorders = db.get('workorders', []);
-    workorders.forEach(wo => {
-      if (wo.clientId === clientId) {
-        wo.clientName = name;
-        wo.address = address;
-        wo.technician = tech;
-      }
-    });
-    db.set('workorders', workorders);
-
-    showToast('Client profile updated');
-    router.renderClients();
-  }
-}
-
-async function shareClientDetails(clientId) {
-  const clients = db.get('clients', []);
-  const client = clients.find(c => c.id === clientId);
-  if (!client) return;
-
-  const text = `Client: ${client.name}\nAddress: ${client.address}\nContact: ${client.contact || 'None'}\nTech: ${client.technician || 'None'}`;
-
-  try {
-    if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.Share) {
-      await Capacitor.Plugins.Share.share({
-        title: `Client Profile: ${client.name}`,
-        text: text,
-        dialogTitle: 'Share Client Details'
-      });
-    } else {
-      await navigator.clipboard.writeText(text);
-      showToast('Client details copied to clipboard');
-    }
-  } catch (err) {
-    console.error('Sharing failed:', err);
-    showToast('Manual copy required');
-  }
-}
-
-function initMasterSchedule() {
-  if (db.get('masterScheduleLoaded')) return;
-
-  const clients = [
-    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem" },
-    { name: "Jeey Bomford", address: "49 Mary Read Crescent", tech: "Kadeem" },
-    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem" },
-    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem" },
-    { name: "Gcpsl Sea View", address: "South Church Street", tech: "Kadeem" },
-    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem" },
-    { name: "Sunrise Phase 3", address: "Old Crewe Rd", tech: "Kadeem" },
-    { name: "Vivi Townhomes", address: "275 Fairbanks Rd", tech: "Kadeem" },
-    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin" },
-    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin" },
-    { name: "Caribbean Courts", address: "Bcqs, South Sound", tech: "Elvin" },
-    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin" },
-    { name: "Fin South Church Street", address: "Fin Strata", tech: "Elvin" },
-    { name: "Lakeland Villas #1", address: "Old Crewe Rd", tech: "Elvin" },
-    { name: "Point Of View", address: "South Sound", tech: "Elvin" },
-    { name: "South Palms #1", address: "Glen Eden Rd", tech: "Elvin" },
-    { name: "Southern Skies", address: "South Sound", tech: "Elvin" },
-    { name: "Correy Williams", address: "16 Cypress Point", tech: "Jermaine" },
-    { name: "Andy Albray", address: "17 The Deck House", tech: "Jermaine" },
-    { name: "Joanne Akdeniz", address: "42 Hoya Quay", tech: "Jermaine" },
-    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine" },
-    { name: "Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine" },
-    { name: "Mike Stroh", address: "64 Waterford Quay", tech: "Jermaine" },
-    { name: "Tim Bradley", address: "66 Baquarat Quay", tech: "Jermaine" },
-    { name: "Plum Mandalay", address: "Seven Mile", tech: "Jermaine" },
-    { name: "Ocean Pointe Villas", address: "West Bay", tech: "Jermaine" },
-    { name: "Snug Harbour Villas", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace" },
-    { name: "John Ferarri", address: "30 Orchid Drive", tech: "Ace" },
-    { name: "Gary Gibbs", address: "306 Yacht Club dr", tech: "Ace" },
-    { name: "Andrew Muir", address: "318 Yacht Drive", tech: "Ace" },
-    { name: "Scott Somerville", address: "40 Orchid Drive", tech: "Ace" },
-    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace" },
-    { name: "Vlad Aldea", address: "474 Yacht Club Dr", tech: "Ace" },
-    { name: "Abraham Burak", address: "Salt Creek", tech: "Ace" },
-    { name: "Sunset Point Condos", address: "North West Point Rd", tech: "Ace" },
-    { name: "Villa Mare", address: "Vista Del Mar", tech: "Ace" },
-    { name: "Jenny Frizzle", address: "302 Windswept Drive", tech: "Donald" },
-    { name: "Anthoney Reid", address: "88 Mallard Drive", tech: "Donald" },
-    { name: "Coral Bay Village", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Harbor Walk", address: "Grand Harbour", tech: "Donald" },
-    { name: "Indigo Bay", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Periwinkle", address: "Edgewater Way", tech: "Donald" },
-    { name: "Savannah Grand", address: "Savannah", tech: "Donald" },
-    { name: "South Shore", address: "Shamrock Rd", tech: "Donald" },
-    { name: "The Palms At Patricks", address: "Patricks Island", tech: "Donald" },
-    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley" },
-    { name: "One Canal Point", address: "Canal Point", tech: "Kingsley" },
-    { name: "Poinsettia", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "The Beachcomber", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel" },
-    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel" },
-    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel" },
-    { name: "Plymouth", address: "Canal Point Dr", tech: "Ariel" },
-    { name: "Glen Kennedy", address: "Salt Creek", tech: "Ariel" },
-    { name: "Mark Vandevelde", address: "Salt Creek", tech: "Ariel" },
-    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel" },
-    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik" },
-    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik" },
-    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik" },
-    { name: "Jason Butcher", address: "44 Grand Estates", tech: "Malik" },
-    { name: "Julie O'Hara", address: "56 Grand Estates", tech: "Malik" },
-    { name: "Mike Gibbs", address: "78 Grand Estates", tech: "Malik" },
-    { name: "Grapetree Condos", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "The Colonial Club", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem" },
-    { name: "Caribbean Paradise", address: "South Sound", tech: "Kadeem" },
-    { name: "L'Ambience", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Mystic Retreat", address: "John Greer Boulavard", tech: "Kadeem" },
-    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin" },
-    { name: "South Bay Estates", address: "Bel Air Dr", tech: "Elvin" },
-    { name: "Andy Marcher", address: "234 Drake Quay", tech: "Jermaine" },
-    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine" },
-    { name: "Dolce Vita", address: "Govenors Harbour", tech: "Jermaine" },
-    { name: "Amber Stewart", address: "Dolce Vita 4", tech: "Jermaine" },
-    { name: "Pleasant View", address: "West Bay", tech: "Jermaine" },
-    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace" },
-    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace" },
-    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace" },
-    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace" },
-    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace" },
-    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace" },
-    { name: "Charles Ebanks", address: "Bonnieview Av", tech: "Donald" },
-    { name: "One Canal Point Gym", address: "Canal Point", tech: "Kingsley" },
-    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik" },
-    { name: "Moon Bay", address: "Shamrock Rd", tech: "Malik" },
-    { name: "Cayman Coves", address: "South Church Street", tech: "Kadeem" },
-    { name: "Venetia", address: "South Sound", tech: "Kadeem" },
-    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin" },
-    { name: "Tim Dailyey", address: "North Webster Dr", tech: "Elvin" },
-    { name: "Nicholas Lynn", address: "Sandlewood Crescent", tech: "Elvin" },
-    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin" },
-    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin" },
-    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin" },
-    { name: "Riyaz Norrudin", address: "63 Langton Way", tech: "Elvin" },
-    { name: "Mangrove", address: "Bcqs", tech: "Elvin" },
-    { name: "Quentin Creegan", address: "Villa Aramone", tech: "Elvin" },
-    { name: "Jodie O'Mahony", address: "12 El Nathan", tech: "Jermaine" },
-    { name: "Charles Motsinger", address: "124 Hillard", tech: "Jermaine" },
-    { name: "Steve Daker", address: "33 Spurgeon Cr", tech: "Jermaine" },
-    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine" },
-    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine" },
-    { name: "Albert Schimdberger", address: "55 Elnathan Rd", tech: "Jermaine" },
-    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine" },
-    { name: "Blair Ebanks", address: "71 Spurgeon Crescent", tech: "Jermaine" },
-    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine" },
-    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine" },
-    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace" },
-    { name: "Mitchell Demeter", address: "19 Whirlaway Close", tech: "Ace" },
-    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace" },
-    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace" },
-    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace" },
-    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace" },
-    { name: "Coastal Escape", address: "Omega Bay", tech: "Ace" },
-    { name: "Inity Ridge", address: "Prospect Point Rd", tech: "Ace" },
-    { name: "Ocean Reach", address: "Old Crewe Rd", tech: "Ace" },
-    { name: "Scott Somerville", address: "Rum Point Rd", tech: "Donald" },
-    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald" },
-    { name: "67 On The Bay", address: "Queens Highway", tech: "Donald" },
-    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald" },
-    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald" },
-    { name: "Paradise Sur Mar", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Rip Kai", address: "Rum Point Drive", tech: "Donald" },
-    { name: "Sunrays", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley" },
-    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley" },
-    { name: "Regant Court", address: "Brittania", tech: "Kingsley" },
-    { name: "Solara Main", address: "Crystal Harbour", tech: "Kingsley" },
-    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel" },
-    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel" },
-    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel" },
-    { name: "Chad Horwitz", address: "49 Calico Quay", tech: "Ariel" },
-    { name: "Malcom Swift", address: "Miramar", tech: "Ariel" },
-    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Strata #70", address: "Boggy Sands rd", tech: "Ariel" },
-    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik" },
-    { name: "Debbie Ebanks", address: "Fischers Reef", tech: "Malik" },
-    { name: "John Corallo", address: "3A Seahven", tech: "Malik" },
-    { name: "Encompass", address: "3B Seahven", tech: "Malik" },
-    { name: "Joseph Hurlston", address: "42 Monumnet Rd", tech: "Malik" },
-    { name: "George McKenzie", address: "534 Rum Point Dr", tech: "Malik" },
-    { name: "Twin Palms", address: "Rum Point Dr", tech: "Malik" },
-    { name: "Bernie Bako", address: "#4 Venetia", tech: "Kadeem" },
-    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem" },
-    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem" },
-    { name: "Park View Courts", address: "Spruce Lane", tech: "Kadeem" },
-    { name: "The Bentley", address: "Crewe rd", tech: "Kadeem" },
-    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin" },
-    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin" },
-    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin" },
-    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin" },
-    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin" },
-    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin" },
-    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin" },
-    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin" },
-    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin" },
-    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine" },
-    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine" },
-    { name: "Nigel Daily", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine" },
-    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine" },
-    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine" },
-    { name: "Shoreway Townhomes", address: "Adonis Dr", tech: "Jermaine" },
-    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine" },
-    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine" },
-    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace" },
-    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace" },
-    { name: "Clive Harris", address: "516 Crighton Drive", tech: "Ace" },
-    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace" },
-    { name: "Ross Fortune", address: "90 Prince Charles", tech: "Ace" },
-    { name: "Simon Palmer", address: "Olivias Cove", tech: "Ace" },
-    { name: "Caroline Moran", address: "197 Bimini Dr", tech: "Donald" },
-    { name: "James Reeve", address: "215 Bimini Dr", tech: "Donald" },
-    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald" },
-    { name: "Sina Mirzale", address: "353 Bimini Dr", tech: "Donald" },
-    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald" },
-    { name: "Marlon Bispath", address: "519 Bimini Dr", tech: "Donald" },
-    { name: "Margaret Fantasia", address: "526 Bimini Dr", tech: "Donald" },
-    { name: "Kenny Rankin", address: "Grand Harbour", tech: "Donald" },
-    { name: "James Mendes", address: "106 Olea", tech: "Ariel" },
-    { name: "James O'Brien", address: "102 Olea", tech: "Ariel" },
-    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel" },
-    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel" },
-    { name: "Mr Holland", address: "107 Olea", tech: "Ariel" },
-    { name: "Nikki Harris", address: "213 olea", tech: "Ariel" },
-    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel" },
-    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel" },
-    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik" },
-    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik" },
-    { name: "Iman Shafiei", address: "53 Baquarat Quay", tech: "Malik" },
-    { name: "Enrique Tasende", address: "65 Baccarat Quay", tech: "Malik" },
-    { name: "David Wilson", address: "Boggy Sands", tech: "Malik" },
-    { name: "Nina Irani", address: "Casa Oasis", tech: "Malik" },
-    { name: "Sandy Lane Townhomes", address: "Boggy Sands Rd", tech: "Malik" },
-    { name: "Valencia Heights", address: "Strata #536", tech: "Kadeem" },
-    { name: "Jaime-Lee Eccles", address: "176 Conch Dr", tech: "Kadeem" },
-    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem" },
-    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem" },
-    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem" },
-    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem" },
-    { name: "Hilton Estates", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin" },
-    { name: "Britni Strong", address: "150 Parkway Dr", tech: "Elvin" },
-    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin" },
-    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd", tech: "Elvin" },
-    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin" },
-    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin" },
-    { name: "Saphire", address: "Jec, Nwp Rd", tech: "Elvin" },
-    { name: "The Sands", address: "Boggy Sand Rd", tech: "Elvin" },
-    { name: "Turtle Breeze", address: "Conch Point Rd", tech: "Elvin" },
-    { name: "Francois Du Toit", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine" },
-    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine" },
-    { name: "Johann Prinslo", address: "270 Jennifer Dr", tech: "Jermaine" },
-    { name: "Andre Slabbert", address: "7 Victoria Dr", tech: "Jermaine" },
-    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine" },
-    { name: "Palm Heights Residence", address: "Seven Mile Beach", tech: "Jermaine" },
-    { name: "Jean Mean", address: "211 Sea Spray Dr", tech: "Ace" },
-    { name: "Paul Rowan", address: "265 Sea Spray Dr", tech: "Ace" },
-    { name: "Charmaine Richter", address: "40 Natures Circle", tech: "Ace" },
-    { name: "Rory Andrews", address: "44 Country Road", tech: "Ace" },
-    { name: "Walker Romanica", address: "79 Riley Circle", tech: "Ace" },
-    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace" },
-    { name: "Grand Palmyra", address: "Seven Mile Beach", tech: "Ace" },
-    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace" },
-    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald" },
-    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald" },
-    { name: "Reg Williams", address: "Cliff House", tech: "Donald" },
-    { name: "Gypsy", address: "1514 Rum Point Dr", tech: "Donald" },
-    { name: "Kai Vista", address: "Rum Point Dr", tech: "Donald" },
-    { name: "Ocean Vista", address: "Rum Point", tech: "Donald" },
-    { name: "Stefan Marenzi", address: "Water Cay Rd", tech: "Donald" },
-    { name: "Bella Rocca", address: "Queens Highway", tech: "Donald" },
-    { name: "Sea 2 Inity", address: "Kiabo", tech: "Donald" },
-    { name: "Guy Manning", address: "Diamonds Edge", tech: "Kingsley" },
-    { name: "Kent Nickerson", address: "Salt Creek", tech: "Kingsley" },
-    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel" },
-    { name: "Suzanne Correy", address: "394 Canal Point Rd", tech: "Ariel" },
-    { name: "November Capitol", address: "One Canal Point", tech: "Ariel" },
-    { name: "Safe Harbor", address: "West Bay", tech: "Ariel" },
-    { name: "Bert Thacker", address: "West Bay", tech: "Ariel" },
-    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik" },
-    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik" },
-    { name: "Philip Smyres", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Brandon Caruana", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik" },
-    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik" },
-    { name: "Phillip Cadien", address: "312 Cypres Point", tech: "Malik" }
+/* ── DATABASE ──────────────────────────────────────────────────── */
+const DB = {
+  _key: k => `${STORAGE_PREFIX}${k}`,
+  load() {
+    this.customers   = this._get('customers');
+    this.technicians = this._get('technicians');
+    this.routes      = this._get('routes');
+    this.workOrders  = this._get('workOrders');
+    this.techOrders  = this._get('techOrders');
+  },
+  _get(col) { try { return JSON.parse(localStorage.getItem(this._key(col))) || []; } catch { return []; } },
+  save(col) { localStorage.setItem(this._key(col), JSON.stringify(this[col])); },
+  uid()     { return Date.now().toString(36) + Math.random().toString(36).slice(2); },
+  addCustomer(d)       { const r={id:this.uid(),...d}; this.customers.push(r); this.save('customers'); return r; },
+  updateCustomer(id,d) { const i=this.customers.findIndex(c=>c.id===id); if(i>-1){this.customers[i]={...this.customers[i],...d};this.save('customers');} },
+  deleteCustomer(id)   { this.customers=this.customers.filter(c=>c.id!==id); this.save('customers'); },
+  getCustomer(id)      { return this.customers.find(c=>c.id===id); },
+  addTechnician(d)       { const r={id:this.uid(),...d}; this.technicians.push(r); this.save('technicians'); return r; },
+  updateTechnician(id,d) { const i=this.technicians.findIndex(t=>t.id===id); if(i>-1){this.technicians[i]={...this.technicians[i],...d};this.save('technicians');} },
+  deleteTechnician(id)   { this.technicians=this.technicians.filter(t=>t.id!==id); this.save('technicians'); },
+  getTechnician(id)      { return this.technicians.find(t=>t.id===id); },
+  addRoute(d)       { const r={id:this.uid(),...d}; this.routes.push(r); this.save('routes'); return r; },
+  updateRoute(id,d) { const i=this.routes.findIndex(r=>r.id===id); if(i>-1){this.routes[i]={...this.routes[i],...d};this.save('routes');} },
+  deleteRoute(id)   { this.routes=this.routes.filter(r=>r.id!==id); this.save('routes'); },
+  getRoute(id)      { return this.routes.find(r=>r.id===id); },
+  addWorkOrder(d)       { const r={id:this.uid(),...d}; this.workOrders.push(r); this.save('workOrders'); return r; },
+  updateWorkOrder(id,d) { const i=this.workOrders.findIndex(w=>w.id===id); if(i>-1){this.workOrders[i]={...this.workOrders[i],...d};this.save('workOrders');} },
+  deleteWorkOrder(id)   { this.workOrders=this.workOrders.filter(w=>w.id!==id); this.save('workOrders'); },
+  getWorkOrder(id)      { return this.workOrders.find(w=>w.id===id); },
+  addTechOrder(d)       { const r={id:this.uid(),...d}; this.techOrders.push(r); this.save('techOrders'); return r; },
+  updateTechOrder(id,d) { const i=this.techOrders.findIndex(w=>w.id===id); if(i>-1){this.techOrders[i]={...this.techOrders[i],...d};this.save('techOrders');} },
+  deleteTechOrder(id)   { this.techOrders=this.techOrders.filter(w=>w.id!==id); this.save('techOrders'); },
+  getTechOrder(id)      { return this.techOrders.find(w=>w.id===id); },
+};
+
+/* ── SEED DATA ─────────────────────────────────────────────────── */
+function seedDemoData() {
+  DB.technicians = [
+    { id:'t1', name:'Jet',    pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
+    { id:'t2', name:'Mark',   pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
+    { id:'t3', name:'Tech 3', pin:'1111', isAdmin:false, specialty:'Cleaning & Chemicals', phone:'', email:'' },
+    { id:'admin', name:'Chris (Admin)', pin:'0000', isAdmin:true, specialty:'Management', phone:'(345) 945-7665', email:'chris@oasis.ky' },
   ];
+  DB.save('technicians');
+  if (DB.customers.length > 0) return;
 
-  // Map to store unique clients by name
-  const uniqueClients = {};
-  clients.forEach(c => {
-    if (!uniqueClients[c.name]) {
-      uniqueClients[c.name] = {
-        id: `c_${Math.random().toString(36).substr(2, 9)}`,
-        name: c.name,
-        address: c.address,
-        technician: c.tech
-      };
-    }
-  });
+  DB.customers = [
+    { id:'c01', name:'Harbour Heights Villa',  address:'14 Harbour Drive, Grand Cayman',     poolSize:'18000', poolType:'Inground Gunite',    notes:'Remote gate — code #4477' },
+    { id:'c02', name:'Seven Mile Residences',  address:'7 Mile Beach Road, Grand Cayman',    poolSize:'22000', poolType:'Inground Fiberglass', notes:'Concierge will let you in' },
+    { id:'c03', name:'The Ritz Cayman',        address:'West Bay Road, Grand Cayman',         poolSize:'45000', poolType:'Commercial Gunite',   notes:'Check in at front desk' },
+    { id:'c04', name:'Camana Bay Penthouse',   address:'18 Forum Lane, Camana Bay',           poolSize:'12000', poolType:'Inground Vinyl',      notes:'Roof terrace pool. Use service lift.' },
+    { id:'c05', name:'Rum Point Estate',       address:'23 Rum Point Drive, North Side',      poolSize:'16000', poolType:'Inground Gunite',    notes:'Gated. Code: 8822. Large dog onsite.' },
+    { id:'c06', name:'East End Retreat',       address:'45 Breakers Road, East End',          poolSize:'10000', poolType:'Above Ground',        notes:'Call 20 min before arrival' },
+    { id:'c07', name:'Kaibo Beach House',      address:'8 Kaibo Yacht Club Road, North Side', poolSize:'14000', poolType:'Inground Fiberglass', notes:'Access via beach path on south side' },
+    { id:'c08', name:'Old Homestead Resort',   address:'12 West Bay Beach Drive',             poolSize:'30000', poolType:'Commercial Gunite',   notes:'Resort pool + 2 spas' },
+    { id:'c09', name:'Breezy Pines Villa',     address:'55 Pine Tree Road, Bodden Town',      poolSize:'11000', poolType:'Inground Gunite',    notes:'Seasonal — owners Dec-Apr only' },
+    { id:'c10', name:'Coral Stone Cottage',    address:'3 Coral Way, West Bay',               poolSize:'9000',  poolType:'Inground Vinyl',      notes:'Small pool + hot tub spa' },
+    { id:'c11', name:'Sunset Palms Estate',    address:'29 Sunset Drive, South Sound',        poolSize:'20000', poolType:'Inground Gunite',    notes:'Check in at security booth' },
+    { id:'c12', name:'Cayman Kai Retreat',     address:'7 Cayman Kai Road, North Side',       poolSize:'13000', poolType:'Inground Fiberglass', notes:'Open gate — park on gravel' },
+  ];
+  DB.save('customers');
 
-  const clientArray = Object.values(uniqueClients);
-  db.set('clients', clientArray);
-
-  // Generate pending workorders for each client assigned to their tech
-  const workorders = clientArray.map(c => ({
-    id: `wo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-    clientId: c.id,
-    clientName: c.name,
-    address: c.address,
-    technician: c.technician,
-    date: new Date().toISOString().split('T')[0],
-    status: 'pending',
-    readings: { pool: defaultChemReadings(), spa: defaultChemReadings() },
-    chemicalsAdded: { pool: defaultChemicalAdditions(), spa: defaultChemicalAdditions() },
-    photos: []
-  }));
-
-  db.set('workorders', workorders);
-  db.set('masterScheduleLoaded', true);
+  const D={Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6};
+  const stops=[
+    {tech:'t1',cust:'c01',day:D.Mon,stop:1,type:'Weekly Clean',route:'1'},
+    {tech:'t1',cust:'c02',day:D.Mon,stop:2,type:'Weekly Clean',route:'1'},
+    {tech:'t1',cust:'c03',day:D.Mon,stop:3,type:'Chemical Treatment',route:'1'},
+    {tech:'t1',cust:'c04',day:D.Mon,stop:4,type:'Weekly Clean',route:'1'},
+    {tech:'t1',cust:'c01',day:D.Thu,stop:1,type:'Chemical Check',route:'1'},
+    {tech:'t1',cust:'c05',day:D.Tue,stop:1,type:'Weekly Clean',route:'1'},
+    {tech:'t2',cust:'c07',day:D.Tue,stop:1,type:'Weekly Clean',route:'2'},
+    {tech:'t2',cust:'c08',day:D.Tue,stop:2,type:'Weekly Clean',route:'2'},
+    {tech:'t2',cust:'c09',day:D.Wed,stop:1,type:'Chemical Treatment',route:'2'},
+    {tech:'t2',cust:'c10',day:D.Wed,stop:2,type:'Weekly Clean',route:'2'},
+    {tech:'t3',cust:'c11',day:D.Mon,stop:1,type:'Weekly Clean',route:'3'},
+    {tech:'t3',cust:'c12',day:D.Mon,stop:2,type:'Weekly Clean',route:'3'},
+    {tech:'t3',cust:'c06',day:D.Thu,stop:1,type:'Chemical Treatment',route:'3'},
+  ];
+  DB.routes = stops.map(s=>({id:DB.uid(),technicianId:s.tech,customerId:s.cust,dayOfWeek:s.day,stopOrder:s.stop,serviceType:s.type,routeNumber:s.route}));
+  DB.save('routes');
 }
 
-function populateLoginTechOptions() {
-  const select = document.getElementById('login-tech');
-  if (!select) return;
-
-  const entries = Object.entries(auth.users)
-    .sort((a, b) => a[1].name.localeCompare(b[1].name));
-
-  select.innerHTML = `
-    <option value="" disabled selected>— Select your name —</option>
-    ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
-    `).join('')}
-  `;
+/* ── MODAL / CONFIRM / TOAST ───────────────────────────────────── */
+const Modal = {
+  _cb: null,
+  show(title, html, onSave) {
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-body').innerHTML = html;
+    document.getElementById('modal-overlay').classList.remove('hidden');
+    this._cb = onSave;
+  },
+  hide() { document.getElementById('modal-overlay').classList.add('hidden'); this._cb = null; },
+  save() { if (this._cb) this._cb(); }
+};
+const Confirm = {
+  show(msg, onOk) {
+    document.getElementById('confirm-message').textContent = msg;
+    document.getElementById('confirm-overlay').classList.remove('hidden');
+    document.getElementById('confirm-ok-btn').onclick = () => { Confirm.hide(); onOk(); };
+  },
+  hide() { document.getElementById('confirm-overlay').classList.add('hidden'); }
+};
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.remove('hidden');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.add('hidden'), 2800);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  // Always force login screen on startup
-  auth.logout();
+/* ── HELPERS ───────────────────────────────────────────────────── */
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function initials(n) { return (n||'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
+function fmtDate(d) { if(!d)return'—'; return new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+function fmtTime(t) { if(!t)return''; const[h,m]=t.split(':'),hr=parseInt(h); return `${hr>12?hr-12:hr||12}:${m} ${hr>=12?'PM':'AM'}`; }
+function todayStr()  { return new Date().toISOString().split('T')[0]; }
+function todayDOW()  { return new Date().getDay(); }
+const DAY_NAMES=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const DAY_SHORT=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function statusBadge(s) { const L={pending:'Pending','in-progress':'In Progress',completed:'Done',cancelled:'Cancelled'}; return `<span class="badge badge-${s}">${L[s]||s}</span>`; }
+function customerOptions(sel='') { return DB.customers.map(c=>`<option value="${esc(c.id)}"${c.id===sel?' selected':''}>${esc(c.name)}</option>`).join(''); }
+function techOptions(sel='')     { return DB.technicians.map(t=>`<option value="${esc(t.id)}"${t.id===sel?' selected':''}>${esc(t.name)}</option>`).join(''); }
 
-  cleanupTestClients();
-  initMasterSchedule();
-  migrateLegacyRepairData();
-  populateLoginTechOptions();
+const TECH_WO_CATALOG = window.TECH_WO_CATALOG_DATA || {
+  'PUMPS': [
+    { partNumber:'', product:'Variable Speed Pump', price:0 },
+    { partNumber:'', product:'Single Speed Pump', price:0 },
+    { partNumber:'', product:'Booster Pump', price:0 }
+  ],
+  'FILTERS': [
+    { partNumber:'', product:'Cartridge Filter', price:0 },
+    { partNumber:'', product:'DE Filter', price:0 },
+    { partNumber:'', product:'Sand Filter', price:0 }
+  ],
+  'PLUMBING': [
+    { partNumber:'', product:'PVC Repair', price:0 },
+    { partNumber:'', product:'Valve Repair', price:0 },
+    { partNumber:'', product:'Pipe Replacement', price:0 }
+  ],
+  'ELECTRICAL': [
+    { partNumber:'', product:'Timer / Control Repair', price:0 },
+    { partNumber:'', product:'Transformer', price:0 },
+    { partNumber:'', product:'Junction Box', price:0 }
+  ],
+  'HEATERS': [
+    { partNumber:'', product:'Gas Heater', price:0 },
+    { partNumber:'', product:'Heat Pump', price:0 },
+    { partNumber:'', product:'Heater Sensor', price:0 }
+  ]
+};
+const TECH_WO_TYPES = ['Repair','Install','Replacement','Inspection','Warranty','Follow-up','Troubleshooting','Quote'];
+const TECH_ITEM_ACTIONS = ['Inspect','Repair','Install','Replace','Clean','Test'];
+const TECH_UNITS = ['ea','set','ft','kit','box','bag'];
 
-  // Android Back Button Handling
-  if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
-    Capacitor.Plugins.App.addListener('backButton', () => {
-      if (router.currentView === 'dashboard') {
-        // Stop at home page, don't exit if logged in (though we force login above)
-        return;
-      }
+/* ── ROUTE HELPERS ─────────────────────────────────────────────── */
+function getStopWO(routeId, date)     { return DB.workOrders.find(w=>w.routeId===routeId&&w.date===date); }
+function getTodaysStops(techId)       { const d=todayDOW(); return DB.routes.filter(r=>r.technicianId===techId&&r.dayOfWeek===d).sort((a,b)=>a.stopOrder-b.stopOrder); }
+function getStopsByDay(techId, dow)   { return DB.routes.filter(r=>r.technicianId===techId&&r.dayOfWeek===dow).sort((a,b)=>a.stopOrder-b.stopOrder); }
 
-      if (!auth.isLoggedIn()) {
-        // If at login screen, maybe let it exit or do nothing
-        return;
-      }
+/* ── LOGIN / SIGN-OUT ──────────────────────────────────────────── */
+function populateLoginDropdown() {
+  // Only overwrite the hardcoded HTML options if DB has technicians loaded
+  const sel = document.getElementById('login-tech');
+  if (!sel || DB.technicians.length === 0) return;
+  sel.innerHTML = '<option value="">\u2014 Select your name \u2014</option>'
+    + DB.technicians.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+}
 
-      router.goBack();
-    });
+function doLogin() {
+  const techId = document.getElementById('login-tech').value;
+  const err    = document.getElementById('login-error');
+  if (!techId) {
+    err.style.display = 'block';
+    return;
   }
-
-  document.querySelectorAll('.nav-item').forEach(btn => {
-    btn.addEventListener('click', () => {
-      router.navigate(btn.dataset.view);
-    });
-  });
-
-  document.getElementById('login-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const select = document.getElementById('login-tech');
-    const pinInput = document.getElementById('login-pin');
-    const username = select ? select.value : '';
-    const pin = pinInput ? pinInput.value : '';
-    const loginScreen = document.getElementById('login-screen');
-    const appShell = document.getElementById('app');
-    const loginError = document.getElementById('login-error');
-
-    console.log('Attempting login for:', username);
-
-    if (auth.login(username, pin)) {
-      console.log('Login successful');
-      const loginScreen = document.getElementById('login-screen');
-      const appShell = document.getElementById('app');
-
-      if (loginScreen) {
-        loginScreen.style.setProperty('display', 'none', 'important');
-      }
-      if (appShell) {
-        appShell.classList.remove('hidden');
-        appShell.style.setProperty('display', 'flex', 'important');
-      }
-      if (loginError) loginError.style.display = 'none';
-
-      // Immediate navigation
-      try {
-        router.navigate('dashboard');
-      } catch (err) {
-        console.error('Navigation error:', err);
-        location.reload();
-      }
-    } else {
-      console.warn('Login failed: invalid username or PIN');
-      if (loginError) loginError.style.display = 'block';
-    }
-  });
-
-  document.addEventListener('click', (e) => {
-    if (e.target.classList.contains('modal-overlay')) {
-      modal.hide();
-    }
-  });
-});
+  err.style.display = 'none';
+  // Always ensure DB is seeded before signing in
+  seedDemoData();
+  DB.load();
+  Auth.signIn(techId);
+  showAppShell();
+}
 
 function signOut() {
-  auth.logout();
-  document.getElementById('app').classList.add('hidden');
+  Auth.signOut();
+  woState = { view:'list' };
+  Router.current = 'dashboard';
   document.getElementById('app').style.display = 'none';
-  const loginScreen = document.getElementById('login-screen');
-  loginScreen.classList.remove('hidden');
-  loginScreen.style.display = 'flex';
-  router.navigate('dashboard');
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('login-tech').value = '';
+  const err = document.getElementById('login-error');
+  if (err) err.style.display = 'none';
 }
 
-function quickAddClient() {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can add clients');
-    return;
-  }
-  const name = prompt('Client name');
-  if (!name) return;
+function showAppShell() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = '';
 
-  const address = prompt('Client address') || '';
-  const contact = prompt('Contact name') || '';
-  const clients = db.get('clients', []);
+  // Show/hide admin tab
+  document.querySelectorAll('.admin-only').forEach(el =>
+    el.style.display = Auth.isAdmin ? '' : 'none'
+  );
 
-  clients.unshift({
-    id: `c${Date.now()}`,
-    name,
-    address,
-    contact
-  });
-
-  db.set('clients', clients);
-  showToast('Client added');
-  router.renderClients();
-}
-
-function deleteClient(clientId) {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can delete clients');
-    return;
-  }
-  if (!confirm('Delete this client and related service records?')) return;
-
-  db.set('clients', db.get('clients', []).filter(client => client.id !== clientId));
-  db.set('workorders', db.get('workorders', []).filter(order => order.clientId !== clientId));
-  db.set('repairOrders', getRepairOrders().filter(order => order.clientId !== clientId));
-
-  showToast('Client removed');
-  router.renderClients();
-}
-
-function onChemClientChange() {
-  const select = document.getElementById('wo-client');
-  const addressField = document.getElementById('wo-address');
-  const title = document.getElementById('wo-client-name');
-  if (!select) return;
-
-  const client = db.get('clients', []).find(item => item.id === select.value);
-  if (client) {
-    if (addressField) addressField.value = client.address || '';
-    if (title) title.textContent = client.name || 'Chem Sheet';
-  }
-}
-
-function updateChemGuidancePreview(orderId) {
-  const preview = document.getElementById('chem-guidance-preview');
-  if (!preview) return;
-
-  const order = collectWorkOrderForm(orderId);
-  if (order) {
-    preview.innerHTML = renderChemDosingSummary(order);
-  }
-}
-
-function updateTimeSpentHint() {
-  const hint = document.getElementById('wo-time-spent-hint');
-  const timeIn = document.getElementById('wo-time-in')?.value || '';
-  const timeOut = document.getElementById('wo-time-out')?.value || '';
-  if (!hint) return;
-
-  const spent = calculateTimeSpent(timeIn, timeOut);
-  hint.textContent = `Time on site: ${spent || 'Enter both times to calculate duration.'}`;
-}
-
-function attachChemFieldListeners(orderId) {
-  const form = document.querySelector('.wo-form');
-  if (!form) return;
-
-  form.querySelectorAll('input, select, textarea').forEach(field => {
-    if (field.id && (field.id.startsWith('pool-') || field.id.startsWith('spa-'))) {
-      field.addEventListener('input', () => updateChemGuidancePreview(orderId));
-      field.addEventListener('change', () => updateChemGuidancePreview(orderId));
-    }
-
-    if (field.id === 'wo-time-in' || field.id === 'wo-time-out') {
-      field.addEventListener('input', updateTimeSpentHint);
-      field.addEventListener('change', updateTimeSpentHint);
-    }
-  });
-
-  updateTimeSpentHint();
-}
-
-function collectWorkOrderForm(orderId) {
-  const order = workOrderManager.getOrder(orderId);
-  if (!order) return null;
-
-  const dateInput = document.getElementById('wo-date');
-  if (!dateInput) {
-    return order;
+  const tech = DB.getTechnician(Auth.techId);
+  const routeNum = DB.routes.find(r=>r.technicianId===Auth.techId)?.routeNumber || '';
+  const sub = document.querySelector('.header-sub');
+  if (sub) {
+    sub.textContent = APP_MODE === 'tech'
+      ? ((tech ? tech.name : 'Technician') + ' · Work Orders')
+      : ((tech ? tech.name : '') + (routeNum ? ' · Route ' + routeNum : ''));
   }
 
-  const getValue = (id, fallback = '') => {
-    const field = document.getElementById(id);
-    return field ? field.value : fallback;
-  };
-
-  const existingPool = { ...defaultChemReadings(), ...(order.readings?.pool || {}) };
-  const existingSpa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
-  const existingChemicalsAdded = order.chemicalsAdded || {};
-  const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
-  const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
-  const selectedClientId = getValue('wo-client', order.clientId || '');
-  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
-  const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
-
-  const updatedOrder = {
-    ...order,
-    clientId: selectedClientId || order.clientId,
-    clientName: selectedClient?.name || order.clientName,
-    technician: getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || ''),
-    date: getValue('wo-date', order.date),
-    time: getValue('wo-time-in', order.timeIn || order.time || ''),
-    timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
-    timeOut: getValue('wo-time-out', order.timeOut || ''),
-    status: getValue('wo-status', order.status || 'pending'),
-    address: selectedClient?.address || getValue('wo-address', order.address),
-    workPerformed: getValue('wo-work', order.workPerformed || ''),
-    followUpNotes,
-    notes: followUpNotes,
-    photos: normalizeChemPhotos(order.photos), // Ensure photos are preserved from the original order
-    readings: {
-      ...order.readings,
-      pool: {
-        ...existingPool,
-        ph: getValue('pool-ph', existingPool.ph || ''),
-        chlorine: getValue('pool-chlorine', existingPool.chlorine || ''),
-        alkalinity: getValue('pool-alkalinity', existingPool.alkalinity || ''),
-        calcium: getValue('pool-calcium', existingPool.calcium || ''),
-        cya: getValue('pool-cya', existingPool.cya || ''),
-        salt: getValue('pool-salt', existingPool.salt || ''),
-        temp: getValue('pool-temp', existingPool.temp || ''),
-        tds: getValue('pool-tds', existingPool.tds || ''),
-        phosphates: getValue('pool-phosphates', existingPool.phosphates || ''),
-        borates: getValue('pool-borates', existingPool.borates || '')
-      },
-      spa: {
-        ...existingSpa,
-        ph: getValue('spa-ph', existingSpa.ph || ''),
-        chlorine: getValue('spa-chlorine', existingSpa.chlorine || ''),
-        alkalinity: getValue('spa-alkalinity', existingSpa.alkalinity || ''),
-        calcium: getValue('spa-calcium', existingSpa.calcium || ''),
-        cya: getValue('spa-cya', existingSpa.cya || ''),
-        salt: getValue('spa-salt', existingSpa.salt || ''),
-        temp: getValue('spa-temp', existingSpa.temp || ''),
-        tds: getValue('spa-tds', existingSpa.tds || ''),
-        phosphates: getValue('spa-phosphates', existingSpa.phosphates || ''),
-        borates: getValue('spa-borates', existingSpa.borates || '')
-      }
-    },
-    chemicalsAdded: {
-      pool: {
-        ...existingPoolAdded,
-        tabs: getValue('pool-add-tabs', existingPoolAdded.tabs || ''),
-        shock: getValue('pool-add-shock', existingPoolAdded.shock || ''),
-        muriaticAcid: getValue('pool-add-muriaticAcid', existingPoolAdded.muriaticAcid || ''),
-        sodaAsh: getValue('pool-add-sodaAsh', existingPoolAdded.sodaAsh || ''),
-        sodiumBicarb: getValue('pool-add-sodiumBicarb', existingPoolAdded.sodiumBicarb || ''),
-        calcium: getValue('pool-add-calcium', existingPoolAdded.calcium || ''),
-        stabilizer: getValue('pool-add-stabilizer', existingPoolAdded.stabilizer || ''),
-        salt: getValue('pool-add-salt', existingPoolAdded.salt || ''),
-        phosphateRemover: getValue('pool-add-phosphateRemover', existingPoolAdded.phosphateRemover || ''),
-        algaecide: getValue('pool-add-algaecide', existingPoolAdded.algaecide || ''),
-        other: getValue('pool-add-other', existingPoolAdded.other || '')
-      },
-      spa: {
-        ...existingSpaAdded,
-        tabs: getValue('spa-add-tabs', existingSpaAdded.tabs || ''),
-        shock: getValue('spa-add-shock', existingSpaAdded.shock || ''),
-        muriaticAcid: getValue('spa-add-muriaticAcid', existingSpaAdded.muriaticAcid || ''),
-        sodaAsh: getValue('spa-add-sodaAsh', existingSpaAdded.sodaAsh || ''),
-        sodiumBicarb: getValue('spa-add-sodiumBicarb', existingSpaAdded.sodiumBicarb || ''),
-        calcium: getValue('spa-add-calcium', existingSpaAdded.calcium || ''),
-        stabilizer: getValue('spa-add-stabilizer', existingSpaAdded.stabilizer || ''),
-        salt: getValue('spa-add-salt', existingSpaAdded.salt || ''),
-        phosphateRemover: getValue('spa-add-phosphateRemover', existingSpaAdded.phosphateRemover || ''),
-        algaecide: getValue('spa-add-algaecide', existingSpaAdded.algaecide || ''),
-        other: getValue('spa-add-other', existingSpaAdded.other || '')
-      }
-    }
-  };
-
-  updatedOrder.lsi = {
-    pool: calculateLSI(updatedOrder.readings.pool),
-    spa: calculateLSI(updatedOrder.readings.spa)
-  };
-
-  const sourceReadings = Object.values(updatedOrder.readings.pool).some(value => value !== '' && value !== null && value !== undefined)
-    ? updatedOrder.readings.pool
-    : updatedOrder.readings.spa;
-  updatedOrder.chemicals = workOrderManager.calculateDosing(sourceReadings);
-
-  return updatedOrder;
+  App.render();
 }
 
-function saveWorkOrderForm(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  workOrderManager.saveOrder(order);
-  router.navigate('workorders');
-  showToast('Chem sheet saved');
-}
-
-function shareReport(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  workOrderManager.saveOrder(order);
-  workOrderManager.generateReport(order);
-}
-
-function sendReport(orderId) {
-  shareReport(orderId);
-}
-
-function getRepairOrders() {
-  return db.get('repairOrders', []);
-}
-
-function saveRepairOrders(orders) {
-  db.set('repairOrders', orders);
-}
-
-function renderRepairOrdersList() {
-  const allOrders = getRepairOrders();
-  const currentUser = auth.getCurrentUser();
-  const isAdmin = auth.isAdmin();
-  const canShare = auth.canShare();
-
-  // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  let orders = isAdmin 
-    ? allOrders 
-    : allOrders.filter(o => o.assignedTo === currentUser.name);
-
-  // Hide completed repair orders from the main active list for everyone
-  orders = orders.filter(o => o.status !== 'completed');
-
-  if (!orders.length) {
-    return `
-      <div class="empty-state">
-        <div class="empty-icon">🛠️</div>
-        <div class="empty-title">No repair work orders</div>
-        <div class="empty-subtitle">${isAdmin ? 'No repair orders found' : 'Create one to manage service repairs in the same app'}</div>
-      </div>
-    `;
-  }
-
-  return orders.map(order => `
-    <div class="job-card" style="margin-bottom:12px;">
-      <div class="job-card-header">
-        <div>
-          <div class="job-card-title">${escapeHtml(order.clientName || 'Repair Job')}</div>
-          <div class="job-card-customer">${escapeHtml(order.jobType || 'General Repair')}</div>
-          <div class="job-meta">
-            <div class="job-meta-item">📅 ${escapeHtml(order.date || '')}</div>
-            <div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div>
-          </div>
-        </div>
-      </div>
-      <div class="job-card-body">
-        <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
-        <div class="detail-row"><div class="detail-label">Priority</div><div class="detail-value">${escapeHtml(order.priority || 'Normal')}</div></div>
-        <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
-      </div>
-      <div class="job-card-footer">
-        <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">Open</button>
-        ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
-        ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
-      </div>
-    </div>
-  `).join('');
-}
-
-function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = null) {
-  const content = document.getElementById('main-content');
-  const existing = !draftOrder && orderId ? getRepairOrders().find(order => order.id === orderId) : null;
-  const clients = db.get('clients', []);
-  const order = draftOrder || existing || {
-    id: orderId || `r${Date.now()}`,
-    clientId: presetClientId,
-    clientName: '',
-    address: '',
-    date: new Date().toISOString().split('T')[0],
-    time: '',
-    timeIn: '',
-    timeOut: '',
-    assignedTo: auth.getCurrentUser()?.name || '',
-    status: 'open',
-    jobType: '',
-    priority: 'Normal',
-    summary: '',
-    materials: '',
-    partsItems: [],
-    partsSummary: '',
-    labourHours: '',
-    notes: '',
-    photos: []
-  };
-
-  const activeOrderId = order.id;
-  const timeIn = order.timeIn || order.time || '';
-  const timeOut = order.timeOut || '';
-  const timeSpent = calculateTimeSpent(timeIn, timeOut);
-
-  content.innerHTML = `
-    <div class="wo-form">
-      <div class="wo-bar">
-        <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
-        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Repair Order'}</div>
-        <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
-      </div>
-
-      <div class="wo-sec">
-        <div class="wo-sec-hd" onclick="toggleAccordion(this)">
-          <span>Customer & Job Details</span>
-          <span class="wo-chev">▼</span>
-        </div>
-        <div class="wo-sec-bd" data-active-repair-id="${activeOrderId}">
-          <div class="form-row">
-            <label for="repair-client">Client</label>
-            <select id="repair-client" onchange="onRepairClientChange()">
-              <option value="">— Select client —</option>
-              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
-            </select>
-          </div>
-
-          <div class="form-row">
-            <label for="repair-address">Address</label>
-            <input id="repair-address" type="text" value="${escapeHtml(order.address || '')}">
-          </div>
-
-          <div class="wo-grid" style="margin-bottom:12px; border-radius:var(--radius-sm);">
-            <div class="wo-fld">
-              <div class="wo-fld-lbl">Date</div>
-              <input id="repair-date" class="wo-fld-inp" type="date" value="${escapeHtml(order.date || '')}">
-            </div>
-            <div class="wo-fld">
-              <div class="wo-fld-lbl">Assigned Tech</div>
-              <select id="repair-tech" class="wo-fld-inp">
-                ${Object.entries(auth.users)
-                  .sort((a, b) => a[1].name.localeCompare(b[1].name))
-                  .map(([id, user]) => `<option value="${user.name}" ${user.name === (order.assignedTo || '') ? 'selected' : ''}>${user.name}</option>`).join('')}
-              </select>
-            </div>
-            <div class="wo-fld">
-              <div class="wo-fld-lbl">Time In</div>
-              <input id="repair-time-in" class="wo-fld-inp" type="time" value="${escapeHtml(timeIn)}">
-            </div>
-            <div class="wo-fld">
-              <div class="wo-fld-lbl">Time Out</div>
-              <input id="repair-time-out" class="wo-fld-inp" type="time" value="${escapeHtml(timeOut)}">
-            </div>
-          </div>
-
-          <div id="repair-time-spent-hint" class="wo-hint">Time on site: ${escapeHtml(timeSpent || 'Enter both times to calculate duration.')}</div>
-
-          <div class="form-row">
-            <label for="repair-type">Work Order Type</label>
-            <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
-          </div>
-
-          <div class="form-row">
-            <label for="repair-priority">Priority</label>
-            <select id="repair-priority">
-              <option value="Low" ${order.priority === 'Low' ? 'selected' : ''}>Low</option>
-              <option value="Normal" ${order.priority === 'Normal' ? 'selected' : ''}>Normal</option>
-              <option value="High" ${order.priority === 'High' ? 'selected' : ''}>High</option>
-            </select>
-          </div>
-
-          <div class="form-row">
-            <label for="repair-status">Status</label>
-            <select id="repair-status">
-              <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
-              <option value="in-progress" ${order.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
-              <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div class="wo-sec">
-        <div class="wo-sec-hd" onclick="toggleAccordion(this)">
-          <span>Work Summary & Parts</span>
-          <span class="wo-chev">▼</span>
-        </div>
-        <div class="wo-sec-bd">
-          <div class="form-row">
-            <label for="repair-summary">Summary of Work</label>
-            <textarea id="repair-summary" placeholder="Describe the repair performed...">${escapeHtml(order.summary || '')}</textarea>
-          </div>
-
-          <div class="form-row">
-            <label>Parts & Equipment Installed</label>
-            ${renderRepairPartsBuilder(activeOrderId, order)}
-          </div>
-
-          <div class="form-row">
-            <label for="repair-materials">Additional Parts Notes</label>
-            <textarea id="repair-materials" placeholder="Materials used, part numbers not in catalog...">${escapeHtml(order.materials || '')}</textarea>
-          </div>
-
-          <div class="form-row">
-            <label for="repair-labour">Labour Hours</label>
-            <input id="repair-labour" type="number" step="0.25" value="${escapeHtml(order.labourHours || '')}">
-          </div>
-
-          <div class="form-row">
-            <label for="repair-notes">Internal Office Notes</label>
-            <textarea id="repair-notes" placeholder="Notes for billing or follow-up...">${escapeHtml(order.notes || '')}</textarea>
-          </div>
-        </div>
-      </div>
-
-      ${renderRepairPhotoSection(activeOrderId, order)}
-
-      <div class="card" style="margin:12px;">
-        <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save Changes</button>
-          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true)">Share Report</button>` : ''}
-        </div>
-      </div>
-    </div>
-  `;
-
-  onRepairClientChange();
-  attachRepairFormListeners();
-}
-
-function onRepairClientChange() {
-  const select = document.getElementById('repair-client');
-  const address = document.getElementById('repair-address');
-  const title = document.getElementById('repair-bar-title');
-  if (!select || !address) return;
-
-  const client = db.get('clients', []).find(item => item.id === select.value);
-  if (client) {
-    address.value = client.address || '';
-    if (title) title.textContent = client.name || 'Repair Order';
-  }
-}
-
-function collectRepairOrderFromForm(orderId = '') {
-  // Use a stable identifier if this is a brand new order being filled out
-  const formElement = document.getElementById('repair-client');
-  if (formElement && !orderId) {
-      // If we're in the form but don't have an ID yet, check if one was already assigned
-      // to the form session to avoid duplicates on every photo take/upload.
-      const existingIdField = document.querySelector('[data-active-repair-id]');
-      if (existingIdField) {
-          orderId = existingIdField.getAttribute('data-active-repair-id');
-      }
-  }
-
-  const existing = orderId ? getRepairOrders().find(item => item.id === orderId) : null;
-  const finalId = orderId || existing?.id || `r${Date.now()}`;
-
-  const clientId = document.getElementById('repair-client')?.value || '';
-  const client = db.get('clients', []).find(item => item.id === clientId);
-  const partItems = Array.from(document.querySelectorAll('.repair-part-row')).map(row => {
-    const category = row.querySelector('.repair-part-category')?.value || '';
-    const productSelect = row.querySelector('.repair-part-product');
-    const selectedOption = productSelect?.selectedOptions?.[0] || null;
-    const qty = row.querySelector('.repair-part-qty')?.value || '1';
-
-    return {
-      category,
-      partNumber: productSelect?.value || '',
-      product: selectedOption?.dataset.product || selectedOption?.textContent?.split(' — ')[0] || '',
-      qty,
-      unitPrice: selectedOption?.dataset.price || ''
-    };
-  }).filter(part => part.category || part.partNumber || part.product);
-
-  const timeIn = document.getElementById('repair-time-in')?.value || '';
-  const timeOut = document.getElementById('repair-time-out')?.value || '';
-
-  const photos = REPAIR_PHOTO_LABELS.map((_, index) => {
-    const preview = document.querySelector(`[data-repair-photo-index="${index}"]`);
-    return preview?.getAttribute('src') || existing?.photos?.[index] || '';
-  });
-
-  return {
-    id: finalId,
-    clientId,
-    clientName: client?.name || existing?.clientName || 'Unassigned Client',
-    address: document.getElementById('repair-address')?.value || '',
-    date: document.getElementById('repair-date')?.value || '',
-    time: timeIn,
-    timeIn,
-    timeOut,
-    assignedTo: document.getElementById('repair-tech')?.value || '',
-    status: document.getElementById('repair-status')?.value || 'open',
-    jobType: document.getElementById('repair-type')?.value || '',
-    priority: document.getElementById('repair-priority')?.value || 'Normal',
-    summary: document.getElementById('repair-summary')?.value || '',
-    materials: document.getElementById('repair-materials')?.value || '',
-    partsItems: partItems,
-    partsSummary: buildRepairPartsSummary(partItems),
-    labourHours: document.getElementById('repair-labour')?.value || '',
-    notes: document.getElementById('repair-notes')?.value || '',
-    photos
-  };
-}
-
-function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
-  const order = collectRepairOrderFromForm(orderId);
-  const orders = getRepairOrders();
-  const index = orders.findIndex(item => item.id === order.id);
-
-  if (index >= 0) {
-    orders[index] = order;
-  } else {
-    orders.unshift(order);
-  }
-
-  saveRepairOrders(orders);
-  showToast('Repair work order saved');
-
-  if (shareAfterSave) {
-    shareRepairPDF(order.id);
-    return;
-  }
-
-  router.renderWorkOrders();
-}
-
-
-function getImageDataUrl(url) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'Anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = reject;
-    img.src = url;
+/* ── PHOTOS ────────────────────────────────────────────────────── */
+const PHOTO_KEYS = ['before','after','extra1','extra2','extra3','extra4','extra5'];
+let WO_PHOTOS = {};
+function resetPhotos(wo) { WO_PHOTOS={}; PHOTO_KEYS.forEach(k=>{WO_PHOTOS[k]=(wo&&wo.photos&&wo.photos[k])||null;}); }
+function compressImage(file) {
+  return new Promise(resolve=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const img=new Image();
+      img.onload=()=>{
+        const MAX=1200;let w=img.width,h=img.height;
+        if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}
+        const c=document.createElement('canvas');c.width=w;c.height=h;
+        c.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(c.toDataURL('image/jpeg',0.72));
+      };img.src=e.target.result;
+    };reader.readAsDataURL(file);
   });
 }
-
-async function shareRepairPDF(orderId) {
-  const order = getRepairOrders().find(item => item.id === orderId);
-  if (!order || !window.jspdf) {
-    showToast('Unable to generate PDF');
-    return;
-  }
-
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF();
-  const filename = `OASIS_Repair_Work_Order_${(order.clientName || 'Client').replace(/[^a-z0-9]/gi, '_')}_${order.date || 'Date'}.pdf`;
-
-  const navy = [13, 43, 69];
-  const gold = [201, 168, 124];
-  const lightBeige = [248, 245, 241];
-
-  let logoData = null;
-  try {
-    logoData = await getImageDataUrl('oasis-logo.png');
-  } catch (e) {
-    console.warn('Logo load failed', e);
-  }
-
-  let y = 0;
-
-  const renderHeader = () => {
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, 210, 25, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, 25, 210, 1, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
+function handlePhotoUpload(key,input) {
+  const file=input.files[0];if(!file)return;
+  compressImage(file).then(d=>{
+    WO_PHOTOS[key]=d;
+    if(woState.view==='form' && woState.id){
+      const current=DB.getWorkOrder(woState.id);
+      if(current) DB.updateWorkOrder(woState.id,{photos:{...(current.photos||{}),...WO_PHOTOS}});
     }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('times', 'bold');
-    doc.setFontSize(22);
-    doc.text('O A S I S', 32, 17);
-
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('REPAIR WORK ORDER', 195, 14, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.setTextColor(...gold);
-    doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
-
-    return 35;
-  };
-
-  const renderFooter = () => {
-    const footerY = 278;
-    doc.setFillColor(...navy);
-    doc.rect(0, footerY, 210, 20, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, footerY, 210, 0.5, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(12);
-    doc.setFont('times', 'bold');
-    doc.text('O A S I S', 30, footerY + 12);
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(180, 180, 180);
-    doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
-    doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
-  };
-
-  y = renderHeader();
-
-  // Info Grid
-  doc.setFillColor(...lightBeige);
-  doc.rect(10, y, 190, 42, 'F');
-
-  let gridY = y + 7;
-  const col1 = 15;
-  const col2 = 110;
-
-  const addField = (label, value, x, currentY) => {
-    doc.setFontSize(6);
-    doc.setTextColor(120, 120, 120);
-    doc.setFont('helvetica', 'bold');
-    doc.text(label.toUpperCase(), x, currentY);
-    doc.setFontSize(9);
-    doc.setTextColor(...navy);
-    doc.setFont('helvetica', 'normal');
-    doc.text(String(value || '—'), x, currentY + 5);
-  };
-
-  addField('Customer', order.clientName, col1, gridY);
-  addField('Date', order.date, col2, gridY);
-  gridY += 12;
-  addField('Address', order.address, col1, gridY);
-  addField('Job Type', order.jobType, col2, gridY);
-  gridY += 12;
-  addField('Assigned Tech', order.assignedTo, col1, gridY);
-  addField('Status / Priority', `${order.status} / ${order.priority}`, col2, gridY);
-  gridY += 12;
-  addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
-  addField('Labour Hours', order.labourHours || '—', col2, gridY);
-
-  y += 50;
-
-  // Work Summary
-  doc.setFillColor(...navy);
-  doc.rect(10, y, 190, 7, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'bold');
-  doc.text('WORK SUMMARY', 15, y + 5);
-  y += 10;
-
-  doc.setTextColor(60, 60, 60);
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  const summaryLines = doc.splitTextToSize(order.summary || 'No summary provided.', 180);
-  doc.text(summaryLines, 15, y);
-  y += (summaryLines.length * 5) + 5;
-
-  // Parts Table
-  if (order.partsItems && order.partsItems.length > 0) {
-    doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text('PARTS & EQUIPMENT INSTALLED', 15, y + 5);
-    doc.text('QTY', 170, y + 5);
-    y += 7;
-
-    order.partsItems.forEach((item, i) => {
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 248, 248);
-        doc.rect(10, y, 190, 6, 'F');
-      }
-      doc.setTextColor(...navy);
-      doc.text(`${item.category}: ${item.product}` || 'Unknown Part', 15, y + 4.5);
-      doc.text(String(item.qty || 1), 170, y + 4.5);
-      y += 6;
-    });
-    y += 5;
-  }
-
-  // Office Notes
-  if (order.notes) {
-    doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text('INTERNAL OFFICE NOTES', 15, y + 5);
-    y += 10;
-    doc.setTextColor(60, 60, 60);
-    const notesLines = doc.splitTextToSize(order.notes, 180);
-    doc.text(notesLines, 15, y);
-    y += (notesLines.length * 5) + 5;
-  }
-
-  // Photos (Compact)
-  const photos = normalizeRepairPhotos(order.photos || []);
-  if (photos.some(p => p)) {
-    doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text('REPAIR PHOTOS', 15, y + 5);
-    y += 10;
-
-    const pW = 42;
-    const pH = 32;
-    let pX = 15;
-    photos.forEach((p, i) => {
-      if (p && i < 4) { // Max 4 photos to fit on one page
-        try {
-          doc.addImage(p, 'JPEG', pX, y, pW, pH);
-          doc.setFontSize(6);
-          doc.setTextColor(150, 150, 150);
-          doc.text(REPAIR_PHOTO_LABELS[i], pX, y + pH + 4);
-        } catch(e) {}
-        pX += 48;
-      }
-    });
-  }
-
-  renderFooter();
-  sharePDF(doc, filename);
-}
-
-function toggleAccordion(header) {
-  const body = header.nextElementSibling;
-  const chev = header.querySelector('.wo-chev');
-  if (!body) return;
-
-  const isCollapsed = body.classList.contains('collapsed');
-  if (isCollapsed) {
-    body.classList.remove('collapsed');
-    if (chev) chev.textContent = '▼';
-  } else {
-    body.classList.add('collapsed');
-    if (chev) chev.textContent = '▶';
-  }
-}
-
-function deleteRepairOrder(orderId) {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can delete work orders');
-    return;
-  }
-  if (!confirm('Delete this repair work order?')) return;
-  saveRepairOrders(getRepairOrders().filter(order => order.id !== orderId));
-  showToast('Repair work order deleted');
-  router.renderWorkOrders();
-}
-
-function deleteWorkOrder(orderId) {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can delete chem sheets');
-    return;
-  }
-  if (!confirm('Delete this chem sheet?')) return;
-  const orders = db.get('workorders', []).filter(o => o.id !== orderId);
-  db.set('workorders', orders);
-  showToast('Chem sheet deleted');
-  router.renderWorkOrders();
-}
-
-// ==========================================
-// UTILITIES
-// ==========================================
-function escapeHtml(value = '') {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function showToast(message) {
-  const toast = document.getElementById('toast');
-  toast.textContent = message;
-  toast.classList.remove('hidden');
-  setTimeout(() => toast.classList.add('hidden'), 3000);
-}
-
-function defaultChemReadings() {
-  return {
-    ph: '',
-    chlorine: '',
-    alkalinity: '',
-    calcium: '',
-    cya: '',
-    salt: '',
-    temp: '',
-    tds: '',
-    phosphates: '',
-    borates: ''
-  };
-}
-
-function defaultChemicalAdditions() {
-  return {
-    tabs: '',
-    shock: '',
-    muriaticAcid: '',
-    sodaAsh: '',
-    sodiumBicarb: '',
-    calcium: '',
-    stabilizer: '',
-    salt: '',
-    phosphateRemover: '',
-    algaecide: '',
-    other: ''
-  };
-}
-
-function getChemicalAdditionLabel(key) {
-  const labels = {
-    liquidChlorine: 'Liquid Chlorine',
-    tabs: 'Tabs',
-    shock: 'Shock / Oxidizer',
-    muriaticAcid: 'Muriatic Acid',
-    sodaAsh: 'Soda Ash',
-    sodiumBicarb: 'Sodium Bicarb',
-    calcium: 'Calcium Increaser',
-    stabilizer: 'Stabilizer',
-    salt: 'Salt',
-    phosphateRemover: 'Phosphate Remover',
-    algaecide: 'Algaecide',
-    other: 'Other / Notes'
-  };
-
-  return labels[key] || key;
-}
-
-function getChemicalAdditionEntries(section = {}) {
-  const knownKeys = Object.keys(defaultChemicalAdditions());
-  return knownKeys
-    .filter(key => section[key] !== '' && section[key] !== null && section[key] !== undefined)
-    .map(key => `${getChemicalAdditionLabel(key)}: ${section[key]}`);
-}
-
-function calculateTimeSpent(timeIn = '', timeOut = '') {
-  if (!timeIn || !timeOut) return '';
-
-  const [startHour, startMinute] = String(timeIn).split(':').map(Number);
-  const [endHour, endMinute] = String(timeOut).split(':').map(Number);
-  if (![startHour, startMinute, endHour, endMinute].every(Number.isFinite)) return '';
-
-  let start = (startHour * 60) + startMinute;
-  let end = (endHour * 60) + endMinute;
-  if (end < start) end += 24 * 60;
-
-  const totalMinutes = end - start;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-
-  if (hours && minutes) return `${hours}h ${minutes}m`;
-  if (hours) return `${hours}h`;
-  return `${minutes}m`;
-}
-
-function calculateLSI(readings = {}) {
-  const ph = parseFloat(readings.ph);
-  const alkalinity = parseFloat(readings.alkalinity);
-  const calcium = parseFloat(readings.calcium);
-  const tempF = parseFloat(readings.temp);
-  const cya = parseFloat(readings.cya) || 0;
-  const borates = parseFloat(readings.borates) || 0;
-  const tds = Math.max(parseFloat(readings.tds) || 1000, 100);
-
-  if (![ph, alkalinity, calcium, tempF].every(Number.isFinite)) {
-    return {
-      score: null,
-      formatted: '—',
-      label: 'Need pH, alkalinity, calcium and temp',
-      state: 'na',
-      badgeClass: 'lsi-bdg-na',
-      boxClass: 'lsi-na',
-      position: 50,
-      adjustedAlkalinity: null
-    };
-  }
-
-  const adjustedAlkalinity = Math.max(alkalinity - (cya * 0.33) - (borates * 0.1), 1);
-  const tempK = ((tempF - 32) * 5 / 9) + 273.15;
-  const aFactor = (Math.log10(tds) - 1) / 10;
-  const bFactor = -13.12 * Math.log10(tempK) + 34.55;
-  const cFactor = Math.log10(Math.max(calcium, 1)) - 0.4;
-  const dFactor = Math.log10(adjustedAlkalinity);
-  const saturationPH = (9.3 + aFactor + bFactor) - (cFactor + dFactor);
-  const score = ph - saturationPH;
-
-  let label = 'Balanced';
-  let state = 'ok';
-  let badgeClass = 'lsi-bdg-ok';
-  let boxClass = 'lsi-ok';
-
-  if (score < -0.6) {
-    label = 'Corrosive';
-    state = 'bad';
-    badgeClass = 'lsi-bdg-bad';
-    boxClass = 'lsi-bad';
-  } else if (score < -0.3) {
-    label = 'Slightly Low';
-    state = 'warn';
-    badgeClass = 'lsi-bdg-warn';
-    boxClass = 'lsi-warn';
-  } else if (score > 0.6) {
-    label = 'Scale Forming';
-    state = 'bad';
-    badgeClass = 'lsi-bdg-bad';
-    boxClass = 'lsi-bad';
-  } else if (score > 0.3) {
-    label = 'Slightly High';
-    state = 'warn';
-    badgeClass = 'lsi-bdg-warn';
-    boxClass = 'lsi-warn';
-  }
-
-  const normalized = Math.max(-1, Math.min(1, score));
-
-  return {
-    score,
-    formatted: score > 0 ? `+${score.toFixed(2)}` : score.toFixed(2),
-    label,
-    state,
-    badgeClass,
-    boxClass,
-    position: ((normalized + 1) / 2) * 100,
-    adjustedAlkalinity: adjustedAlkalinity.toFixed(0)
-  };
-}
-
-function renderLsiBox(title, readings = {}) {
-  const result = calculateLSI(readings);
-
-  if (result.score === null) {
-    return `<div class="lsi-box lsi-na"><strong>${escapeHtml(title)} LSI:</strong> ${escapeHtml(result.label)}</div>`;
-  }
-
-  return `
-    <div class="lsi-box ${result.boxClass}">
-      <div class="lsi-main">
-        <div>
-          <div class="lsi-val">${escapeHtml(result.formatted)}</div>
-          <div class="lsi-name">${escapeHtml(title)} LSI</div>
-        </div>
-        <div class="lsi-badge ${result.badgeClass}">${escapeHtml(result.label)}</div>
-      </div>
-      <div class="lsi-track"><span class="lsi-dot" style="left:${result.position}%;"></span></div>
-      <div class="lsi-labels"><span>Corrosive</span><span>Ideal</span><span>Scaling</span></div>
-      <div class="lsi-ideal">Ideal range: -0.30 to +0.30 • Adjusted alkalinity: ${escapeHtml(result.adjustedAlkalinity)} ppm</div>
-    </div>
-  `;
-}
-
-function renderChemDosingSummary(order) {
-  const pool = { ...defaultChemReadings(), ...(order.readings?.pool || {}) };
-  const spa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
-  const hasAnyInput = [...Object.values(pool), ...Object.values(spa)].some(value => value !== '' && value !== null && value !== undefined);
-
-  if (!hasAnyInput) {
-    return `
-      <div class="dosing-empty">
-        <div class="empty-icon">🧪</div>
-        <div>Enter pool or spa readings to calculate LSI and restore the full original chem guidance.</div>
-      </div>
-    `;
-  }
-
-  const sourceReadings = Object.values(pool).some(value => value !== '' && value !== null && value !== undefined) ? pool : spa;
-  const recommendations = Array.isArray(order.chemicals) && order.chemicals.length
-    ? order.chemicals
-    : workOrderManager.calculateDosing(sourceReadings);
-
-  return `
-    <div class="wo-grid" style="margin-bottom:12px;">
-      ${renderLsiBox('Pool', pool)}
-      ${renderLsiBox('Spa', spa)}
-    </div>
-    ${recommendations.length ? `
-      <div class="dosing-hdr">Recommended additions based on current readings</div>
-      ${recommendations.map(chem => {
-        const reason = String(chem.reason || '');
-        const tone = reason.toLowerCase().includes('low') ? 'dosing-low' : 'dosing-high';
-        return `
-          <div class="dosing-item ${tone}">
-            <div class="dosing-top">
-              <strong>${escapeHtml(chem.chemical || '')}</strong>
-              <span class="dosing-add">${escapeHtml(chem.amount || '')}</span>
-            </div>
-            <div class="dosing-note">${escapeHtml(reason)}</div>
-          </div>
-        `;
-      }).join('')}
-    ` : `<div class="dosing-all-ok">Water balance looks in range. No immediate additions recommended.</div>`}
-  `;
-}
-
-const CHEM_PHOTO_LABELS = ['Before', 'After', 'Photo 1', 'Photo 2', 'Photo 3', 'Photo 4', 'Photo 5'];
-const REPAIR_PHOTO_LABELS = ['Before', 'After', 'Equipment', 'Part', 'Repair Area', 'Photo 5', 'Photo 6'];
-
-function normalizeChemPhotos(photos = []) {
-  const source = Array.isArray(photos) ? photos : [];
-  return CHEM_PHOTO_LABELS.map((_, index) => source[index] || '');
-}
-
-function renderChemPhotoSlot(orderId, label, photo, index) {
-  const safeLabel = escapeHtml(label);
-  return `
-    <div class="photo-slot" id="photo-slot-${index}">
-      <div class="photo-slot-lbl">${safeLabel}</div>
-      <div class="photo-preview-box">
-        ${photo ? `
-          <img class="photo-thumb" src="${photo}" alt="${safeLabel}">
-          <button type="button" class="photo-remove" onclick="removeChemPhoto('${orderId}', ${index})" aria-label="Remove ${safeLabel} photo">&times;</button>
-        ` : `<div class="photo-add-btn">Add ${safeLabel} photo</div>`}
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('chem', '${orderId}', ${index})">Take Photo</button>
-        <label class="btn btn-secondary btn-sm" for="photo-gallery-${index}">Choose Photo</label>
-      </div>
-      <input id="photo-gallery-${index}" name="photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleChemPhotoUpload('${orderId}', ${index}, event)">
-    </div>
-  `;
-}
-
-function renderChemPhotoSection(order) {
-  const photos = normalizeChemPhotos(order.photos);
-  const beforeAfter = CHEM_PHOTO_LABELS.slice(0, 2)
-    .map((label, index) => renderChemPhotoSlot(order.id, label, photos[index], index))
-    .join('');
-  const extras = CHEM_PHOTO_LABELS.slice(2)
-    .map((label, offset) => renderChemPhotoSlot(order.id, label, photos[offset + 2], offset + 2))
-    .join('');
-
-  return `
-    <div class="wo-sec">
-      <div class="wo-sec-hd wo-photo-hd" onclick="toggleAccordion(this)">
-        <span>Service Photos</span>
-        <span class="wo-chev">▼</span>
-      </div>
-      <div class="wo-sec-bd">
-        <div class="photo-ba-row">${beforeAfter}</div>
-        <div class="photo-extra-grid">${extras}</div>
-      </div>
-    </div>
-  `;
-}
-
-/**
- * Native Camera Implementation
- * Bypasses HTML inputs to force camera launch on Android
- */
-async function takeNativePhoto(type, orderId, slotIndex) {
-  try {
-    if (typeof Capacitor === 'undefined' || !Capacitor.Plugins.Camera) {
-      showToast('Camera plugin not available');
-      return;
-    }
-
-    const image = await Capacitor.Plugins.Camera.getPhoto({
-      quality: 80,
-      allowEditing: false,
-      resultType: 'dataUrl',
-      source: 'CAMERA' // Forces camera specifically
-    });
-
-    if (!image || !image.dataUrl) return;
-
-    if (type === 'chem') {
-      const order = collectWorkOrderForm(orderId);
-      if (!order) return;
-      const photos = normalizeChemPhotos(order.photos);
-      photos[slotIndex] = image.dataUrl;
-      order.photos = photos;
-      workOrderManager.saveOrder(order);
-      const slot = document.getElementById(`photo-slot-${slotIndex}`);
-      if (slot) {
-        slot.outerHTML = renderChemPhotoSlot(order.id, CHEM_PHOTO_LABELS[slotIndex], image.dataUrl, slotIndex);
-      }
-      showToast('Photo added');
-    } else {
-      const order = collectRepairOrderFromForm(orderId);
-      if (!order) return;
-
-      const photos = normalizeRepairPhotos(order.photos);
-      photos[slotIndex] = image.dataUrl;
-      order.photos = photos;
-
-      // Persist immediately
-      const orders = getRepairOrders();
-      const idx = orders.findIndex(o => o.id === order.id);
-      if (idx >= 0) {
-        orders[idx] = order;
-      } else {
-        orders.unshift(order);
-      }
-      saveRepairOrders(orders);
-
-      const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
-
-      // Update DOM with new ID if it was previously empty
-      if (!orderId) {
-          const container = document.querySelector('[data-active-repair-id]');
-          if (container) container.setAttribute('data-active-repair-id', order.id);
-      }
-
-      if (slot) {
-        const label = REPAIR_PHOTO_LABELS[slotIndex];
-        slot.outerHTML = renderRepairPhotoSlot(order.id, label, image.dataUrl, slotIndex);
-        showToast('Repair photo added');
-      } else {
-        renderRepairOrderForm(order.id, '', order);
-        showToast('Repair photo added');
-      }
-    }
-  } catch (error) {
-    console.error('Native camera error:', error);
-    if (error.message !== 'User cancelled photos app') {
-      showToast('Unable to open camera');
-    }
-  }
-}
-
-function resizeImageForStorage(file, maxDimension = 1280, quality = 0.78) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onload = event => {
-      const image = new Image();
-      image.onload = () => {
-        let { width, height } = image;
-        const scale = Math.min(1, maxDimension / Math.max(width, height));
-        width = Math.max(1, Math.round(width * scale));
-        height = Math.max(1, Math.round(height * scale));
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-
-        const context = canvas.getContext('2d');
-        context.fillStyle = '#ffffff';
-        context.fillRect(0, 0, width, height);
-        context.drawImage(image, 0, 0, width, height);
-
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-
-      image.onerror = () => resolve(event.target?.result || '');
-      image.src = event.target?.result || '';
-    };
-
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+    const p=document.getElementById(`photo-preview-${key}`);
+    if(p)p.innerHTML=`<img src="${d}" class="photo-thumb" onclick="viewPhoto('${key}')"><button class="photo-remove" onclick="removePhoto('${key}')">&times;</button>`;
+    input.value='';
+    showToast('Photo attached ✓');
   });
 }
-
-async function handleChemPhotoUpload(orderId, slotIndex, event) {
-  const file = event?.target?.files?.[0];
-  if (!file) return;
-
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Chem sheet not found');
-    return;
+function removePhoto(key) {
+  WO_PHOTOS[key]=null;
+  if(woState.view==='form' && woState.id){
+    const current=DB.getWorkOrder(woState.id);
+    if(current){
+      const updatedPhotos={...(current.photos||{})};
+      delete updatedPhotos[key];
+      DB.updateWorkOrder(woState.id,{photos:updatedPhotos});
+    }
   }
+  const p=document.getElementById(`photo-preview-${key}`);if(p)p.innerHTML=photoPlaceholder(key);
+  const i=document.getElementById(`photo-input-${key}`);if(i)i.value='';
+  const c=document.getElementById(`photo-camera-${key}`);if(c)c.value='';
+}
+function viewPhoto(key) {
+  const src=WO_PHOTOS[key];if(!src)return;
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  ov.onclick=()=>ov.remove();
+  ov.innerHTML=`<img src="${src}" style="max-width:100%;max-height:100%;object-fit:contain;">`;
+  document.body.appendChild(ov);
+}
+function photoPlaceholder(key){const l=key==='before'?'Before':key==='after'?'After':'Photo';return `<div class="photo-picker-options"><div class="photo-picker-title">${l}</div><div class="photo-picker-actions"><label class="photo-source-btn" for="photo-camera-${key}">📷 Camera</label><label class="photo-source-btn" for="photo-input-${key}">🖼️ Gallery</label></div></div>`;}
+function photoSlot(key,label){const d=WO_PHOTOS[key];return`<div class="photo-slot"><div class="photo-slot-lbl">${label}</div><div class="photo-preview-box" id="photo-preview-${key}">${d?`<img src="${d}" class="photo-thumb" onclick="viewPhoto('${key}')"><button class="photo-remove" onclick="removePhoto('${key}')">&times;</button>`:photoPlaceholder(key)}</div><input type="file" accept="image/*" capture="environment" id="photo-camera-${key}" class="photo-file-inp" onchange="handlePhotoUpload('${key}',this)"><input type="file" accept="image/*" id="photo-input-${key}" class="photo-file-inp" onchange="handlePhotoUpload('${key}',this)"></div>`;}
+
+/* ── PDF DOWNLOAD ────────────────────────────────────────────── */
+function presentPDFBlob(blob, fileName) {
+  const blobUrl = URL.createObjectURL(blob);
 
   try {
-    showToast('Processing photo...');
-    const dataUrl = await resizeImageForStorage(file);
-    const photos = normalizeChemPhotos(order.photos);
-    photos[slotIndex] = dataUrl;
-    order.photos = photos;
-
-    // Save to database
-    workOrderManager.saveOrder(order);
-
-    // Update ONLY the photo slot in the UI to prevent blank screen/data loss
-    const slot = document.getElementById(`photo-slot-${slotIndex}`);
-    if (slot) {
-      const label = CHEM_PHOTO_LABELS[slotIndex];
-      slot.outerHTML = renderChemPhotoSlot(orderId, label, dataUrl, slotIndex);
-    } else {
-      router.navigate('workorders');
-    }
-
-    showToast('Photo added');
-  } catch (error) {
-    console.error('Photo upload failed', error);
-    showToast('Unable to add photo');
-  } finally {
-    if (event?.target) event.target.value = '';
-  }
-}
-
-function removeChemPhoto(orderId, slotIndex) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Chem sheet not found');
-    return;
-  }
-
-  const photos = normalizeChemPhotos(order.photos);
-  photos[slotIndex] = '';
-  order.photos = photos;
-
-  // Save to database
-  workOrderManager.saveOrder(order);
-
-  // Update ONLY the photo slot in the UI
-  const slot = document.getElementById(`photo-slot-${slotIndex}`);
-  if (slot) {
-    const label = CHEM_PHOTO_LABELS[slotIndex];
-    slot.outerHTML = renderChemPhotoSlot(orderId, label, '', slotIndex);
-  } else {
-    router.navigate('workorders');
-  }
-
-  showToast('Photo removed');
-}
-
-async function shareFile(base64Data, filename, contentType = 'application/octet-stream') {
-  try {
-    if (typeof Capacitor === 'undefined') {
-      throw new Error('Capacitor is not defined');
-    }
-
-    const { Filesystem, Share } = Capacitor.Plugins;
-    if (!Filesystem || !Share) {
-      throw new Error('Capacitor Plugins (Filesystem or Share) not available');
-    }
-
-    const saveResult = await Filesystem.writeFile({
-      path: filename,
-      data: base64Data,
-      directory: 'CACHE'
-    });
-
-    await Share.share({
-      title: 'OASIS Report',
-      text: `OASIS Service Report: ${filename}`,
-      url: saveResult.uri,
-    });
-  } catch (error) {
-    console.warn('Native sharing failed, falling back to browser download:', error);
-    // Fallback for web/unsupported
     const link = document.createElement('a');
-    link.href = `data:${contentType};base64,${base64Data}`;
-    link.download = filename;
+    link.href = blobUrl;
+    link.download = fileName;
+    link.rel = 'noopener';
+    link.style.display = 'none';
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
-    showToast('Report downloaded to device');
+    showToast('📄 Saving PDF to device');
+
+    setTimeout(() => {
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    }, 1500);
+    return;
+  } catch (err) {
+    console.warn('Direct PDF download fallback:', err);
   }
+
+  window.open(blobUrl, '_blank', 'noopener');
+  showToast('📄 PDF opened — use the browser save button');
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
 }
 
-async function sharePDF(doc, filename) {
-  const b64 = doc.output('datauristring').split(',')[1];
-  await shareFile(b64, filename, 'application/pdf');
-}
-
-async function exportRepairToExcel(orderId) {
-  const order = collectRepairOrderFromForm(orderId);
-  if (!order) {
-    showToast('Repair work order not found');
+async function savePDFReport(id, mode = 'save') {
+  const wo = DB.getWorkOrder(id);
+  if (!wo) {
+    showToast('Save this chem sheet first');
+    return;
+  }
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+    showToast('PDF library not loaded');
     return;
   }
 
-  showToast('Generating Excel report...');
+  const cust = DB.getCustomer(wo.customerId);
+  const tech = DB.getTechnician(wo.technicianId);
+  const p = wo.pool || {}, s = wo.spa || {};
+  const activePhotos = (woState.view === 'form' && woState.id === id)
+    ? { ...(wo.photos || {}), ...WO_PHOTOS }
+    : (wo.photos || {});
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
-  try {
-    const response = await fetch('WO_TEMPLATE.xlsm');
-    const arrayBuffer = await response.arrayBuffer();
+  const safe = (val, unit = '') => (val && String(val).trim()) ? `${val}${unit}` : '—';
+  const addeds = (o) => {
+    const items = [];
+    if (o.tabs) items.push(`Tabs: ${o.tabs} ea`);
+    if (o.hypo) items.push(`Hypo-Chlorite: ${o.hypo} lbs`);
+    if (o.acid) items.push(`Acid: ${o.acid} gal`);
+    if (o.sodaAsh) items.push(`Soda Ash: ${o.sodaAsh} lbs`);
+    if (o.bicarb) items.push(`Na Bicarbonate: ${o.bicarb} lbs`);
+    if (o.conditioner) items.push(`Conditioner: ${o.conditioner} lbs`);
+    if (o.bromine) items.push(`Bromine: ${o.bromine} ea`);
+    if (o.phosphateOz) items.push(`Phosphate Remover: ${o.phosphateOz} oz`);
+    if (o.saltBag) items.push(`Salt: ${o.saltBag} bag`);
+    if (o.algaecide) items.push(`Algaecide: ${o.algaecide} oz`);
+    if (o.clarifier) items.push(`Clarifier: ${o.clarifier} oz`);
+    return items.length ? items : ['None added'];
+  };
 
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(arrayBuffer);
-
-    const ws = workbook.getWorksheet('WORK SHEET');
-    if (!ws) {
-      console.error('Worksheet "WORK SHEET" not found. Available sheets:', workbook.worksheets.map(s => s.name).join(', '));
-      throw new Error('Worksheet "WORK SHEET" not found in template. Please ensure the template contains a sheet named exactly "WORK SHEET".');
-    }
-
-    // Populate Basic Info
-    ws.getCell('C3').value = `${order.clientName || ''}\n${order.address || ''}`;
-    ws.getCell('G3').value = order.date || '';
-
-    // Work Description (split across rows 5-8 if needed)
-    const summary = order.summary || '';
-    ws.getCell('B5').value = summary;
-
-    // Notes for Billing
-    let partsStr = (order.partsItems || []).map(p => `${p.qty}x ${p.product}`).join(', ');
-    if (order.materials) partsStr += '\n' + order.materials;
-    ws.getCell('B10').value = partsStr;
-
-    // Notes for Tech
-    ws.getCell('B12').value = order.notes || '';
-
-    // Work Log
-    ws.getCell('B16').value = order.date || '';
-    ws.getCell('C16').value = order.timeIn || '';
-    ws.getCell('D16').value = order.assignedTo || '';
-    ws.getCell('G16').value = parseFloat(order.labourHours) || 0;
-
-    // Generate buffer
-    const buffer = await workbook.xlsx.writeBuffer();
-
-    // Robust binary to base64 conversion
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = btoa(binary);
-
-    const safeClient = (order.clientName || 'Client').replace(/[^a-z0-9]+/gi, '_');
-    const filename = `OASIS_WO_${safeClient}_${order.date || 'repair'}.xlsm`;
-
-    await shareFile(base64, filename, 'application/vnd.ms-excel.sheet.macroEnabled.12');
-    showToast('Excel report ready');
-  } catch (error) {
-    console.error('Excel export failed:', error);
-    showToast('Excel export failed');
-  }
-}
-
-function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATERSHAPE DESIGN') {
-  const navy = [13, 43, 69];
-  const gold = [201, 168, 124];
-  const white = [255, 255, 255];
-
-  // Header
-  doc.setFillColor(...navy);
+  doc.setFillColor(10, 30, 46);
   doc.rect(0, 0, 210, 28, 'F');
-  doc.setFillColor(...gold);
-  doc.rect(0, 28, 210, 1.5, 'F');
-
-  // Logo Placeholder / Text
-  doc.setTextColor(...white);
+  doc.setTextColor(212, 201, 187);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(22);
-  doc.text('O A S I S', 45, 18);
-
-  // Title
-  doc.setFontSize(14);
-  doc.text(title.toUpperCase(), 190, 16, { align: 'right' });
+  doc.text('OASIS', 15, 13);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.setTextColor(...gold);
-  doc.text(subtitle.toUpperCase(), 190, 22, { align: 'right' });
-
-  return 40;
-}
-
-function applyOasisPdfFooter(doc) {
-  const navy = [13, 43, 69];
-  const gold = [201, 168, 124];
-  const white = [255, 255, 255];
-  const y = 275;
-
-  doc.setFillColor(...navy);
-  doc.rect(0, y, 210, 22, 'F');
-
-  doc.setTextColor(...white);
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text('O A S I S', 40, y + 10);
-  doc.setFontSize(7);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(150, 150, 150);
-  doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 40, y + 15);
-
-  doc.setTextColor(...white);
-  doc.text('Harbour Walk, 2nd Floor — Grand Cayman, KY1-1001', 190, y + 8, { align: 'right' });
-  doc.text('+1 345-945-7665 · oasis.ky', 190, y + 13, { align: 'right' });
-  doc.text(`Generated ${new Date().toLocaleDateString()}`, 190, y + 18, { align: 'right' });
-}
-
-
-function getRepairCatalogData() {
-  return window.TECH_WO_CATALOG_DATA || {};
-}
-
-function getRepairCatalogCategories() {
-  return Object.keys(getRepairCatalogData());
-}
-
-function getRepairCatalogItems(category = '') {
-  const catalog = getRepairCatalogData();
-  return Array.isArray(catalog[category]) ? catalog[category] : [];
-}
-
-function normalizeRepairPartItems(parts = []) {
-  const source = Array.isArray(parts) && parts.length ? parts : [{}];
-  return source.map(part => ({
-    category: part.category || '',
-    partNumber: part.partNumber || '',
-    product: part.product || '',
-    qty: part.qty || '1',
-    unitPrice: part.unitPrice || ''
-  }));
-}
-
-function buildRepairPartsSummary(parts = []) {
-  return normalizeRepairPartItems(parts)
-    .filter(part => part.category || part.partNumber || part.product)
-    .map(part => {
-      const qty = part.qty || '1';
-      const name = part.product || part.partNumber || 'Part';
-      const category = part.category ? `${part.category}: ` : '';
-      const partNumber = part.partNumber ? ` (${part.partNumber})` : '';
-      const price = part.unitPrice ? ` @ $${Number(part.unitPrice).toFixed(2)}` : '';
-      return `${qty} × ${category}${name}${partNumber}${price}`;
-    })
-    .join('\n');
-}
-
-function renderRepairPartRow(orderId, part, index) {
-  const categories = getRepairCatalogCategories();
-  const items = getRepairCatalogItems(part.category);
-  const selectedItem = items.find(item => item.partNumber === part.partNumber)
-    || items.find(item => item.product === part.product)
-    || null;
-
-  return `
-    <div class="repair-part-row" data-index="${index}" style="margin-bottom:10px;">
-      <div class="wo-grid" style="border-radius:var(--radius-sm); margin-bottom:6px;">
-        <div class="wo-fld">
-          <div class="wo-fld-lbl">Category</div>
-          <select class="repair-part-category" onchange="refreshRepairOrderBuilder('${orderId || ''}')">
-            <option value="">— Select category —</option>
-            ${categories.map(category => `
-              <option value="${escapeHtml(category)}" ${category === part.category ? 'selected' : ''}>${escapeHtml(category)}</option>
-            `).join('')}
-          </select>
-        </div>
-
-        <div class="wo-fld">
-          <div class="wo-fld-lbl">Equipment / Part</div>
-          <select class="repair-part-product" onchange="refreshRepairOrderBuilder('${orderId || ''}')">
-            <option value="">— Select equipment —</option>
-            ${items.map(item => `
-              <option value="${escapeHtml(item.partNumber)}"
-                data-product="${escapeHtml(item.product)}"
-                data-price="${escapeHtml(String(item.price ?? ''))}"
-                ${item.partNumber === part.partNumber ? 'selected' : ''}>
-                ${escapeHtml(item.product)}${item.partNumber ? ` — ${escapeHtml(item.partNumber)}` : ''}
-              </option>
-            `).join('')}
-          </select>
-        </div>
-
-        <div class="wo-fld">
-          <div class="wo-fld-lbl">Quantity</div>
-          <input class="wo-fld-inp repair-part-qty" type="number" min="1" step="1" value="${escapeHtml(String(part.qty || '1'))}" oninput="updateRepairPartRowDetails(this)">
-        </div>
-
-        <div class="wo-fld">
-          <div class="wo-fld-lbl">Part Details</div>
-          <div class="repair-part-details" style="font-size:12px; color:var(--gray-600); line-height:1.5; min-height:38px;">
-            ${selectedItem ? `${escapeHtml(selectedItem.partNumber || '')}${selectedItem.price ? ` • $${Number(selectedItem.price).toFixed(2)}` : ''}` : 'Choose a category and equipment item.'}
-          </div>
-          <button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="removeRepairPartRow('${orderId || ''}', ${index})">Remove</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function updateRepairPartRowDetails(input) {
-  const row = input.closest('.repair-part-row');
-  const productSelect = row.querySelector('.repair-part-product');
-  const detailsDiv = row.querySelector('.repair-part-details');
-  const qty = parseInt(input.value) || 1;
-
-  const selectedOption = productSelect.selectedOptions[0];
-  if (selectedOption && selectedOption.value) {
-    const partNumber = selectedOption.value;
-    const price = parseFloat(selectedOption.dataset.price);
-    if (!isNaN(price)) {
-      const total = (price * qty).toFixed(2);
-      detailsDiv.innerHTML = `${escapeHtml(partNumber)} • $${price.toFixed(2)}<br><b>Line Total: $${total}</b>`;
-    } else {
-      detailsDiv.textContent = partNumber;
-    }
-  }
-}
-
-function renderRepairPartsBuilder(orderId, order) {
-  const rows = normalizeRepairPartItems(order.partsItems || []);
-  return `
-    <div class="wo-hint">Select parts by category, choose the equipment item, and enter the quantity used on the job.</div>
-    ${rows.map((part, index) => renderRepairPartRow(orderId, part, index)).join('')}
-    <button type="button" class="btn btn-secondary btn-sm" onclick="addRepairPartRow('${orderId || ''}')">+ Add Another Part / Equipment</button>
-  `;
-}
-
-function refreshRepairOrderBuilder(orderId = '') {
-  const draft = collectRepairOrderFromForm(orderId);
-  if (!draft) return;
-  renderRepairOrderForm(draft.id || orderId, '', draft);
-}
-
-function addRepairPartRow(orderId = '') {
-  const draft = collectRepairOrderFromForm(orderId) || { id: orderId || '', partsItems: [] };
-  draft.partsItems = normalizeRepairPartItems(draft.partsItems || []);
-  draft.partsItems.push({ category: '', partNumber: '', product: '', qty: '1', unitPrice: '' });
-  renderRepairOrderForm(draft.id || orderId, '', draft);
-}
-
-function removeRepairPartRow(orderId = '', index = 0) {
-  const draft = collectRepairOrderFromForm(orderId) || { id: orderId || '', partsItems: [] };
-  const rows = normalizeRepairPartItems(draft.partsItems || []).filter((_, rowIndex) => rowIndex !== index);
-  draft.partsItems = rows.length ? rows : [{ category: '', partNumber: '', product: '', qty: '1', unitPrice: '' }];
-  renderRepairOrderForm(draft.id || orderId, '', draft);
-}
-
-function updateRepairTimeSpentHint() {
-  const hint = document.getElementById('repair-time-spent-hint');
-  if (!hint) return;
-
-  const timeIn = document.getElementById('repair-time-in')?.value || '';
-  const timeOut = document.getElementById('repair-time-out')?.value || '';
-  const spent = calculateTimeSpent(timeIn, timeOut);
-  hint.textContent = `Time on site: ${spent || 'Enter both times to calculate duration.'}`;
-}
-
-function attachRepairFormListeners() {
-  const timeIn = document.getElementById('repair-time-in');
-  const timeOut = document.getElementById('repair-time-out');
-  if (timeIn) timeIn.addEventListener('input', updateRepairTimeSpentHint);
-  if (timeOut) timeOut.addEventListener('input', updateRepairTimeSpentHint);
-  if (timeIn) timeIn.addEventListener('change', updateRepairTimeSpentHint);
-  if (timeOut) timeOut.addEventListener('change', updateRepairTimeSpentHint);
-  updateRepairTimeSpentHint();
-}
-
-function normalizeRepairPhotos(photos = []) {
-  const source = Array.isArray(photos) ? photos : [];
-  return REPAIR_PHOTO_LABELS.map((_, index) => source[index] || '');
-}
-
-function renderRepairPhotoSlot(orderId, label, photo, index) {
-  const safeLabel = escapeHtml(label);
-  return `
-    <div class="photo-slot" id="repair-photo-slot-${index}">
-      <div class="photo-slot-lbl">${safeLabel}</div>
-      <div class="photo-preview-box">
-        ${photo ? `
-          <img class="photo-thumb" data-repair-photo-index="${index}" src="${photo}" alt="${safeLabel}">
-          <button type="button" class="photo-remove" onclick="removeRepairPhoto('${orderId || ''}', ${index})" aria-label="Remove ${safeLabel} photo">&times;</button>
-        ` : `<div class="photo-add-btn">Add ${safeLabel} photo</div>`}
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('repair', '${orderId || ''}', ${index})">Take Photo</button>
-        <label class="btn btn-secondary btn-sm" for="repair-photo-gallery-${index}">Choose Photo</label>
-      </div>
-      <input id="repair-photo-gallery-${index}" name="repair-photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
-    </div>
-  `;
-}
-
-function renderRepairPhotoSection(orderId, order) {
-  const photos = normalizeRepairPhotos(order.photos);
-  const beforeAfter = REPAIR_PHOTO_LABELS.slice(0, 2)
-    .map((label, index) => renderRepairPhotoSlot(orderId, label, photos[index], index))
-    .join('');
-  const extras = REPAIR_PHOTO_LABELS.slice(2)
-    .map((label, offset) => renderRepairPhotoSlot(orderId, label, photos[offset + 2], offset + 2))
-    .join('');
-
-  return `
-    <div class="wo-sec">
-      <div class="wo-sec-hd wo-photo-hd" onclick="toggleAccordion(this)">
-        <span>Repair Photos</span>
-        <span class="wo-chev">▼</span>
-      </div>
-      <div class="wo-sec-bd">
-        <div class="photo-ba-row">${beforeAfter}</div>
-        <div class="photo-extra-grid" style="margin-top:8px;">${extras}</div>
-      </div>
-    </div>
-  `;
-}
-
-async function handleRepairPhotoUpload(orderId, slotIndex, event) {
-  const file = event?.target?.files?.[0];
-  if (!file) return;
-
-  try {
-    const order = collectRepairOrderFromForm(orderId);
-    if (!order) {
-      showToast('Repair work order not found');
-      return;
-    }
-
-    showToast('Processing repair photo...');
-    const dataUrl = await resizeImageForStorage(file);
-    if (!dataUrl) throw new Error('Photo processing failed');
-
-    const photos = normalizeRepairPhotos(order.photos);
-    photos[slotIndex] = dataUrl;
-    order.photos = photos;
-
-    // Persist immediately
-    const orders = getRepairOrders();
-    const idx = orders.findIndex(o => o.id === order.id);
-    if (idx >= 0) {
-      orders[idx] = order;
-    } else {
-      orders.unshift(order);
-    }
-    saveRepairOrders(orders);
-
-    const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
-
-    // Update DOM with new ID if it was previously empty
-    if (!orderId) {
-        const container = document.querySelector('[data-active-repair-id]');
-        if (container) container.setAttribute('data-active-repair-id', order.id);
-    }
-
-    if (slot) {
-      const label = REPAIR_PHOTO_LABELS[slotIndex];
-      slot.outerHTML = renderRepairPhotoSlot(order.id, label, dataUrl, slotIndex);
-      showToast('Repair photo added');
-    } else {
-      renderRepairOrderForm(order.id, '', order);
-      showToast('Repair photo added');
-    }
-  } catch (error) {
-    console.error('Repair photo upload failed', error);
-    showToast('Unable to add repair photo');
-  } finally {
-    if (event?.target) event.target.value = '';
-  }
-}
-
-function removeRepairPhoto(orderId, slotIndex) {
-  const order = collectRepairOrderFromForm(orderId);
-  if (!order) {
-    showToast('Repair work order not found');
-    return;
-  }
-
-  const photos = normalizeRepairPhotos(order.photos);
-  photos[slotIndex] = '';
-  order.photos = photos;
-
-  // Persist immediately
-  const orders = getRepairOrders();
-  const idx = orders.findIndex(o => o.id === order.id);
-  if (idx >= 0) {
-    orders[idx] = order;
-    saveRepairOrders(orders);
-  }
-
-  const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
-
-  // Ensure form is locked to this ID if it was a new order
-  if (!orderId) {
-      const container = document.querySelector('[data-active-repair-id]');
-      if (container) container.setAttribute('data-active-repair-id', order.id);
-  }
-
-  if (slot) {
-    const label = REPAIR_PHOTO_LABELS[slotIndex];
-    slot.outerHTML = renderRepairPhotoSlot(order.id, label, '', slotIndex);
-  } else {
-    renderRepairOrderForm(order.id, '', order);
-  }
-
-  showToast('Repair photo removed');
-}
-
-function bulkImportClients() {
-  const data = prompt("Paste clients JSON here (Array of objects with name and address)");
-  if (!data) return;
-  try {
-    const newClients = JSON.parse(data);
-    if (!Array.isArray(newClients)) {
-      alert("Invalid format. Expected an array.");
-      return;
-    }
-    const clients = db.get('clients', []);
-    newClients.forEach(c => {
-      clients.unshift({
-        id: `c${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-        name: c.name || 'New Client',
-        address: c.address || '',
-        contact: c.contact || ''
-      });
-    });
-    db.set('clients', clients);
-    showToast(`${newClients.length} clients imported`);
-    router.renderClients();
-  } catch (e) {
-    alert("Error parsing JSON: " + e.message);
-  }
-}
-
-function cleanupTestClients() {
-  const testIds = ['c101', 'c102', 'c103', 'c104'];
-  const clients = db.get('clients', []);
-  const filtered = clients.filter(c => !testIds.includes(c.id));
-  if (filtered.length !== clients.length) {
-    db.set('clients', filtered);
-  }
-}
-
-async function exportCompletedToExcel() {
-  const allWorkorders = db.get('workorders', []);
-  const completed = allWorkorders.filter(wo => wo.status === 'completed');
-
-  if (completed.length === 0) {
-    showToast('No completed work orders to export');
-    return;
-  }
-
-  showToast('Generating Excel report...');
-
-  try {
-    const workbook = new ExcelJS.Workbook();
-    const ws = workbook.addWorksheet('OASIS Service Records');
-
-    const chemKeys = [
-      { key: 'tabs', label: 'Tabs' },
-      { key: 'shock', label: 'Shock/Oxidizer' },
-      { key: 'muriaticAcid', label: 'Muriatic Acid' },
-      { key: 'sodaAsh', label: 'Soda Ash' },
-      { key: 'sodiumBicarb', label: 'Sodium Bicarb' },
-      { key: 'calcium', label: 'Calcium Increaser' },
-      { key: 'stabilizer', label: 'Stabilizer' },
-      { key: 'salt', label: 'Salt' },
-      { key: 'phosphateRemover', label: 'Phosphate Remover' },
-      { key: 'algaecide', label: 'Algaecide' }
-    ];
-
-    // Define Columns
-    const columns = [
-      { header: 'Date', key: 'date', width: 12 },
-      { header: 'Client', key: 'client', width: 25 },
-      { header: 'Address', key: 'address', width: 35 },
-      { header: 'Technician', key: 'tech', width: 15 },
-      { header: 'Time In', key: 'timeIn', width: 10 },
-      { header: 'Time Out', key: 'timeOut', width: 10 },
-      { header: 'Pool Chlorine', key: 'pCl', width: 12 },
-      { header: 'Pool pH', key: 'pph', width: 10 },
-      { header: 'Pool Alk', key: 'palk', width: 10 }
-    ];
-
-    // Add columns for each pool chemical
-    chemKeys.forEach(ck => {
-      columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
-    });
-
-    columns.push(
-      { header: 'Spa Chlorine', key: 'sCl', width: 12 },
-      { header: 'Spa pH', key: 'sph', width: 10 },
-      { header: 'Spa Alk', key: 'salk', width: 10 }
-    );
-
-    // Add columns for each spa chemical
-    chemKeys.forEach(ck => {
-      columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
-    });
-
-    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
-
-    ws.columns = columns;
-
-    // Style Header
-    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
-
-    completed.forEach(wo => {
-      const rowData = {
-        date: wo.date,
-        client: wo.clientName,
-        address: wo.address,
-        tech: wo.technician,
-        timeIn: wo.timeIn || wo.time || '',
-        timeOut: wo.timeOut || '',
-        pCl: wo.readings?.pool?.chlorine || '',
-        pph: wo.readings?.pool?.ph || '',
-        palk: wo.readings?.pool?.alkalinity || '',
-        sCl: wo.readings?.spa?.chlorine || '',
-        sph: wo.readings?.spa?.ph || '',
-        salk: wo.readings?.spa?.alkalinity || '',
-        notes: (wo.workPerformed || '') + ' ' + (wo.followUpNotes || wo.notes || '')
-      };
-
-      // Populate pool chemical values
-      chemKeys.forEach(ck => {
-        rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || '';
-      });
-
-      // Populate spa chemical values
-      chemKeys.forEach(ck => {
-        rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || '';
-      });
-
-      ws.addRow(rowData);
-    });
-
-    const buffer = await workbook.xlsx.writeBuffer();
-
-    // Robust binary to base64 conversion
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = btoa(binary);
-    const filename = `OASIS_Service_Records_${new Date().toISOString().split('T')[0]}.xlsx`;
-
-    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast('Excel export ready');
-  } catch (error) {
-    console.error('Excel export failed:', error);
-    showToast('Excel export failed');
-  }
-}
-
-function openMap(address) {
-  if (!address) return;
-  let query = address;
-  if (!query.toLowerCase().includes('grand cayman')) {
-    query += ', Grand Cayman';
-  }
-  const encodedAddress = encodeURIComponent(query);
-  const url = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
-  window.open(url, '_blank');
-}
-
-function saveClientDetails(clientId) {
-  const name = document.getElementById('edit-client-name').value;
-  const address = document.getElementById('edit-client-address').value;
-  const contact = document.getElementById('edit-client-contact').value;
-  const tech = document.getElementById('edit-client-tech').value;
-
-  if (!name) {
-    alert('Name is required');
-    return;
-  }
-
-  const clients = db.get('clients', []);
-  const index = clients.findIndex(c => c.id === clientId);
-  if (index >= 0) {
-    clients[index] = { ...clients[index], name, address, contact, technician: tech };
-    db.set('clients', clients);
-
-    // Also update any matching workorders
-    const workorders = db.get('workorders', []);
-    workorders.forEach(wo => {
-      if (wo.clientId === clientId) {
-        wo.clientName = name;
-        wo.address = address;
-        wo.technician = tech;
-      }
-    });
-    db.set('workorders', workorders);
-
-    showToast('Client profile updated');
-    router.renderClients();
-  }
-}
-
-async function shareClientDetails(clientId) {
-  const clients = db.get('clients', []);
-  const client = clients.find(c => c.id === clientId);
-  if (!client) return;
-
-  const text = `Client: ${client.name}\nAddress: ${client.address}\nContact: ${client.contact || 'None'}\nTech: ${client.technician || 'None'}`;
-
-  try {
-    if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.Share) {
-      await Capacitor.Plugins.Share.share({
-        title: `Client Profile: ${client.name}`,
-        text: text,
-        dialogTitle: 'Share Client Details'
-      });
-    } else {
-      await navigator.clipboard.writeText(text);
-      showToast('Client details copied to clipboard');
-    }
-  } catch (err) {
-    console.error('Sharing failed:', err);
-    showToast('Manual copy required');
-  }
-}
-
-function initMasterSchedule() {
-  if (db.get('masterScheduleLoaded')) return;
-
-  const clients = [
-    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem" },
-    { name: "Jeey Bomford", address: "49 Mary Read Crescent", tech: "Kadeem" },
-    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem" },
-    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem" },
-    { name: "Gcpsl Sea View", address: "South Church Street", tech: "Kadeem" },
-    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem" },
-    { name: "Sunrise Phase 3", address: "Old Crewe Rd", tech: "Kadeem" },
-    { name: "Vivi Townhomes", address: "275 Fairbanks Rd", tech: "Kadeem" },
-    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin" },
-    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin" },
-    { name: "Caribbean Courts", address: "Bcqs, South Sound", tech: "Elvin" },
-    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin" },
-    { name: "Fin South Church Street", address: "Fin Strata", tech: "Elvin" },
-    { name: "Lakeland Villas #1", address: "Old Crewe Rd", tech: "Elvin" },
-    { name: "Point Of View", address: "South Sound", tech: "Elvin" },
-    { name: "South Palms #1", address: "Glen Eden Rd", tech: "Elvin" },
-    { name: "Southern Skies", address: "South Sound", tech: "Elvin" },
-    { name: "Correy Williams", address: "16 Cypress Point", tech: "Jermaine" },
-    { name: "Andy Albray", address: "17 The Deck House", tech: "Jermaine" },
-    { name: "Joanne Akdeniz", address: "42 Hoya Quay", tech: "Jermaine" },
-    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine" },
-    { name: "Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine" },
-    { name: "Mike Stroh", address: "64 Waterford Quay", tech: "Jermaine" },
-    { name: "Tim Bradley", address: "66 Baquarat Quay", tech: "Jermaine" },
-    { name: "Plum Mandalay", address: "Seven Mile", tech: "Jermaine" },
-    { name: "Ocean Pointe Villas", address: "West Bay", tech: "Jermaine" },
-    { name: "Snug Harbour Villas", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace" },
-    { name: "John Ferarri", address: "30 Orchid Drive", tech: "Ace" },
-    { name: "Gary Gibbs", address: "306 Yacht Club dr", tech: "Ace" },
-    { name: "Andrew Muir", address: "318 Yacht Drive", tech: "Ace" },
-    { name: "Scott Somerville", address: "40 Orchid Drive", tech: "Ace" },
-    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace" },
-    { name: "Vlad Aldea", address: "474 Yacht Club Dr", tech: "Ace" },
-    { name: "Abraham Burak", address: "Salt Creek", tech: "Ace" },
-    { name: "Sunset Point Condos", address: "North West Point Rd", tech: "Ace" },
-    { name: "Villa Mare", address: "Vista Del Mar", tech: "Ace" },
-    { name: "Jenny Frizzle", address: "302 Windswept Drive", tech: "Donald" },
-    { name: "Anthoney Reid", address: "88 Mallard Drive", tech: "Donald" },
-    { name: "Coral Bay Village", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Harbor Walk", address: "Grand Harbour", tech: "Donald" },
-    { name: "Indigo Bay", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Periwinkle", address: "Edgewater Way", tech: "Donald" },
-    { name: "Savannah Grand", address: "Savannah", tech: "Donald" },
-    { name: "South Shore", address: "Shamrock Rd", tech: "Donald" },
-    { name: "The Palms At Patricks", address: "Patricks Island", tech: "Donald" },
-    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley" },
-    { name: "One Canal Point", address: "Canal Point", tech: "Kingsley" },
-    { name: "Poinsettia", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "The Beachcomber", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel" },
-    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel" },
-    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel" },
-    { name: "Plymouth", address: "Canal Point Dr", tech: "Ariel" },
-    { name: "Glen Kennedy", address: "Salt Creek", tech: "Ariel" },
-    { name: "Mark Vandevelde", address: "Salt Creek", tech: "Ariel" },
-    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel" },
-    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik" },
-    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik" },
-    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik" },
-    { name: "Jason Butcher", address: "44 Grand Estates", tech: "Malik" },
-    { name: "Julie O'Hara", address: "56 Grand Estates", tech: "Malik" },
-    { name: "Mike Gibbs", address: "78 Grand Estates", tech: "Malik" },
-    { name: "Grapetree Condos", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "The Colonial Club", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem" },
-    { name: "Caribbean Paradise", address: "South Sound", tech: "Kadeem" },
-    { name: "L'Ambience", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Mystic Retreat", address: "John Greer Boulavard", tech: "Kadeem" },
-    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin" },
-    { name: "South Bay Estates", address: "Bel Air Dr", tech: "Elvin" },
-    { name: "Andy Marcher", address: "234 Drake Quay", tech: "Jermaine" },
-    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine" },
-    { name: "Dolce Vita", address: "Govenors Harbour", tech: "Jermaine" },
-    { name: "Amber Stewart", address: "Dolce Vita 4", tech: "Jermaine" },
-    { name: "Pleasant View", address: "West Bay", tech: "Jermaine" },
-    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace" },
-    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace" },
-    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace" },
-    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace" },
-    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace" },
-    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace" },
-    { name: "Charles Ebanks", address: "Bonnieview Av", tech: "Donald" },
-    { name: "One Canal Point Gym", address: "Canal Point", tech: "Kingsley" },
-    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik" },
-    { name: "Moon Bay", address: "Shamrock Rd", tech: "Malik" },
-    { name: "Cayman Coves", address: "South Church Street", tech: "Kadeem" },
-    { name: "Venetia", address: "South Sound", tech: "Kadeem" },
-    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin" },
-    { name: "Tim Dailyey", address: "North Webster Dr", tech: "Elvin" },
-    { name: "Nicholas Lynn", address: "Sandlewood Crescent", tech: "Elvin" },
-    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin" },
-    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin" },
-    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin" },
-    { name: "Riyaz Norrudin", address: "63 Langton Way", tech: "Elvin" },
-    { name: "Mangrove", address: "Bcqs", tech: "Elvin" },
-    { name: "Quentin Creegan", address: "Villa Aramone", tech: "Elvin" },
-    { name: "Jodie O'Mahony", address: "12 El Nathan", tech: "Jermaine" },
-    { name: "Charles Motsinger", address: "124 Hillard", tech: "Jermaine" },
-    { name: "Steve Daker", address: "33 Spurgeon Cr", tech: "Jermaine" },
-    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine" },
-    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine" },
-    { name: "Albert Schimdberger", address: "55 Elnathan Rd", tech: "Jermaine" },
-    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine" },
-    { name: "Blair Ebanks", address: "71 Spurgeon Crescent", tech: "Jermaine" },
-    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine" },
-    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine" },
-    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace" },
-    { name: "Mitchell Demeter", address: "19 Whirlaway Close", tech: "Ace" },
-    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace" },
-    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace" },
-    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace" },
-    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace" },
-    { name: "Coastal Escape", address: "Omega Bay", tech: "Ace" },
-    { name: "Inity Ridge", address: "Prospect Point Rd", tech: "Ace" },
-    { name: "Ocean Reach", address: "Old Crewe Rd", tech: "Ace" },
-    { name: "Scott Somerville", address: "Rum Point Rd", tech: "Donald" },
-    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald" },
-    { name: "67 On The Bay", address: "Queens Highway", tech: "Donald" },
-    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald" },
-    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald" },
-    { name: "Paradise Sur Mar", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Rip Kai", address: "Rum Point Drive", tech: "Donald" },
-    { name: "Sunrays", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley" },
-    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley" },
-    { name: "Regant Court", address: "Brittania", tech: "Kingsley" },
-    { name: "Solara Main", address: "Crystal Harbour", tech: "Kingsley" },
-    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel" },
-    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel" },
-    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel" },
-    { name: "Chad Horwitz", address: "49 Calico Quay", tech: "Ariel" },
-    { name: "Malcom Swift", address: "Miramar", tech: "Ariel" },
-    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Strata #70", address: "Boggy Sands rd", tech: "Ariel" },
-    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik" },
-    { name: "Debbie Ebanks", address: "Fischers Reef", tech: "Malik" },
-    { name: "John Corallo", address: "3A Seahven", tech: "Malik" },
-    { name: "Encompass", address: "3B Seahven", tech: "Malik" },
-    { name: "Joseph Hurlston", address: "42 Monumnet Rd", tech: "Malik" },
-    { name: "George McKenzie", address: "534 Rum Point Dr", tech: "Malik" },
-    { name: "Twin Palms", address: "Rum Point Dr", tech: "Malik" },
-    { name: "Bernie Bako", address: "#4 Venetia", tech: "Kadeem" },
-    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem" },
-    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem" },
-    { name: "Park View Courts", address: "Spruce Lane", tech: "Kadeem" },
-    { name: "The Bentley", address: "Crewe rd", tech: "Kadeem" },
-    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin" },
-    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin" },
-    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin" },
-    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin" },
-    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin" },
-    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin" },
-    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin" },
-    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin" },
-    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin" },
-    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine" },
-    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine" },
-    { name: "Nigel Daily", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine" },
-    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine" },
-    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine" },
-    { name: "Shoreway Townhomes", address: "Adonis Dr", tech: "Jermaine" },
-    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine" },
-    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine" },
-    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace" },
-    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace" },
-    { name: "Clive Harris", address: "516 Crighton Drive", tech: "Ace" },
-    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace" },
-    { name: "Ross Fortune", address: "90 Prince Charles", tech: "Ace" },
-    { name: "Simon Palmer", address: "Olivias Cove", tech: "Ace" },
-    { name: "Caroline Moran", address: "197 Bimini Dr", tech: "Donald" },
-    { name: "James Reeve", address: "215 Bimini Dr", tech: "Donald" },
-    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald" },
-    { name: "Sina Mirzale", address: "353 Bimini Dr", tech: "Donald" },
-    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald" },
-    { name: "Marlon Bispath", address: "519 Bimini Dr", tech: "Donald" },
-    { name: "Margaret Fantasia", address: "526 Bimini Dr", tech: "Donald" },
-    { name: "Kenny Rankin", address: "Grand Harbour", tech: "Donald" },
-    { name: "James Mendes", address: "106 Olea", tech: "Ariel" },
-    { name: "James O'Brien", address: "102 Olea", tech: "Ariel" },
-    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel" },
-    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel" },
-    { name: "Mr Holland", address: "107 Olea", tech: "Ariel" },
-    { name: "Nikki Harris", address: "213 olea", tech: "Ariel" },
-    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel" },
-    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel" },
-    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik" },
-    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik" },
-    { name: "Iman Shafiei", address: "53 Baquarat Quay", tech: "Malik" },
-    { name: "Enrique Tasende", address: "65 Baccarat Quay", tech: "Malik" },
-    { name: "David Wilson", address: "Boggy Sands", tech: "Malik" },
-    { name: "Nina Irani", address: "Casa Oasis", tech: "Malik" },
-    { name: "Sandy Lane Townhomes", address: "Boggy Sands Rd", tech: "Malik" },
-    { name: "Valencia Heights", address: "Strata #536", tech: "Kadeem" },
-    { name: "Jaime-Lee Eccles", address: "176 Conch Dr", tech: "Kadeem" },
-    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem" },
-    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem" },
-    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem" },
-    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem" },
-    { name: "Hilton Estates", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin" },
-    { name: "Britni Strong", address: "150 Parkway Dr", tech: "Elvin" },
-    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin" },
-    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd", tech: "Elvin" },
-    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin" },
-    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin" },
-    { name: "Saphire", address: "Jec, Nwp Rd", tech: "Elvin" },
-    { name: "The Sands", address: "Boggy Sand Rd", tech: "Elvin" },
-    { name: "Turtle Breeze", address: "Conch Point Rd", tech: "Elvin" },
-    { name: "Francois Du Toit", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine" },
-    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine" },
-    { name: "Johann Prinslo", address: "270 Jennifer Dr", tech: "Jermaine" },
-    { name: "Andre Slabbert", address: "7 Victoria Dr", tech: "Jermaine" },
-    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine" },
-    { name: "Palm Heights Residence", address: "Seven Mile Beach", tech: "Jermaine" },
-    { name: "Jean Mean", address: "211 Sea Spray Dr", tech: "Ace" },
-    { name: "Paul Rowan", address: "265 Sea Spray Dr", tech: "Ace" },
-    { name: "Charmaine Richter", address: "40 Natures Circle", tech: "Ace" },
-    { name: "Rory Andrews", address: "44 Country Road", tech: "Ace" },
-    { name: "Walker Romanica", address: "79 Riley Circle", tech: "Ace" },
-    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace" },
-    { name: "Grand Palmyra", address: "Seven Mile Beach", tech: "Ace" },
-    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace" },
-    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald" },
-    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald" },
-    { name: "Reg Williams", address: "Cliff House", tech: "Donald" },
-    { name: "Gypsy", address: "1514 Rum Point Dr", tech: "Donald" },
-    { name: "Kai Vista", address: "Rum Point Dr", tech: "Donald" },
-    { name: "Ocean Vista", address: "Rum Point", tech: "Donald" },
-    { name: "Stefan Marenzi", address: "Water Cay Rd", tech: "Donald" },
-    { name: "Bella Rocca", address: "Queens Highway", tech: "Donald" },
-    { name: "Sea 2 Inity", address: "Kiabo", tech: "Donald" },
-    { name: "Guy Manning", address: "Diamonds Edge", tech: "Kingsley" },
-    { name: "Kent Nickerson", address: "Salt Creek", tech: "Kingsley" },
-    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel" },
-    { name: "Suzanne Correy", address: "394 Canal Point Rd", tech: "Ariel" },
-    { name: "November Capitol", address: "One Canal Point", tech: "Ariel" },
-    { name: "Safe Harbor", address: "West Bay", tech: "Ariel" },
-    { name: "Bert Thacker", address: "West Bay", tech: "Ariel" },
-    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik" },
-    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik" },
-    { name: "Philip Smyres", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Brandon Caruana", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik" },
-    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik" },
-    { name: "Phillip Cadien", address: "312 Cypres Point", tech: "Malik" }
-  ];
-
-  // Map to store unique clients by name
-  const uniqueClients = {};
-  clients.forEach(c => {
-    if (!uniqueClients[c.name]) {
-      uniqueClients[c.name] = {
-        id: `c_${Math.random().toString(36).substr(2, 9)}`,
-        name: c.name,
-        address: c.address,
-        technician: c.tech
-      };
-    }
-  });
-
-  const clientArray = Object.values(uniqueClients);
-  db.set('clients', clientArray);
-
-  // Generate pending workorders for each client assigned to their tech
-  const workorders = clientArray.map(c => ({
-    id: `wo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-    clientId: c.id,
-    clientName: c.name,
-    address: c.address,
-    technician: c.technician,
-    date: new Date().toISOString().split('T')[0],
-    status: 'pending',
-    readings: { pool: defaultChemReadings(), spa: defaultChemReadings() },
-    chemicalsAdded: { pool: defaultChemicalAdditions(), spa: defaultChemicalAdditions() },
-    photos: []
-  }));
-
-  db.set('workorders', workorders);
-  db.set('masterScheduleLoaded', true);
-}
-
-function populateLoginTechOptions() {
-  const select = document.getElementById('login-tech');
-  if (!select) return;
-
-  const entries = Object.entries(auth.users)
-    .sort((a, b) => a[1].name.localeCompare(b[1].name));
-
-  select.innerHTML = `
-    <option value="" disabled selected>— Select your name —</option>
-    ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
-    `).join('')}
-  `;
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  // Always force login screen on startup
-  auth.logout();
-
-  cleanupTestClients();
-  initMasterSchedule();
-  migrateLegacyRepairData();
-  populateLoginTechOptions();
-
-  // Android Back Button Handling
-  if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
-    Capacitor.Plugins.App.addListener('backButton', () => {
-      if (router.currentView === 'dashboard') {
-        // Stop at home page, don't exit if logged in (though we force login above)
-        return;
-      }
-
-      if (!auth.isLoggedIn()) {
-        // If at login screen, maybe let it exit or do nothing
-        return;
-      }
-
-      router.goBack();
-    });
-  }
-
-  document.querySelectorAll('.nav-item').forEach(btn => {
-    btn.addEventListener('click', () => {
-      router.navigate(btn.dataset.view);
-    });
-  });
-
-  document.getElementById('login-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const select = document.getElementById('login-tech');
-    const pinInput = document.getElementById('login-pin');
-    const username = select ? select.value : '';
-    const pin = pinInput ? pinInput.value : '';
-    const loginScreen = document.getElementById('login-screen');
-    const appShell = document.getElementById('app');
-    const loginError = document.getElementById('login-error');
-
-    console.log('Attempting login for:', username);
-
-    if (auth.login(username, pin)) {
-      console.log('Login successful');
-      const loginScreen = document.getElementById('login-screen');
-      const appShell = document.getElementById('app');
-
-      if (loginScreen) {
-        loginScreen.style.setProperty('display', 'none', 'important');
-      }
-      if (appShell) {
-        appShell.classList.remove('hidden');
-        appShell.style.setProperty('display', 'flex', 'important');
-      }
-      if (loginError) loginError.style.display = 'none';
-
-      // Immediate navigation
-      try {
-        router.navigate('dashboard');
-      } catch (err) {
-        console.error('Navigation error:', err);
-        location.reload();
-      }
-    } else {
-      console.warn('Login failed: invalid username or PIN');
-      if (loginError) loginError.style.display = 'block';
-    }
-  });
-
-  document.addEventListener('click', (e) => {
-    if (e.target.classList.contains('modal-overlay')) {
-      modal.hide();
-    }
-  });
-});
-
-function signOut() {
-  auth.logout();
-  document.getElementById('app').classList.add('hidden');
-  document.getElementById('app').style.display = 'none';
-  const loginScreen = document.getElementById('login-screen');
-  loginScreen.classList.remove('hidden');
-  loginScreen.style.display = 'flex';
-  router.navigate('dashboard');
-}
-
-function quickAddClient() {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can add clients');
-    return;
-  }
-  const name = prompt('Client name');
-  if (!name) return;
-
-  const address = prompt('Client address') || '';
-  const contact = prompt('Contact name') || '';
-  const clients = db.get('clients', []);
-
-  clients.unshift({
-    id: `c${Date.now()}`,
-    name,
-    address,
-    contact
-  });
-
-  db.set('clients', clients);
-  showToast('Client added');
-  router.renderClients();
-}
-
-function deleteClient(clientId) {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can delete clients');
-    return;
-  }
-  if (!confirm('Delete this client and related service records?')) return;
-
-  db.set('clients', db.get('clients', []).filter(client => client.id !== clientId));
-  db.set('workorders', db.get('workorders', []).filter(order => order.clientId !== clientId));
-  db.set('repairOrders', getRepairOrders().filter(order => order.clientId !== clientId));
-
-  showToast('Client removed');
-  router.renderClients();
-}
-
-function onChemClientChange() {
-  const select = document.getElementById('wo-client');
-  const addressField = document.getElementById('wo-address');
-  const title = document.getElementById('wo-client-name');
-  if (!select) return;
-
-  const client = db.get('clients', []).find(item => item.id === select.value);
-  if (client) {
-    if (addressField) addressField.value = client.address || '';
-    if (title) title.textContent = client.name || 'Chem Sheet';
-  }
-}
-
-function updateChemGuidancePreview(orderId) {
-  const preview = document.getElementById('chem-guidance-preview');
-  if (!preview) return;
-
-  const order = collectWorkOrderForm(orderId);
-  if (order) {
-    preview.innerHTML = renderChemDosingSummary(order);
-  }
-}
-
-function updateTimeSpentHint() {
-  const hint = document.getElementById('wo-time-spent-hint');
-  const timeIn = document.getElementById('wo-time-in')?.value || '';
-  const timeOut = document.getElementById('wo-time-out')?.value || '';
-  if (!hint) return;
-
-  const spent = calculateTimeSpent(timeIn, timeOut);
-  hint.textContent = `Time on site: ${spent || 'Enter both times to calculate duration.'}`;
-}
-
-function attachChemFieldListeners(orderId) {
-  const form = document.querySelector('.wo-form');
-  if (!form) return;
-
-  form.querySelectorAll('input, select, textarea').forEach(field => {
-    if (field.id && (field.id.startsWith('pool-') || field.id.startsWith('spa-'))) {
-      field.addEventListener('input', () => updateChemGuidancePreview(orderId));
-      field.addEventListener('change', () => updateChemGuidancePreview(orderId));
-    }
-
-    if (field.id === 'wo-time-in' || field.id === 'wo-time-out') {
-      field.addEventListener('input', updateTimeSpentHint);
-      field.addEventListener('change', updateTimeSpentHint);
-    }
-  });
-
-  updateTimeSpentHint();
-}
-
-function collectWorkOrderForm(orderId) {
-  const order = workOrderManager.getOrder(orderId);
-  if (!order) return null;
-
-  const dateInput = document.getElementById('wo-date');
-  if (!dateInput) {
-    return order;
-  }
-
-  const getValue = (id, fallback = '') => {
-    const field = document.getElementById(id);
-    return field ? field.value : fallback;
-  };
-
-  const existingPool = { ...defaultChemReadings(), ...(order.readings?.pool || {}) };
-  const existingSpa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
-  const existingChemicalsAdded = order.chemicalsAdded || {};
-  const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
-  const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
-  const selectedClientId = getValue('wo-client', order.clientId || '');
-  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
-  const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
-
-  const updatedOrder = {
-    ...order,
-    clientId: selectedClientId || order.clientId,
-    clientName: selectedClient?.name || order.clientName,
-    technician: getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || ''),
-    date: getValue('wo-date', order.date),
-    time: getValue('wo-time-in', order.timeIn || order.time || ''),
-    timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
-    timeOut: getValue('wo-time-out', order.timeOut || ''),
-    status: getValue('wo-status', order.status || 'pending'),
-    address: selectedClient?.address || getValue('wo-address', order.address),
-    workPerformed: getValue('wo-work', order.workPerformed || ''),
-    followUpNotes,
-    notes: followUpNotes,
-    photos: normalizeChemPhotos(order.photos), // Ensure photos are preserved from the original order
-    readings: {
-      ...order.readings,
-      pool: {
-        ...existingPool,
-        ph: getValue('pool-ph', existingPool.ph || ''),
-        chlorine: getValue('pool-chlorine', existingPool.chlorine || ''),
-        alkalinity: getValue('pool-alkalinity', existingPool.alkalinity || ''),
-        calcium: getValue('pool-calcium', existingPool.calcium || ''),
-        cya: getValue('pool-cya', existingPool.cya || ''),
-        salt: getValue('pool-salt', existingPool.salt || ''),
-        temp: getValue('pool-temp', existingPool.temp || ''),
-        tds: getValue('pool-tds', existingPool.tds || ''),
-        phosphates: getValue('pool-phosphates', existingPool.phosphates || ''),
-        borates: getValue('pool-borates', existingPool.borates || '')
-      },
-      spa: {
-        ...existingSpa,
-        ph: getValue('spa-ph', existingSpa.ph || ''),
-        chlorine: getValue('spa-chlorine', existingSpa.chlorine || ''),
-        alkalinity: getValue('spa-alkalinity', existingSpa.alkalinity || ''),
-        calcium: getValue('spa-calcium', existingSpa.calcium || ''),
-        cya: getValue('spa-cya', existingSpa.cya || ''),
-        salt: getValue('spa-salt', existingSpa.salt || ''),
-        temp: getValue('spa-temp', existingSpa.temp || ''),
-        tds: getValue('spa-tds', existingSpa.tds || ''),
-        phosphates: getValue('spa-phosphates', existingSpa.phosphates || ''),
-        borates: getValue('spa-borates', existingSpa.borates || '')
-      }
-    },
-    chemicalsAdded: {
-      pool: {
-        ...existingPoolAdded,
-        tabs: getValue('pool-add-tabs', existingPoolAdded.tabs || ''),
-        shock: getValue('pool-add-shock', existingPoolAdded.shock || ''),
-        muriaticAcid: getValue('pool-add-muriaticAcid', existingPoolAdded.muriaticAcid || ''),
-        sodaAsh: getValue('pool-add-sodaAsh', existingPoolAdded.sodaAsh || ''),
-        sodiumBicarb: getValue('pool-add-sodiumBicarb', existingPoolAdded.sodiumBicarb || ''),
-        calcium: getValue('pool-add-calcium', existingPoolAdded.calcium || ''),
-        stabilizer: getValue('pool-add-stabilizer', existingPoolAdded.stabilizer || ''),
-        salt: getValue('pool-add-salt', existingPoolAdded.salt || ''),
-        phosphateRemover: getValue('pool-add-phosphateRemover', existingPoolAdded.phosphateRemover || ''),
-        algaecide: getValue('pool-add-algaecide', existingPoolAdded.algaecide || ''),
-        other: getValue('pool-add-other', existingPoolAdded.other || '')
-      },
-      spa: {
-        ...existingSpaAdded,
-        tabs: getValue('spa-add-tabs', existingSpaAdded.tabs || ''),
-        shock: getValue('spa-add-shock', existingSpaAdded.shock || ''),
-        muriaticAcid: getValue('spa-add-muriaticAcid', existingSpaAdded.muriaticAcid || ''),
-        sodaAsh: getValue('spa-add-sodaAsh', existingSpaAdded.sodaAsh || ''),
-        sodiumBicarb: getValue('spa-add-sodiumBicarb', existingSpaAdded.sodiumBicarb || ''),
-        calcium: getValue('spa-add-calcium', existingSpaAdded.calcium || ''),
-        stabilizer: getValue('spa-add-stabilizer', existingSpaAdded.stabilizer || ''),
-        salt: getValue('spa-add-salt', existingSpaAdded.salt || ''),
-        phosphateRemover: getValue('spa-add-phosphateRemover', existingSpaAdded.phosphateRemover || ''),
-        algaecide: getValue('spa-add-algaecide', existingSpaAdded.algaecide || ''),
-        other: getValue('spa-add-other', existingSpaAdded.other || '')
-      }
-    }
-  };
-
-  updatedOrder.lsi = {
-    pool: calculateLSI(updatedOrder.readings.pool),
-    spa: calculateLSI(updatedOrder.readings.spa)
-  };
-
-  const sourceReadings = Object.values(updatedOrder.readings.pool).some(value => value !== '' && value !== null && value !== undefined)
-    ? updatedOrder.readings.pool
-    : updatedOrder.readings.spa;
-  updatedOrder.chemicals = workOrderManager.calculateDosing(sourceReadings);
-
-  return updatedOrder;
-}
-
-function saveWorkOrderForm(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  workOrderManager.saveOrder(order);
-  router.navigate('workorders');
-  showToast('Chem sheet saved');
-}
-
-function shareReport(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  workOrderManager.saveOrder(order);
-  workOrderManager.generateReport(order);
-}
-
-function sendReport(orderId) {
-  shareReport(orderId);
-}
-
-function getRepairOrders() {
-  return db.get('repairOrders', []);
-}
-
-function saveRepairOrders(orders) {
-  db.set('repairOrders', orders);
-}
-
-function renderRepairOrdersList() {
-  const allOrders = getRepairOrders();
-  const currentUser = auth.getCurrentUser();
-  const isAdmin = auth.isAdmin();
-  const canShare = auth.canShare();
-
-  // Filter: ONLY Chris (admin) sees everything. Jet, Mark and others see ONLY their own.
-  let orders = isAdmin 
-    ? allOrders 
-    : allOrders.filter(o => o.assignedTo === currentUser.name);
-
-  // Hide completed repair orders from the main active list for everyone
-  orders = orders.filter(o => o.status !== 'completed');
-
-  if (!orders.length) {
-    return `
-      <div class="empty-state">
-        <div class="empty-icon">🛠️</div>
-        <div class="empty-title">No repair work orders</div>
-        <div class="empty-subtitle">${isAdmin ? 'No repair orders found' : 'Create one to manage service repairs in the same app'}</div>
-      </div>
-    `;
-  }
-
-  return orders.map(order => `
-    <div class="job-card" style="margin-bottom:12px;">
-      <div class="job-card-header">
-        <div>
-          <div class="job-card-title">${escapeHtml(order.clientName || 'Repair Job')}</div>
-          <div class="job-card-customer">${escapeHtml(order.jobType || 'General Repair')}</div>
-          <div class="job-meta">
-            <div class="job-meta-item">📅 ${escapeHtml(order.date || '')}</div>
-            <div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div>
-          </div>
-        </div>
-      </div>
-      <div class="job-card-body">
-        <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
-        <div class="detail-row"><div class="detail-label">Priority</div><div class="detail-value">${escapeHtml(order.priority || 'Normal')}</div></div>
-        <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
-      </div>
-      <div class="job-card-footer">
-        <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">Open</button>
-        ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
-        ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
-      </div>
-    </div>
-  `).join('');
-}
-
-function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = null) {
-  const content = document.getElementById('main-content');
-  const existing = !draftOrder && orderId ? getRepairOrders().find(order => order.id === orderId) : null;
-  const clients = db.get('clients', []);
-  const order = draftOrder || existing || {
-    id: orderId || `r${Date.now()}`,
-    clientId: presetClientId,
-    clientName: '',
-    address: '',
-    date: new Date().toISOString().split('T')[0],
-    time: '',
-    timeIn: '',
-    timeOut: '',
-    assignedTo: auth.getCurrentUser()?.name || '',
-    status: 'open',
-    jobType: '',
-    priority: 'Normal',
-    summary: '',
-    materials: '',
-    partsItems: [],
-    partsSummary: '',
-    labourHours: '',
-    notes: '',
-    photos: []
-  };
-
-  const activeOrderId = order.id;
-  const timeIn = order.timeIn || order.time || '';
-  const timeOut = order.timeOut || '';
-  const timeSpent = calculateTimeSpent(timeIn, timeOut);
-
-  content.innerHTML = `
-    <div class="wo-form">
-      <div class="wo-bar">
-        <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
-        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Repair Order'}</div>
-        <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
-      </div>
-
-      <div class="wo-sec">
-        <div class="wo-sec-hd" onclick="toggleAccordion(this)">
-          <span>Customer & Job Details</span>
-          <span class="wo-chev">▼</span>
-        </div>
-        <div class="wo-sec-bd" data-active-repair-id="${activeOrderId}">
-          <div class="form-row">
-            <label for="repair-client">Client</label>
-            <select id="repair-client" onchange="onRepairClientChange()">
-              <option value="">— Select client —</option>
-              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
-            </select>
-          </div>
-
-          <div class="form-row">
-            <label for="repair-address">Address</label>
-            <input id="repair-address" type="text" value="${escapeHtml(order.address || '')}">
-          </div>
-
-          <div class="wo-grid" style="margin-bottom:12px; border-radius:var(--radius-sm);">
-            <div class="wo-fld">
-              <div class="wo-fld-lbl">Date</div>
-              <input id="repair-date" class="wo-fld-inp" type="date" value="${escapeHtml(order.date || '')}">
-            </div>
-            <div class="wo-fld">
-              <div class="wo-fld-lbl">Assigned Tech</div>
-              <select id="repair-tech" class="wo-fld-inp">
-                ${Object.entries(auth.users)
-                  .sort((a, b) => a[1].name.localeCompare(b[1].name))
-                  .map(([id, user]) => `<option value="${user.name}" ${user.name === (order.assignedTo || '') ? 'selected' : ''}>${user.name}</option>`).join('')}
-              </select>
-            </div>
-            <div class="wo-fld">
-              <div class="wo-fld-lbl">Time In</div>
-              <input id="repair-time-in" class="wo-fld-inp" type="time" value="${escapeHtml(timeIn)}">
-            </div>
-            <div class="wo-fld">
-              <div class="wo-fld-lbl">Time Out</div>
-              <input id="repair-time-out" class="wo-fld-inp" type="time" value="${escapeHtml(timeOut)}">
-            </div>
-          </div>
-
-          <div id="repair-time-spent-hint" class="wo-hint">Time on site: ${escapeHtml(timeSpent || 'Enter both times to calculate duration.')}</div>
-
-          <div class="form-row">
-            <label for="repair-type">Work Order Type</label>
-            <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
-          </div>
-
-          <div class="form-row">
-            <label for="repair-priority">Priority</label>
-            <select id="repair-priority">
-              <option value="Low" ${order.priority === 'Low' ? 'selected' : ''}>Low</option>
-              <option value="Normal" ${order.priority === 'Normal' ? 'selected' : ''}>Normal</option>
-              <option value="High" ${order.priority === 'High' ? 'selected' : ''}>High</option>
-            </select>
-          </div>
-
-          <div class="form-row">
-            <label for="repair-status">Status</label>
-            <select id="repair-status">
-              <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
-              <option value="in-progress" ${order.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
-              <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div class="wo-sec">
-        <div class="wo-sec-hd" onclick="toggleAccordion(this)">
-          <span>Work Summary & Parts</span>
-          <span class="wo-chev">▼</span>
-        </div>
-        <div class="wo-sec-bd">
-          <div class="form-row">
-            <label for="repair-summary">Summary of Work</label>
-            <textarea id="repair-summary" placeholder="Describe the repair performed...">${escapeHtml(order.summary || '')}</textarea>
-          </div>
-
-          <div class="form-row">
-            <label>Parts & Equipment Installed</label>
-            ${renderRepairPartsBuilder(activeOrderId, order)}
-          </div>
-
-          <div class="form-row">
-            <label for="repair-materials">Additional Parts Notes</label>
-            <textarea id="repair-materials" placeholder="Materials used, part numbers not in catalog...">${escapeHtml(order.materials || '')}</textarea>
-          </div>
-
-          <div class="form-row">
-            <label for="repair-labour">Labour Hours</label>
-            <input id="repair-labour" type="number" step="0.25" value="${escapeHtml(order.labourHours || '')}">
-          </div>
-
-          <div class="form-row">
-            <label for="repair-notes">Internal Office Notes</label>
-            <textarea id="repair-notes" placeholder="Notes for billing or follow-up...">${escapeHtml(order.notes || '')}</textarea>
-          </div>
-        </div>
-      </div>
-
-      ${renderRepairPhotoSection(activeOrderId, order)}
-
-      <div class="card" style="margin:12px;">
-        <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save Changes</button>
-          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true)">Share Report</button>` : ''}
-        </div>
-      </div>
-    </div>
-  `;
-
-  onRepairClientChange();
-  attachRepairFormListeners();
-}
-
-function onRepairClientChange() {
-  const select = document.getElementById('repair-client');
-  const address = document.getElementById('repair-address');
-  const title = document.getElementById('repair-bar-title');
-  if (!select || !address) return;
-
-  const client = db.get('clients', []).find(item => item.id === select.value);
-  if (client) {
-    address.value = client.address || '';
-    if (title) title.textContent = client.name || 'Repair Order';
-  }
-}
-
-function collectRepairOrderFromForm(orderId = '') {
-  // Use a stable identifier if this is a brand new order being filled out
-  const formElement = document.getElementById('repair-client');
-  if (formElement && !orderId) {
-      // If we're in the form but don't have an ID yet, check if one was already assigned
-      // to the form session to avoid duplicates on every photo take/upload.
-      const existingIdField = document.querySelector('[data-active-repair-id]');
-      if (existingIdField) {
-          orderId = existingIdField.getAttribute('data-active-repair-id');
-      }
-  }
-
-  const existing = orderId ? getRepairOrders().find(item => item.id === orderId) : null;
-  const finalId = orderId || existing?.id || `r${Date.now()}`;
-
-  const clientId = document.getElementById('repair-client')?.value || '';
-  const client = db.get('clients', []).find(item => item.id === clientId);
-  const partItems = Array.from(document.querySelectorAll('.repair-part-row')).map(row => {
-    const category = row.querySelector('.repair-part-category')?.value || '';
-    const productSelect = row.querySelector('.repair-part-product');
-    const selectedOption = productSelect?.selectedOptions?.[0] || null;
-    const qty = row.querySelector('.repair-part-qty')?.value || '1';
-
-    return {
-      category,
-      partNumber: productSelect?.value || '',
-      product: selectedOption?.dataset.product || selectedOption?.textContent?.split(' — ')[0] || '',
-      qty,
-      unitPrice: selectedOption?.dataset.price || ''
-    };
-  }).filter(part => part.category || part.partNumber || part.product);
-
-  const timeIn = document.getElementById('repair-time-in')?.value || '';
-  const timeOut = document.getElementById('repair-time-out')?.value || '';
-
-  const photos = REPAIR_PHOTO_LABELS.map((_, index) => {
-    const preview = document.querySelector(`[data-repair-photo-index="${index}"]`);
-    return preview?.getAttribute('src') || existing?.photos?.[index] || '';
-  });
-
-  return {
-    id: finalId,
-    clientId,
-    clientName: client?.name || existing?.clientName || 'Unassigned Client',
-    address: document.getElementById('repair-address')?.value || '',
-    date: document.getElementById('repair-date')?.value || '',
-    time: timeIn,
-    timeIn,
-    timeOut,
-    assignedTo: document.getElementById('repair-tech')?.value || '',
-    status: document.getElementById('repair-status')?.value || 'open',
-    jobType: document.getElementById('repair-type')?.value || '',
-    priority: document.getElementById('repair-priority')?.value || 'Normal',
-    summary: document.getElementById('repair-summary')?.value || '',
-    materials: document.getElementById('repair-materials')?.value || '',
-    partsItems: partItems,
-    partsSummary: buildRepairPartsSummary(partItems),
-    labourHours: document.getElementById('repair-labour')?.value || '',
-    notes: document.getElementById('repair-notes')?.value || '',
-    photos
-  };
-}
-
-function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
-  const order = collectRepairOrderFromForm(orderId);
-  if (!order) return;
-  order.status = document.getElementById('repair-status')?.value || order.status;
-  
-  const orders = getRepairOrders();
-  const index = orders.findIndex(item => item.id === order.id);
-
-  if (index >= 0) {
-    orders[index] = order;
-  } else {
-    orders.unshift(order);
-  }
-
-  saveRepairOrders(orders);
-  showToast('Repair work order saved');
-
-  if (shareAfterSave) {
-    shareRepairPDF(order.id);
-  } else {
-    router.renderWorkOrders();
-  }
-} else {
-    orders.unshift(order);
-  }
-
-  saveRepairOrders(orders);
-  showToast('Repair work order saved');
-
-  if (shareAfterSave) {
-    shareRepairPDF(order.id);
-    return;
-  }
-
-  router.renderWorkOrders();
-}
-
-
-function getImageDataUrl(url) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'Anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
-}
-
-async function shareRepairPDF(orderId) {
-  const order = getRepairOrders().find(item => item.id === orderId);
-  if (!order || !window.jspdf) {
-    showToast('Unable to generate PDF');
-    return;
-  }
-
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF();
-  const filename = `OASIS_Repair_Work_Order_${(order.clientName || 'Client').replace(/[^a-z0-9]/gi, '_')}_${order.date || 'Date'}.pdf`;
-
-  const navy = [13, 43, 69];
-  const gold = [201, 168, 124];
-  const lightBeige = [248, 245, 241];
-
-  let logoData = null;
-  try {
-    logoData = await getImageDataUrl('oasis-logo.png');
-  } catch (e) {
-    console.warn('Logo load failed', e);
-  }
-
-  let y = 0;
-
-  const renderHeader = () => {
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, 210, 25, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, 25, 210, 1, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('times', 'bold');
-    doc.setFontSize(22);
-    doc.text('O A S I S', 32, 17);
-
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('REPAIR WORK ORDER', 195, 14, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.setTextColor(...gold);
-    doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
-
-    return 35;
-  };
-
-  const renderFooter = () => {
-    const footerY = 278;
-    doc.setFillColor(...navy);
-    doc.rect(0, footerY, 210, 20, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, footerY, 210, 0.5, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(12);
-    doc.setFont('times', 'bold');
-    doc.text('O A S I S', 30, footerY + 12);
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(180, 180, 180);
-    doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
-    doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
-  };
-
-  y = renderHeader();
-
-  // Info Grid
-  doc.setFillColor(...lightBeige);
-  doc.rect(10, y, 190, 42, 'F');
-
-  let gridY = y + 7;
-  const col1 = 15;
-  const col2 = 110;
-
-  const addField = (label, value, x, currentY) => {
-    doc.setFontSize(6);
-    doc.setTextColor(120, 120, 120);
-    doc.setFont('helvetica', 'bold');
-    doc.text(label.toUpperCase(), x, currentY);
-    doc.setFontSize(9);
-    doc.setTextColor(...navy);
-    doc.setFont('helvetica', 'normal');
-    doc.text(String(value || '—'), x, currentY + 5);
-  };
-
-  addField('Customer', order.clientName, col1, gridY);
-  addField('Date', order.date, col2, gridY);
-  gridY += 12;
-  addField('Address', order.address, col1, gridY);
-  addField('Job Type', order.jobType, col2, gridY);
-  gridY += 12;
-  addField('Assigned Tech', order.assignedTo, col1, gridY);
-  addField('Status / Priority', `${order.status} / ${order.priority}`, col2, gridY);
-  gridY += 12;
-  addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
-  addField('Labour Hours', order.labourHours || '—', col2, gridY);
-
-  y += 50;
-
-  // Work Summary
-  doc.setFillColor(...navy);
-  doc.rect(10, y, 190, 7, 'F');
+  doc.text('LUXURY POOL & WATERSHAPE SERVICE', 15, 20);
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(8);
+  doc.setFontSize(10);
+  doc.text('CHEM SHEET REPORT', 195, 13, { align: 'right' });
+  doc.text(fmtDate(wo.date), 195, 20, { align: 'right' });
+
+  let y = 38;
+  const nextLine = (step = 6) => {
+    y += step;
+    if (y > 270) {
+      doc.addPage();
+      y = 20;
+    }
+  };
+  const writeSection = (title) => {
+    if (y > 255) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.setTextColor(26, 64, 95);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(title, 15, y);
+    nextLine(7);
+  };
+  const writeDetail = (label, value, x = 15, valueX = 55) => {
+    doc.setTextColor(80, 80, 80);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text(`${label}:`, x, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(String(value || '—'), valueX, y);
+    nextLine();
+  };
+
+  writeSection('JOB INFORMATION');
+  writeDetail('Client', cust ? cust.name : '—');
+  writeDetail('Address', wo.address || '—');
+  writeDetail('Technician', tech ? tech.name : '—');
+  writeDetail('Route', wo.routeNumber || '—');
+  writeDetail('Time', `${fmtTime(wo.timeIn) || '—'} → ${fmtTime(wo.timeOut) || '—'}`);
+  writeDetail('Condition', wo.condition || '—');
+  writeDetail('Pool Size', wo.gallons ? `${parseInt(wo.gallons).toLocaleString()} gal` : '—');
+
+  writeSection('CHEMICAL READINGS');
   doc.setFont('helvetica', 'bold');
-  doc.text('WORK SUMMARY', 15, y + 5);
-  y += 10;
+  doc.setFontSize(9);
+  doc.text('Parameter', 15, y);
+  doc.text('Pool', 95, y);
+  doc.text('Spa', 145, y);
+  nextLine(6);
 
-  doc.setTextColor(60, 60, 60);
-  doc.setFontSize(8);
+  [
+    ['Chlorine', safe(p.chlorine, ' ppm'), safe(s.chlorine, ' ppm')],
+    ['pH', safe(p.pH), safe(s.pH)],
+    ['Alkalinity', safe(p.alk, ' ppm'), safe(s.alk, ' ppm')],
+    ['CYA', safe(p.cya, ' ppm'), safe(s.cya, ' ppm')],
+    ['Calcium', safe(p.calcium, ' ppm'), safe(s.calcium, ' ppm')],
+    ['Salt', safe(p.salt, ' ppm'), safe(s.salt, ' ppm')],
+    ['Phosphate', safe(p.phosphate, ' ppb'), safe(s.phosphate, ' ppb')],
+    ['TDS', safe(p.tds, ' ppm'), safe(s.tds, ' ppm')]
+  ].forEach(row => {
+    doc.setFont('helvetica', 'bold');
+    doc.text(row[0], 15, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(String(row[1]), 95, y);
+    doc.text(String(row[2]), 145, y);
+    nextLine();
+  });
+
+  writeSection('CHEMICALS ADDED — POOL');
+  addeds(p).forEach(item => {
+    doc.setTextColor(80, 80, 80);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(`• ${item}`, 18, y);
+    nextLine();
+  });
+
+  writeSection('CHEMICALS ADDED — SPA');
+  addeds(s).forEach(item => {
+    doc.setTextColor(80, 80, 80);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(`• ${item}`, 18, y);
+    nextLine();
+  });
+
+  writeSection('SERVICE NOTES');
+  doc.setTextColor(80, 80, 80);
   doc.setFont('helvetica', 'normal');
-  const summaryLines = doc.splitTextToSize(order.summary || 'No summary provided.', 180);
-  doc.text(summaryLines, 15, y);
-  y += (summaryLines.length * 5) + 5;
-
-  // Parts Table
-  if (order.partsItems && order.partsItems.length > 0) {
-    doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text('PARTS & EQUIPMENT INSTALLED', 15, y + 5);
-    doc.text('QTY', 170, y + 5);
-    y += 7;
-
-    order.partsItems.forEach((item, i) => {
-      if (i % 2 === 0) {
-        doc.setFillColor(248, 248, 248);
-        doc.rect(10, y, 190, 6, 'F');
-      }
-      doc.setTextColor(...navy);
-      doc.text(`${item.category}: ${item.product}` || 'Unknown Part', 15, y + 4.5);
-      doc.text(String(item.qty || 1), 170, y + 4.5);
-      y += 6;
-    });
-    y += 5;
-  }
-
-  // Office Notes
-  if (order.notes) {
-    doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text('INTERNAL OFFICE NOTES', 15, y + 5);
-    y += 10;
-    doc.setTextColor(60, 60, 60);
-    const notesLines = doc.splitTextToSize(order.notes, 180);
-    doc.text(notesLines, 15, y);
-    y += (notesLines.length * 5) + 5;
-  }
-
-  // Photos (Compact)
-  const photos = normalizeRepairPhotos(order.photos || []);
-  if (photos.some(p => p)) {
-    doc.setFillColor(...navy);
-    doc.rect(10, y, 190, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text('REPAIR PHOTOS', 15, y + 5);
-    y += 10;
-
-    const pW = 42;
-    const pH = 32;
-    let pX = 15;
-    photos.forEach((p, i) => {
-      if (p && i < 4) { // Max 4 photos to fit on one page
-        try {
-          doc.addImage(p, 'JPEG', pX, y, pW, pH);
-          doc.setFontSize(6);
-          doc.setTextColor(150, 150, 150);
-          doc.text(REPAIR_PHOTO_LABELS[i], pX, y + pH + 4);
-        } catch(e) {}
-        pX += 48;
-      }
-    });
-  }
-
-  renderFooter();
-  sharePDF(doc, filename);
-}
-
-function normalizeRepairPartItems(parts = []) {
-  const source = Array.isArray(parts) && parts.length ? parts : [{}];
-  return source.map(part => ({
-    category: part.category || '',
-    partNumber: part.partNumber || '',
-    product: part.product || '',
-    qty: part.qty || '1',
-    unitPrice: part.unitPrice || ''
-  }));
-}
-
-function buildRepairPartsSummary(parts = []) {
-  return normalizeRepairPartItems(parts)
-    .filter(part => part.category || part.partNumber || part.product)
-    .map(part => {
-      const qty = part.qty || '1';
-      const name = part.product || part.partNumber || 'Part';
-      const category = part.category ? `${part.category}: ` : '';
-      const partNumber = part.partNumber ? ` (${part.partNumber})` : '';
-      const price = part.unitPrice ? ` @ $${Number(part.unitPrice).toFixed(2)}` : '';
-      return `${qty} × ${category}${name}${partNumber}${price}`;
-    })
-    .join('\n');
-}
-
-function renderRepairPartRow(orderId, part, index) {
-  const categories = getRepairCatalogCategories();
-  const items = getRepairCatalogItems(part.category);
-  const selectedItem = items.find(item => item.partNumber === part.partNumber)
-    || items.find(item => item.product === part.product)
-    || null;
-
-  return `
-    <div class="repair-part-row" data-index="${index}" style="margin-bottom:10px;">
-      <div class="wo-grid" style="border-radius:var(--radius-sm); margin-bottom:6px;">
-        <div class="wo-fld">
-          <div class="wo-fld-lbl">Category</div>
-          <select class="repair-part-category" onchange="refreshRepairOrderBuilder('${orderId || ''}')">
-            <option value="">— Select category —</option>
-            ${categories.map(category => `
-              <option value="${escapeHtml(category)}" ${category === part.category ? 'selected' : ''}>${escapeHtml(category)}</option>
-            `).join('')}
-          </select>
-        </div>
-
-        <div class="wo-fld">
-          <div class="wo-fld-lbl">Equipment / Part</div>
-          <select class="repair-part-product" onchange="refreshRepairOrderBuilder('${orderId || ''}')">
-            <option value="">— Select equipment —</option>
-            ${items.map(item => `
-              <option value="${escapeHtml(item.partNumber)}"
-                data-product="${escapeHtml(item.product)}"
-                data-price="${escapeHtml(String(item.price ?? ''))}"
-                ${item.partNumber === part.partNumber ? 'selected' : ''}>
-                ${escapeHtml(item.product)}${item.partNumber ? ` — ${escapeHtml(item.partNumber)}` : ''}
-              </option>
-            `).join('')}
-          </select>
-        </div>
-
-        <div class="wo-fld">
-          <div class="wo-fld-lbl">Quantity</div>
-          <input class="wo-fld-inp repair-part-qty" type="number" min="1" step="1" value="${escapeHtml(String(part.qty || '1'))}" oninput="updateRepairPartRowDetails(this)">
-        </div>
-
-        <div class="wo-fld">
-          <div class="wo-fld-lbl">Part Details</div>
-          <div class="repair-part-details" style="font-size:12px; color:var(--gray-600); line-height:1.5; min-height:38px;">
-            ${selectedItem ? `${escapeHtml(selectedItem.partNumber || '')}${selectedItem.price ? ` • $${Number(selectedItem.price).toFixed(2)}` : ''}` : 'Choose a category and equipment item.'}
-          </div>
-          <button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="removeRepairPartRow('${orderId || ''}', ${index})">Remove</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function updateRepairPartRowDetails(input) {
-  const row = input.closest('.repair-part-row');
-  const productSelect = row.querySelector('.repair-part-product');
-  const detailsDiv = row.querySelector('.repair-part-details');
-  const qty = parseInt(input.value) || 1;
-
-  const selectedOption = productSelect.selectedOptions[0];
-  if (selectedOption && selectedOption.value) {
-    const partNumber = selectedOption.value;
-    const price = parseFloat(selectedOption.dataset.price);
-    if (!isNaN(price)) {
-      const total = (price * qty).toFixed(2);
-      detailsDiv.innerHTML = `${escapeHtml(partNumber)} • $${price.toFixed(2)}<br><b>Line Total: $${total}</b>`;
-    } else {
-      detailsDiv.textContent = partNumber;
-    }
-  }
-}
-
-function renderRepairPartsBuilder(orderId, order) {
-  const rows = normalizeRepairPartItems(order.partsItems || []);
-  return `
-    <div class="wo-hint">Select parts by category, choose the equipment item, and enter the quantity used on the job.</div>
-    ${rows.map((part, index) => renderRepairPartRow(orderId, part, index)).join('')}
-    <button type="button" class="btn btn-secondary btn-sm" onclick="addRepairPartRow('${orderId || ''}')">+ Add Another Part / Equipment</button>
-  `;
-}
-
-function refreshRepairOrderBuilder(orderId = '') {
-  const draft = collectRepairOrderFromForm(orderId);
-  if (!draft) return;
-  renderRepairOrderForm(draft.id || orderId, '', draft);
-}
-
-function addRepairPartRow(orderId = '') {
-  const draft = collectRepairOrderFromForm(orderId) || { id: orderId || '', partsItems: [] };
-  draft.partsItems = normalizeRepairPartItems(draft.partsItems || []);
-  draft.partsItems.push({ category: '', partNumber: '', product: '', qty: '1', unitPrice: '' });
-  renderRepairOrderForm(draft.id || orderId, '', draft);
-}
-
-function removeRepairPartRow(orderId = '', index = 0) {
-  const draft = collectRepairOrderFromForm(orderId) || { id: orderId || '', partsItems: [] };
-  const rows = normalizeRepairPartItems(draft.partsItems || []).filter((_, rowIndex) => rowIndex !== index);
-  draft.partsItems = rows.length ? rows : [{ category: '', partNumber: '', product: '', qty: '1', unitPrice: '' }];
-  renderRepairOrderForm(draft.id || orderId, '', draft);
-}
-
-function updateRepairTimeSpentHint() {
-  const hint = document.getElementById('repair-time-spent-hint');
-  if (!hint) return;
-
-  const timeIn = document.getElementById('repair-time-in')?.value || '';
-  const timeOut = document.getElementById('repair-time-out')?.value || '';
-  const spent = calculateTimeSpent(timeIn, timeOut);
-  hint.textContent = `Time on site: ${spent || 'Enter both times to calculate duration.'}`;
-}
-
-function attachRepairFormListeners() {
-  const timeIn = document.getElementById('repair-time-in');
-  const timeOut = document.getElementById('repair-time-out');
-  if (timeIn) timeIn.addEventListener('input', updateRepairTimeSpentHint);
-  if (timeOut) timeOut.addEventListener('input', updateRepairTimeSpentHint);
-  if (timeIn) timeIn.addEventListener('change', updateRepairTimeSpentHint);
-  if (timeOut) timeOut.addEventListener('change', updateRepairTimeSpentHint);
-  updateRepairTimeSpentHint();
-}
-
-function normalizeRepairPhotos(photos = []) {
-  const source = Array.isArray(photos) ? photos : [];
-  return REPAIR_PHOTO_LABELS.map((_, index) => source[index] || '');
-}
-
-function renderRepairPhotoSlot(orderId, label, photo, index) {
-  const safeLabel = escapeHtml(label);
-  return `
-    <div class="photo-slot" id="repair-photo-slot-${index}">
-      <div class="photo-slot-lbl">${safeLabel}</div>
-      <div class="photo-preview-box">
-        ${photo ? `
-          <img class="photo-thumb" data-repair-photo-index="${index}" src="${photo}" alt="${safeLabel}">
-          <button type="button" class="photo-remove" onclick="removeRepairPhoto('${orderId || ''}', ${index})" aria-label="Remove ${safeLabel} photo">&times;</button>
-        ` : `<div class="photo-add-btn">Add ${safeLabel} photo</div>`}
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('repair', '${orderId || ''}', ${index})">Take Photo</button>
-        <label class="btn btn-secondary btn-sm" for="repair-photo-gallery-${index}">Choose Photo</label>
-      </div>
-      <input id="repair-photo-gallery-${index}" name="repair-photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
-    </div>
-  `;
-}
-
-function renderRepairPhotoSection(orderId, order) {
-  const photos = normalizeRepairPhotos(order.photos);
-  const beforeAfter = REPAIR_PHOTO_LABELS.slice(0, 2)
-    .map((label, index) => renderRepairPhotoSlot(orderId, label, photos[index], index))
-    .join('');
-  const extras = REPAIR_PHOTO_LABELS.slice(2)
-    .map((label, offset) => renderRepairPhotoSlot(orderId, label, photos[offset + 2], offset + 2))
-    .join('');
-
-  return `
-    <div class="wo-sec">
-      <div class="wo-sec-hd wo-photo-hd" onclick="toggleAccordion(this)">
-        <span>Repair Photos</span>
-        <span class="wo-chev">▼</span>
-      </div>
-      <div class="wo-sec-bd">
-        <div class="photo-ba-row">${beforeAfter}</div>
-        <div class="photo-extra-grid" style="margin-top:8px;">${extras}</div>
-      </div>
-    </div>
-  `;
-}
-
-async function handleRepairPhotoUpload(orderId, slotIndex, event) {
-  const file = event?.target?.files?.[0];
-  if (!file) return;
-
-  try {
-    const order = collectRepairOrderFromForm(orderId);
-    if (!order) {
-      showToast('Repair work order not found');
-      return;
-    }
-
-    showToast('Processing repair photo...');
-    const dataUrl = await resizeImageForStorage(file);
-    if (!dataUrl) throw new Error('Photo processing failed');
-
-    const photos = normalizeRepairPhotos(order.photos);
-    photos[slotIndex] = dataUrl;
-    order.photos = photos;
-
-    // Persist immediately
-    const orders = getRepairOrders();
-    const idx = orders.findIndex(o => o.id === order.id);
-    if (idx >= 0) {
-      orders[idx] = order;
-    } else {
-      orders.unshift(order);
-    }
-    saveRepairOrders(orders);
-
-    const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
-
-    // Update DOM with new ID if it was previously empty
-    if (!orderId) {
-        const container = document.querySelector('[data-active-repair-id]');
-        if (container) container.setAttribute('data-active-repair-id', order.id);
-    }
-
-    if (slot) {
-      const label = REPAIR_PHOTO_LABELS[slotIndex];
-      slot.outerHTML = renderRepairPhotoSlot(order.id, label, dataUrl, slotIndex);
-      showToast('Repair photo added');
-    } else {
-      renderRepairOrderForm(order.id, '', order);
-      showToast('Repair photo added');
-    }
-  } catch (error) {
-    console.error('Repair photo upload failed', error);
-    showToast('Unable to add repair photo');
-  } finally {
-    if (event?.target) event.target.value = '';
-  }
-}
-
-function removeRepairPhoto(orderId, slotIndex) {
-  const order = collectRepairOrderFromForm(orderId);
-  if (!order) {
-    showToast('Repair work order not found');
-    return;
-  }
-
-  const photos = normalizeRepairPhotos(order.photos);
-  photos[slotIndex] = '';
-  order.photos = photos;
-
-  // Persist immediately
-  const orders = getRepairOrders();
-  const idx = orders.findIndex(o => o.id === order.id);
-  if (idx >= 0) {
-    orders[idx] = order;
-    saveRepairOrders(orders);
-  }
-
-  const slot = document.getElementById(`repair-photo-slot-${slotIndex}`);
-
-  // Ensure form is locked to this ID if it was a new order
-  if (!orderId) {
-      const container = document.querySelector('[data-active-repair-id]');
-      if (container) container.setAttribute('data-active-repair-id', order.id);
-  }
-
-  if (slot) {
-    const label = REPAIR_PHOTO_LABELS[slotIndex];
-    slot.outerHTML = renderRepairPhotoSlot(order.id, label, '', slotIndex);
-  } else {
-    renderRepairOrderForm(order.id, '', order);
-  }
-
-  showToast('Repair photo removed');
-}
-
-function bulkImportClients() {
-  const data = prompt("Paste clients JSON here (Array of objects with name and address)");
-  if (!data) return;
-  try {
-    const newClients = JSON.parse(data);
-    if (!Array.isArray(newClients)) {
-      alert("Invalid format. Expected an array.");
-      return;
-    }
-    const clients = db.get('clients', []);
-    newClients.forEach(c => {
-      clients.unshift({
-        id: `c${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-        name: c.name || 'New Client',
-        address: c.address || '',
-        contact: c.contact || ''
-      });
-    });
-    db.set('clients', clients);
-    showToast(`${newClients.length} clients imported`);
-    router.renderClients();
-  } catch (e) {
-    alert("Error parsing JSON: " + e.message);
-  }
-}
-
-function cleanupTestClients() {
-  const testIds = ['c101', 'c102', 'c103', 'c104'];
-  const clients = db.get('clients', []);
-  const filtered = clients.filter(c => !testIds.includes(c.id));
-  if (filtered.length !== clients.length) {
-    db.set('clients', filtered);
-  }
-}
-
-async function exportCompletedToExcel() {
-  const allWorkorders = db.get('workorders', []);
-  const completed = allWorkorders.filter(wo => wo.status === 'completed');
-
-  if (completed.length === 0) {
-    showToast('No completed work orders to export');
-    return;
-  }
-
-  showToast('Generating Excel report...');
-
-  try {
-    const workbook = new ExcelJS.Workbook();
-    const ws = workbook.addWorksheet('OASIS Service Records');
-
-    const chemKeys = [
-      { key: 'tabs', label: 'Tabs' },
-      { key: 'shock', label: 'Shock/Oxidizer' },
-      { key: 'muriaticAcid', label: 'Muriatic Acid' },
-      { key: 'sodaAsh', label: 'Soda Ash' },
-      { key: 'sodiumBicarb', label: 'Sodium Bicarb' },
-      { key: 'calcium', label: 'Calcium Increaser' },
-      { key: 'stabilizer', label: 'Stabilizer' },
-      { key: 'salt', label: 'Salt' },
-      { key: 'phosphateRemover', label: 'Phosphate Remover' },
-      { key: 'algaecide', label: 'Algaecide' }
-    ];
-
-    // Define Columns
-    const columns = [
-      { header: 'Date', key: 'date', width: 12 },
-      { header: 'Client', key: 'client', width: 25 },
-      { header: 'Address', key: 'address', width: 35 },
-      { header: 'Technician', key: 'tech', width: 15 },
-      { header: 'Time In', key: 'timeIn', width: 10 },
-      { header: 'Time Out', key: 'timeOut', width: 10 },
-      { header: 'Pool Chlorine', key: 'pCl', width: 12 },
-      { header: 'Pool pH', key: 'pph', width: 10 },
-      { header: 'Pool Alk', key: 'palk', width: 10 }
-    ];
-
-    // Add columns for each pool chemical
-    chemKeys.forEach(ck => {
-      columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 });
-    });
-
-    columns.push(
-      { header: 'Spa Chlorine', key: 'sCl', width: 12 },
-      { header: 'Spa pH', key: 'sph', width: 10 },
-      { header: 'Spa Alk', key: 'salk', width: 10 }
-    );
-
-    // Add columns for each spa chemical
-    chemKeys.forEach(ck => {
-      columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 });
-    });
-
-    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
-
-    ws.columns = columns;
-
-    // Style Header
-    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
-
-    completed.forEach(wo => {
-      const rowData = {
-        date: wo.date,
-        client: wo.clientName,
-        address: wo.address,
-        tech: wo.technician,
-        timeIn: wo.timeIn || wo.time || '',
-        timeOut: wo.timeOut || '',
-        pCl: wo.readings?.pool?.chlorine || '',
-        pph: wo.readings?.pool?.ph || '',
-        palk: wo.readings?.pool?.alkalinity || '',
-        sCl: wo.readings?.spa?.chlorine || '',
-        sph: wo.readings?.spa?.ph || '',
-        salk: wo.readings?.spa?.alkalinity || '',
-        notes: (wo.workPerformed || '') + ' ' + (wo.followUpNotes || wo.notes || '')
-      };
-
-      // Populate pool chemical values
-      chemKeys.forEach(ck => {
-        rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || '';
-      });
-
-      // Populate spa chemical values
-      chemKeys.forEach(ck => {
-        rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || '';
-      });
-
-      ws.addRow(rowData);
-    });
-
-    const buffer = await workbook.xlsx.writeBuffer();
-
-    // Robust binary to base64 conversion
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = btoa(binary);
-    const filename = `OASIS_Service_Records_${new Date().toISOString().split('T')[0]}.xlsx`;
-
-    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast('Excel export ready');
-  } catch (error) {
-    console.error('Excel export failed:', error);
-    showToast('Excel export failed');
-  }
-}
-
-function openMap(address) {
-  if (!address) return;
-  let query = address;
-  if (!query.toLowerCase().includes('grand cayman')) {
-    query += ', Grand Cayman';
-  }
-  const encodedAddress = encodeURIComponent(query);
-  const url = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
-  window.open(url, '_blank');
-}
-
-function saveClientDetails(clientId) {
-  const name = document.getElementById('edit-client-name').value;
-  const address = document.getElementById('edit-client-address').value;
-  const contact = document.getElementById('edit-client-contact').value;
-  const tech = document.getElementById('edit-client-tech').value;
-
-  if (!name) {
-    alert('Name is required');
-    return;
-  }
-
-  const clients = db.get('clients', []);
-  const index = clients.findIndex(c => c.id === clientId);
-  if (index >= 0) {
-    clients[index] = { ...clients[index], name, address, contact, technician: tech };
-    db.set('clients', clients);
-
-    // Also update any matching workorders
-    const workorders = db.get('workorders', []);
-    workorders.forEach(wo => {
-      if (wo.clientId === clientId) {
-        wo.clientName = name;
-        wo.address = address;
-        wo.technician = tech;
-      }
-    });
-    db.set('workorders', workorders);
-
-    showToast('Client profile updated');
-    router.renderClients();
-  }
-}
-
-async function shareClientDetails(clientId) {
-  const clients = db.get('clients', []);
-  const client = clients.find(c => c.id === clientId);
-  if (!client) return;
-
-  const text = `Client: ${client.name}\nAddress: ${client.address}\nContact: ${client.contact || 'None'}\nTech: ${client.technician || 'None'}`;
-
-  try {
-    if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.Share) {
-      await Capacitor.Plugins.Share.share({
-        title: `Client Profile: ${client.name}`,
-        text: text,
-        dialogTitle: 'Share Client Details'
-      });
-    } else {
-      await navigator.clipboard.writeText(text);
-      showToast('Client details copied to clipboard');
-    }
-  } catch (err) {
-    console.error('Sharing failed:', err);
-    showToast('Manual copy required');
-  }
-}
-
-function initMasterSchedule() {
-  if (db.get('masterScheduleLoaded')) return;
-
-  const clients = [
-    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem" },
-    { name: "Jeey Bomford", address: "49 Mary Read Crescent", tech: "Kadeem" },
-    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem" },
-    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem" },
-    { name: "Gcpsl Sea View", address: "South Church Street", tech: "Kadeem" },
-    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem" },
-    { name: "Sunrise Phase 3", address: "Old Crewe Rd", tech: "Kadeem" },
-    { name: "Vivi Townhomes", address: "275 Fairbanks Rd", tech: "Kadeem" },
-    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin" },
-    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin" },
-    { name: "Caribbean Courts", address: "Bcqs, South Sound", tech: "Elvin" },
-    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin" },
-    { name: "Fin South Church Street", address: "Fin Strata", tech: "Elvin" },
-    { name: "Lakeland Villas #1", address: "Old Crewe Rd", tech: "Elvin" },
-    { name: "Point Of View", address: "South Sound", tech: "Elvin" },
-    { name: "South Palms #1", address: "Glen Eden Rd", tech: "Elvin" },
-    { name: "Southern Skies", address: "South Sound", tech: "Elvin" },
-    { name: "Correy Williams", address: "16 Cypress Point", tech: "Jermaine" },
-    { name: "Andy Albray", address: "17 The Deck House", tech: "Jermaine" },
-    { name: "Joanne Akdeniz", address: "42 Hoya Quay", tech: "Jermaine" },
-    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine" },
-    { name: "Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine" },
-    { name: "Mike Stroh", address: "64 Waterford Quay", tech: "Jermaine" },
-    { name: "Tim Bradley", address: "66 Baquarat Quay", tech: "Jermaine" },
-    { name: "Plum Mandalay", address: "Seven Mile", tech: "Jermaine" },
-    { name: "Ocean Pointe Villas", address: "West Bay", tech: "Jermaine" },
-    { name: "Snug Harbour Villas", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace" },
-    { name: "John Ferarri", address: "30 Orchid Drive", tech: "Ace" },
-    { name: "Gary Gibbs", address: "306 Yacht Club dr", tech: "Ace" },
-    { name: "Andrew Muir", address: "318 Yacht Drive", tech: "Ace" },
-    { name: "Scott Somerville", address: "40 Orchid Drive", tech: "Ace" },
-    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace" },
-    { name: "Vlad Aldea", address: "474 Yacht Club Dr", tech: "Ace" },
-    { name: "Abraham Burak", address: "Salt Creek", tech: "Ace" },
-    { name: "Sunset Point Condos", address: "North West Point Rd", tech: "Ace" },
-    { name: "Villa Mare", address: "Vista Del Mar", tech: "Ace" },
-    { name: "Jenny Frizzle", address: "302 Windswept Drive", tech: "Donald" },
-    { name: "Anthoney Reid", address: "88 Mallard Drive", tech: "Donald" },
-    { name: "Coral Bay Village", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Harbor Walk", address: "Grand Harbour", tech: "Donald" },
-    { name: "Indigo Bay", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Periwinkle", address: "Edgewater Way", tech: "Donald" },
-    { name: "Savannah Grand", address: "Savannah", tech: "Donald" },
-    { name: "South Shore", address: "Shamrock Rd", tech: "Donald" },
-    { name: "The Palms At Patricks", address: "Patricks Island", tech: "Donald" },
-    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley" },
-    { name: "One Canal Point", address: "Canal Point", tech: "Kingsley" },
-    { name: "Poinsettia", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "The Beachcomber", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel" },
-    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel" },
-    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel" },
-    { name: "Plymouth", address: "Canal Point Dr", tech: "Ariel" },
-    { name: "Glen Kennedy", address: "Salt Creek", tech: "Ariel" },
-    { name: "Mark Vandevelde", address: "Salt Creek", tech: "Ariel" },
-    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel" },
-    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik" },
-    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik" },
-    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik" },
-    { name: "Jason Butcher", address: "44 Grand Estates", tech: "Malik" },
-    { name: "Julie O'Hara", address: "56 Grand Estates", tech: "Malik" },
-    { name: "Mike Gibbs", address: "78 Grand Estates", tech: "Malik" },
-    { name: "Grapetree Condos", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "The Colonial Club", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem" },
-    { name: "Caribbean Paradise", address: "South Sound", tech: "Kadeem" },
-    { name: "L'Ambience", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Mystic Retreat", address: "John Greer Boulavard", tech: "Kadeem" },
-    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin" },
-    { name: "South Bay Estates", address: "Bel Air Dr", tech: "Elvin" },
-    { name: "Andy Marcher", address: "234 Drake Quay", tech: "Jermaine" },
-    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine" },
-    { name: "Dolce Vita", address: "Govenors Harbour", tech: "Jermaine" },
-    { name: "Amber Stewart", address: "Dolce Vita 4", tech: "Jermaine" },
-    { name: "Pleasant View", address: "West Bay", tech: "Jermaine" },
-    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace" },
-    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace" },
-    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace" },
-    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace" },
-    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace" },
-    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace" },
-    { name: "Charles Ebanks", address: "Bonnieview Av", tech: "Donald" },
-    { name: "One Canal Point Gym", address: "Canal Point", tech: "Kingsley" },
-    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik" },
-    { name: "Moon Bay", address: "Shamrock Rd", tech: "Malik" },
-    { name: "Cayman Coves", address: "South Church Street", tech: "Kadeem" },
-    { name: "Venetia", address: "South Sound", tech: "Kadeem" },
-    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin" },
-    { name: "Tim Dailyey", address: "North Webster Dr", tech: "Elvin" },
-    { name: "Nicholas Lynn", address: "Sandlewood Crescent", tech: "Elvin" },
-    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin" },
-    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin" },
-    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin" },
-    { name: "Riyaz Norrudin", address: "63 Langton Way", tech: "Elvin" },
-    { name: "Mangrove", address: "Bcqs", tech: "Elvin" },
-    { name: "Quentin Creegan", address: "Villa Aramone", tech: "Elvin" },
-    { name: "Jodie O'Mahony", address: "12 El Nathan", tech: "Jermaine" },
-    { name: "Charles Motsinger", address: "124 Hillard", tech: "Jermaine" },
-    { name: "Steve Daker", address: "33 Spurgeon Cr", tech: "Jermaine" },
-    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine" },
-    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine" },
-    { name: "Albert Schimdberger", address: "55 Elnathan Rd", tech: "Jermaine" },
-    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine" },
-    { name: "Blair Ebanks", address: "71 Spurgeon Crescent", tech: "Jermaine" },
-    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine" },
-    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine" },
-    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace" },
-    { name: "Mitchell Demeter", address: "19 Whirlaway Close", tech: "Ace" },
-    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace" },
-    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace" },
-    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace" },
-    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace" },
-    { name: "Coastal Escape", address: "Omega Bay", tech: "Ace" },
-    { name: "Inity Ridge", address: "Prospect Point Rd", tech: "Ace" },
-    { name: "Ocean Reach", address: "Old Crewe Rd", tech: "Ace" },
-    { name: "Scott Somerville", address: "Rum Point Rd", tech: "Donald" },
-    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald" },
-    { name: "67 On The Bay", address: "Queens Highway", tech: "Donald" },
-    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald" },
-    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald" },
-    { name: "Paradise Sur Mar", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Rip Kai", address: "Rum Point Drive", tech: "Donald" },
-    { name: "Sunrays", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley" },
-    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley" },
-    { name: "Regant Court", address: "Brittania", tech: "Kingsley" },
-    { name: "Solara Main", address: "Crystal Harbour", tech: "Kingsley" },
-    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel" },
-    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel" },
-    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel" },
-    { name: "Chad Horwitz", address: "49 Calico Quay", tech: "Ariel" },
-    { name: "Malcom Swift", address: "Miramar", tech: "Ariel" },
-    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Strata #70", address: "Boggy Sands rd", tech: "Ariel" },
-    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik" },
-    { name: "Debbie Ebanks", address: "Fischers Reef", tech: "Malik" },
-    { name: "John Corallo", address: "3A Seahven", tech: "Malik" },
-    { name: "Encompass", address: "3B Seahven", tech: "Malik" },
-    { name: "Joseph Hurlston", address: "42 Monumnet Rd", tech: "Malik" },
-    { name: "George McKenzie", address: "534 Rum Point Dr", tech: "Malik" },
-    { name: "Twin Palms", address: "Rum Point Dr", tech: "Malik" },
-    { name: "Bernie Bako", address: "#4 Venetia", tech: "Kadeem" },
-    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem" },
-    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem" },
-    { name: "Park View Courts", address: "Spruce Lane", tech: "Kadeem" },
-    { name: "The Bentley", address: "Crewe rd", tech: "Kadeem" },
-    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin" },
-    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin" },
-    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin" },
-    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin" },
-    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin" },
-    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin" },
-    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin" },
-    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin" },
-    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin" },
-    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine" },
-    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine" },
-    { name: "Nigel Daily", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine" },
-    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine" },
-    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine" },
-    { name: "Shoreway Townhomes", address: "Adonis Dr", tech: "Jermaine" },
-    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine" },
-    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine" },
-    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace" },
-    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace" },
-    { name: "Clive Harris", address: "516 Crighton Drive", tech: "Ace" },
-    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace" },
-    { name: "Ross Fortune", address: "90 Prince Charles", tech: "Ace" },
-    { name: "Simon Palmer", address: "Olivias Cove", tech: "Ace" },
-    { name: "Caroline Moran", address: "197 Bimini Dr", tech: "Donald" },
-    { name: "James Reeve", address: "215 Bimini Dr", tech: "Donald" },
-    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald" },
-    { name: "Sina Mirzale", address: "353 Bimini Dr", tech: "Donald" },
-    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald" },
-    { name: "Marlon Bispath", address: "519 Bimini Dr", tech: "Donald" },
-    { name: "Margaret Fantasia", address: "526 Bimini Dr", tech: "Donald" },
-    { name: "Kenny Rankin", address: "Grand Harbour", tech: "Donald" },
-    { name: "James Mendes", address: "106 Olea", tech: "Ariel" },
-    { name: "James O'Brien", address: "102 Olea", tech: "Ariel" },
-    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel" },
-    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel" },
-    { name: "Mr Holland", address: "107 Olea", tech: "Ariel" },
-    { name: "Nikki Harris", address: "213 olea", tech: "Ariel" },
-    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel" },
-    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel" },
-    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik" },
-    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik" },
-    { name: "Iman Shafiei", address: "53 Baquarat Quay", tech: "Malik" },
-    { name: "Enrique Tasende", address: "65 Baccarat Quay", tech: "Malik" },
-    { name: "David Wilson", address: "Boggy Sands", tech: "Malik" },
-    { name: "Nina Irani", address: "Casa Oasis", tech: "Malik" },
-    { name: "Sandy Lane Townhomes", address: "Boggy Sands Rd", tech: "Malik" },
-    { name: "Valencia Heights", address: "Strata #536", tech: "Kadeem" },
-    { name: "Jaime-Lee Eccles", address: "176 Conch Dr", tech: "Kadeem" },
-    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem" },
-    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem" },
-    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem" },
-    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem" },
-    { name: "Hilton Estates", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin" },
-    { name: "Britni Strong", address: "150 Parkway Dr", tech: "Elvin" },
-    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin" },
-    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd", tech: "Elvin" },
-    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin" },
-    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin" },
-    { name: "Saphire", address: "Jec, Nwp Rd", tech: "Elvin" },
-    { name: "The Sands", address: "Boggy Sand Rd", tech: "Elvin" },
-    { name: "Turtle Breeze", address: "Conch Point Rd", tech: "Elvin" },
-    { name: "Francois Du Toit", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine" },
-    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine" },
-    { name: "Johann Prinslo", address: "270 Jennifer Dr", tech: "Jermaine" },
-    { name: "Andre Slabbert", address: "7 Victoria Dr", tech: "Jermaine" },
-    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine" },
-    { name: "Palm Heights Residence", address: "Seven Mile Beach", tech: "Jermaine" },
-    { name: "Jean Mean", address: "211 Sea Spray Dr", tech: "Ace" },
-    { name: "Paul Rowan", address: "265 Sea Spray Dr", tech: "Ace" },
-    { name: "Charmaine Richter", address: "40 Natures Circle", tech: "Ace" },
-    { name: "Rory Andrews", address: "44 Country Road", tech: "Ace" },
-    { name: "Walker Romanica", address: "79 Riley Circle", tech: "Ace" },
-    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace" },
-    { name: "Grand Palmyra", address: "Seven Mile Beach", tech: "Ace" },
-    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace" },
-    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald" },
-    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald" },
-    { name: "Reg Williams", address: "Cliff House", tech: "Donald" },
-    { name: "Gypsy", address: "1514 Rum Point Dr", tech: "Donald" },
-    { name: "Kai Vista", address: "Rum Point Dr", tech: "Donald" },
-    { name: "Ocean Vista", address: "Rum Point", tech: "Donald" },
-    { name: "Stefan Marenzi", address: "Water Cay Rd", tech: "Donald" },
-    { name: "Bella Rocca", address: "Queens Highway", tech: "Donald" },
-    { name: "Sea 2 Inity", address: "Kiabo", tech: "Donald" },
-    { name: "Guy Manning", address: "Diamonds Edge", tech: "Kingsley" },
-    { name: "Kent Nickerson", address: "Salt Creek", tech: "Kingsley" },
-    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel" },
-    { name: "Suzanne Correy", address: "394 Canal Point Rd", tech: "Ariel" },
-    { name: "November Capitol", address: "One Canal Point", tech: "Ariel" },
-    { name: "Safe Harbor", address: "West Bay", tech: "Ariel" },
-    { name: "Bert Thacker", address: "West Bay", tech: "Ariel" },
-    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik" },
-    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik" },
-    { name: "Philip Smyres", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Brandon Caruana", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik" },
-    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik" },
-    { name: "Phillip Cadien", address: "312 Cypres Point", tech: "Malik" }
-  ];
-
-  // Map to store unique clients by name
-  const uniqueClients = {};
-  clients.forEach(c => {
-    if (!uniqueClients[c.name]) {
-      uniqueClients[c.name] = {
-        id: `c_${Math.random().toString(36).substr(2, 9)}`,
-        name: c.name,
-        address: c.address,
-        technician: c.tech
-      };
-    }
+  doc.setFontSize(9);
+  const noteLines = doc.splitTextToSize(wo.notes || 'No notes recorded.', 175);
+  doc.text(noteLines, 15, y);
+  y += noteLines.length * 5 + 6;
+
+  const getImageSize = (dataUrl) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth || img.width || 1, height: img.naturalHeight || img.height || 1 });
+    img.onerror = reject;
+    img.src = dataUrl;
   });
 
-  const clientArray = Object.values(uniqueClients);
-  db.set('clients', clientArray);
+  const photoEntries = PHOTO_KEYS.filter(key => activePhotos[key]);
+  if (photoEntries.length) {
+    writeSection('SITE PHOTOS');
+    let col = 0;
+    const boxW = 82;
+    const boxH = 58;
 
-  // Generate pending workorders for each client assigned to their tech
-  const workorders = clientArray.map(c => ({
-    id: `wo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-    clientId: c.id,
-    clientName: c.name,
-    address: c.address,
-    technician: c.technician,
-    date: new Date().toISOString().split('T')[0],
-    status: 'pending',
-    readings: { pool: defaultChemReadings(), spa: defaultChemReadings() },
-    chemicalsAdded: { pool: defaultChemicalAdditions(), spa: defaultChemicalAdditions() },
-    photos: []
-  }));
-
-  db.set('workorders', workorders);
-  db.set('masterScheduleLoaded', true);
-}
-
-function populateLoginTechOptions() {
-  const select = document.getElementById('login-tech');
-  if (!select) return;
-
-  const entries = Object.entries(auth.users)
-    .sort((a, b) => a[1].name.localeCompare(b[1].name));
-
-  select.innerHTML = `
-    <option value="" disabled selected>— Select your name —</option>
-    ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
-    `).join('')}
-  `;
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  // Always force login screen on startup
-  auth.logout();
-
-  cleanupTestClients();
-  initMasterSchedule();
-  migrateLegacyRepairData();
-  populateLoginTechOptions();
-
-  // Android Back Button Handling
-  if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
-    Capacitor.Plugins.App.addListener('backButton', () => {
-      if (router.currentView === 'dashboard') {
-        // Stop at home page, don't exit if logged in (though we force login above)
-        return;
+    for (const key of photoEntries) {
+      const x = col === 0 ? 15 : 108;
+      if (col === 0 && y + boxH + 16 > 280) {
+        doc.addPage();
+        y = 20;
       }
 
-      if (!auth.isLoggedIn()) {
-        // If at login screen, maybe let it exit or do nothing
-        return;
-      }
+      const label = key === 'before' ? 'Before' : key === 'after' ? 'After' : `Photo ${key.replace('extra', '')}`;
+      doc.setTextColor(80, 80, 80);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.text(label, x, y);
 
-      router.goBack();
-    });
-  }
+      const imgY = y + 4;
+      doc.setFillColor(248, 245, 241);
+      doc.rect(x, imgY, boxW, boxH, 'F');
+      doc.setDrawColor(220, 220, 220);
+      doc.rect(x, imgY, boxW, boxH);
 
-  document.querySelectorAll('.nav-item').forEach(btn => {
-    btn.addEventListener('click', () => {
-      router.navigate(btn.dataset.view);
-    });
-  });
-
-  document.getElementById('login-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const select = document.getElementById('login-tech');
-    const pinInput = document.getElementById('login-pin');
-    const username = select ? select.value : '';
-    const pin = pinInput ? pinInput.value : '';
-    const loginScreen = document.getElementById('login-screen');
-    const appShell = document.getElementById('app');
-    const loginError = document.getElementById('login-error');
-
-    console.log('Attempting login for:', username);
-
-    if (auth.login(username, pin)) {
-      console.log('Login successful');
-      const loginScreen = document.getElementById('login-screen');
-      const appShell = document.getElementById('app');
-
-      if (loginScreen) {
-        loginScreen.style.setProperty('display', 'none', 'important');
-      }
-      if (appShell) {
-        appShell.classList.remove('hidden');
-        appShell.style.setProperty('display', 'flex', 'important');
-      }
-      if (loginError) loginError.style.display = 'none';
-
-      // Immediate navigation
       try {
-        router.navigate('dashboard');
+        const dataUrl = activePhotos[key];
+        const format = dataUrl.includes('image/png') ? 'PNG' : 'JPEG';
+        const { width, height } = await getImageSize(dataUrl);
+        const scale = Math.min(boxW / width, boxH / height);
+        const drawW = Math.max(10, width * scale);
+        const drawH = Math.max(10, height * scale);
+        const drawX = x + (boxW - drawW) / 2;
+        const drawY = imgY + (boxH - drawH) / 2;
+        doc.addImage(dataUrl, format, drawX, drawY, drawW, drawH);
       } catch (err) {
-        console.error('Navigation error:', err);
-        location.reload();
+        console.warn('Photo skipped in PDF:', err);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.text('Photo unavailable', x + 16, imgY + 30);
       }
-    } else {
-      console.warn('Login failed: invalid username or PIN');
-      if (loginError) loginError.style.display = 'block';
-    }
-  });
 
-  document.addEventListener('click', (e) => {
-    if (e.target.classList.contains('modal-overlay')) {
-      modal.hide();
-    }
-  });
-});
-
-function signOut() {
-  auth.logout();
-  document.getElementById('app').classList.add('hidden');
-  document.getElementById('app').style.display = 'none';
-  const loginScreen = document.getElementById('login-screen');
-  loginScreen.classList.remove('hidden');
-  loginScreen.style.display = 'flex';
-  router.navigate('dashboard');
-}
-
-function quickAddClient() {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can add clients');
-    return;
-  }
-  const name = prompt('Client name');
-  if (!name) return;
-
-  const address = prompt('Client address') || '';
-  const contact = prompt('Contact name') || '';
-  const clients = db.get('clients', []);
-
-  clients.unshift({
-    id: `c${Date.now()}`,
-    name,
-    address,
-    contact
-  });
-
-  db.set('clients', clients);
-  showToast('Client added');
-  router.renderClients();
-}
-
-function deleteClient(clientId) {
-  if (!auth.isAdmin()) {
-    showToast('Only admins can delete clients');
-    return;
-  }
-  if (!confirm('Delete this client and related service records?')) return;
-
-  db.set('clients', db.get('clients', []).filter(client => client.id !== clientId));
-  db.set('workorders', db.get('workorders', []).filter(order => order.clientId !== clientId));
-  db.set('repairOrders', getRepairOrders().filter(order => order.clientId !== clientId));
-
-  showToast('Client removed');
-  router.renderClients();
-}
-
-function onChemClientChange() {
-  const select = document.getElementById('wo-client');
-  const addressField = document.getElementById('wo-address');
-  const title = document.getElementById('wo-client-name');
-  if (!select) return;
-
-  const client = db.get('clients', []).find(item => item.id === select.value);
-  if (client) {
-    if (addressField) addressField.value = client.address || '';
-    if (title) title.textContent = client.name || 'Chem Sheet';
-  }
-}
-
-function updateChemGuidancePreview(orderId) {
-  const preview = document.getElementById('chem-guidance-preview');
-  if (!preview) return;
-
-  const order = collectWorkOrderForm(orderId);
-  if (order) {
-    preview.innerHTML = renderChemDosingSummary(order);
-  }
-}
-
-function updateTimeSpentHint() {
-  const hint = document.getElementById('wo-time-spent-hint');
-  const timeIn = document.getElementById('wo-time-in')?.value || '';
-  const timeOut = document.getElementById('wo-time-out')?.value || '';
-  if (!hint) return;
-
-  const spent = calculateTimeSpent(timeIn, timeOut);
-  hint.textContent = `Time on site: ${spent || 'Enter both times to calculate duration.'}`;
-}
-
-function attachChemFieldListeners(orderId) {
-  const form = document.querySelector('.wo-form');
-  if (!form) return;
-
-  form.querySelectorAll('input, select, textarea').forEach(field => {
-    if (field.id && (field.id.startsWith('pool-') || field.id.startsWith('spa-'))) {
-      field.addEventListener('input', () => updateChemGuidancePreview(orderId));
-      field.addEventListener('change', () => updateChemGuidancePreview(orderId));
-    }
-
-    if (field.id === 'wo-time-in' || field.id === 'wo-time-out') {
-      field.addEventListener('input', updateTimeSpentHint);
-      field.addEventListener('change', updateTimeSpentHint);
-    }
-  });
-
-  updateTimeSpentHint();
-}
-
-function collectWorkOrderForm(orderId) {
-  const order = workOrderManager.getOrder(orderId);
-  if (!order) return null;
-
-  const dateInput = document.getElementById('wo-date');
-  if (!dateInput) {
-    return order;
-  }
-
-  const getValue = (id, fallback = '') => {
-    const field = document.getElementById(id);
-    return field ? field.value : fallback;
-  };
-
-  const existingPool = { ...defaultChemReadings(), ...(order.readings?.pool || {}) };
-  const existingSpa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
-  const existingChemicalsAdded = order.chemicalsAdded || {};
-  const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
-  const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
-  const selectedClientId = getValue('wo-client', order.clientId || '');
-  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
-  const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
-
-  const updatedOrder = {
-    ...order,
-    clientId: selectedClientId || order.clientId,
-    clientName: selectedClient?.name || order.clientName,
-    technician: getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || ''),
-    date: getValue('wo-date', order.date),
-    time: getValue('wo-time-in', order.timeIn || order.time || ''),
-    timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
-    timeOut: getValue('wo-time-out', order.timeOut || ''),
-    status: getValue('wo-status', order.status || 'pending'),
-    address: selectedClient?.address || getValue('wo-address', order.address),
-    workPerformed: getValue('wo-work', order.workPerformed || ''),
-    followUpNotes,
-    notes: followUpNotes,
-    photos: normalizeChemPhotos(order.photos), // Ensure photos are preserved from the original order
-    readings: {
-      ...order.readings,
-      pool: {
-        ...existingPool,
-        ph: getValue('pool-ph', existingPool.ph || ''),
-        chlorine: getValue('pool-chlorine', existingPool.chlorine || ''),
-        alkalinity: getValue('pool-alkalinity', existingPool.alkalinity || ''),
-        calcium: getValue('pool-calcium', existingPool.calcium || ''),
-        cya: getValue('pool-cya', existingPool.cya || ''),
-        salt: getValue('pool-salt', existingPool.salt || ''),
-        temp: getValue('pool-temp', existingPool.temp || ''),
-        tds: getValue('pool-tds', existingPool.tds || ''),
-        phosphates: getValue('pool-phosphates', existingPool.phosphates || ''),
-        borates: getValue('pool-borates', existingPool.borates || '')
-      },
-      spa: {
-        ...existingSpa,
-        ph: getValue('spa-ph', existingSpa.ph || ''),
-        chlorine: getValue('spa-chlorine', existingSpa.chlorine || ''),
-        alkalinity: getValue('spa-alkalinity', existingSpa.alkalinity || ''),
-        calcium: getValue('spa-calcium', existingSpa.calcium || ''),
-        cya: getValue('spa-cya', existingSpa.cya || ''),
-        salt: getValue('spa-salt', existingSpa.salt || ''),
-        temp: getValue('spa-temp', existingSpa.temp || ''),
-        tds: getValue('spa-tds', existingSpa.tds || ''),
-        phosphates: getValue('spa-phosphates', existingSpa.phosphates || ''),
-        borates: getValue('spa-borates', existingSpa.borates || '')
-      }
-    },
-    chemicalsAdded: {
-      pool: {
-        ...existingPoolAdded,
-        tabs: getValue('pool-add-tabs', existingPoolAdded.tabs || ''),
-        shock: getValue('pool-add-shock', existingPoolAdded.shock || ''),
-        muriaticAcid: getValue('pool-add-muriaticAcid', existingPoolAdded.muriaticAcid || ''),
-        sodaAsh: getValue('pool-add-sodaAsh', existingPoolAdded.sodaAsh || ''),
-        sodiumBicarb: getValue('pool-add-sodiumBicarb', existingPoolAdded.sodiumBicarb || ''),
-        calcium: getValue('pool-add-calcium', existingPoolAdded.calcium || ''),
-        stabilizer: getValue('pool-add-stabilizer', existingPoolAdded.stabilizer || ''),
-        salt: getValue('pool-add-salt', existingPoolAdded.salt || ''),
-        phosphateRemover: getValue('pool-add-phosphateRemover', existingPoolAdded.phosphateRemover || ''),
-        algaecide: getValue('pool-add-algaecide', existingPoolAdded.algaecide || ''),
-        other: getValue('pool-add-other', existingPoolAdded.other || '')
-      },
-      spa: {
-        ...existingSpaAdded,
-        tabs: getValue('spa-add-tabs', existingSpaAdded.tabs || ''),
-        shock: getValue('spa-add-shock', existingSpaAdded.shock || ''),
-        muriaticAcid: getValue('spa-add-muriaticAcid', existingSpaAdded.muriaticAcid || ''),
-        sodaAsh: getValue('spa-add-sodaAsh', existingSpaAdded.sodaAsh || ''),
-        sodiumBicarb: getValue('spa-add-sodiumBicarb', existingSpaAdded.sodiumBicarb || ''),
-        calcium: getValue('spa-add-calcium', existingSpaAdded.calcium || ''),
-        stabilizer: getValue('spa-add-stabilizer', existingSpaAdded.stabilizer || ''),
-        salt: getValue('spa-add-salt', existingSpaAdded.salt || ''),
-        phosphateRemover: getValue('spa-add-phosphateRemover', existingSpaAdded.phosphateRemover || ''),
-        algaecide: getValue('spa-add-algaecide', existingSpaAdded.algaecide || ''),
-        other: getValue('spa-add-other', existingSpaAdded.other || '')
+      if (col === 1) {
+        y += boxH + 14;
+        col = 0;
+      } else {
+        col = 1;
       }
     }
-  };
 
-  updatedOrder.lsi = {
-    pool: calculateLSI(updatedOrder.readings.pool),
-    spa: calculateLSI(updatedOrder.readings.spa)
-  };
-
-  const sourceReadings = Object.values(updatedOrder.readings.pool).some(value => value !== '' && value !== null && value !== undefined)
-    ? updatedOrder.readings.pool
-    : updatedOrder.readings.spa;
-  updatedOrder.chemicals = workOrderManager.calculateDosing(sourceReadings);
-
-  return updatedOrder;
-}
-
-function saveWorkOrderForm(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-  
-  order.status = document.getElementById('wo-status')?.value || order.status;
-  workOrderManager.saveOrder(order);
-  router.navigate('workorders');
-  showToast('Chem sheet saved');
-}
-
-function shareReport(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
+    if (col === 1) y += boxH + 14;
   }
 
-  workOrderManager.saveOrder(order);
-  workOrderManager.generateReport(order);
-}
+  const fileName = `OASIS_${(cust ? cust.name : 'Client').replace(/[^a-z0-9]+/gi, '-')}_${wo.date || todayStr()}.pdf`;
+  const pdfBlob = doc.output('blob');
 
-function sendReport(orderId) {
-  shareReport(orderId);
-}
-
-function saveApkLink() {
-  const input = document.getElementById('apk-link-input');
-  if (!input) return;
-
-  const link = input.value.trim();
-  db.set('apk_download_link', link);
-
-  // Re-render the settings view to update the QR code
-  if (router.currentView === 'settings') {
-    router.renderSettings();
-  }
-
-  showToast(link ? 'APK link saved' : 'APK link cleared');
-}
-
-async function shareAppLink() {
-  const link = db.get('apk_download_link') || (window.location.origin + '/oasis-app.apk');
-  if (!link) {
-    showToast('No link to share');
-    return;
-  }
-
-  const shareData = {
-    title: 'Download Pool Tech App',
-    text: 'Download the latest version of the Pool Service App here:',
-    url: link,
-    dialogTitle: 'Share APK Link'
-  };
-
-  try {
-    if (typeof Capacitor !== 'undefined' && Capacitor.Plugins && Capacitor.Plugins.Share) {
-      await Capacitor.Plugins.Share.share(shareData);
-    } else if (navigator.share) {
-      await navigator.share(shareData);
-    } else {
-      // Fallback to clipboard
-      await navigator.clipboard.writeText(link);
-      showToast('Link copied to clipboard');
-    }
-  } catch (err) {
-    console.error('Error sharing:', err);
-    // Fallback to clipboard on error
+  if (mode === 'share') {
     try {
-      await navigator.clipboard.writeText(link);
-      showToast('Link copied to clipboard');
-    } catch (clipboardErr) {
-      showToast('Could not share or copy link');
-    }
-  }
-}
+      const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+      const canShareFile = !!(navigator.share && (!navigator.canShare || navigator.canShare({ files: [pdfFile] })));
 
-async function copyApkLink() {
-  const link = db.get('apk_download_link') || (window.location.origin + '/oasis-app.apk');
-  if (link) {
-    try {
-      await navigator.clipboard.writeText(link);
-      showToast('Link copied to clipboard');
+      if (window.isSecureContext && canShareFile) {
+        await navigator.share({
+          title: `OASIS Chem Sheet — ${cust ? cust.name : 'Client'}`,
+          text: 'Choose WhatsApp to send this PDF.',
+          files: [pdfFile]
+        });
+        showToast('📲 Choose WhatsApp to send the PDF');
+        return;
+      }
+
+      if (!window.isSecureContext) {
+        showToast('Open the secure app link to share via WhatsApp');
+      } else {
+        showToast('Share not available on this device — saving PDF instead');
+      }
     } catch (err) {
-      console.error('Failed to copy link: ', err);
-      showToast('Could not copy link');
+      if (err && err.name === 'AbortError') return;
+      console.warn('PDF share fallback:', err);
+      showToast('Could not share directly — saving PDF instead');
     }
   }
+
+  presentPDFBlob(pdfBlob, fileName);
 }
+
+function sharePDFReport(id) {
+  return savePDFReport(id, 'share');
+}
+
+function sendReport(id) {
+  sharePDFReport(id);
+}
+
+function openBrandedReport(wo) {
+  const cust = DB.getCustomer(wo.customerId);
+  const tech = DB.getTechnician(wo.technicianId);
+  const p = wo.pool||{}, s = wo.spa||{};
+  const photos = wo.photos||{};
+  const photoEntries = PHOTO_KEYS.filter(k => photos[k]);
+
+  /* Resolve local logo to absolute URL */
+  const logoSrc = (() => { const a = document.createElement('a'); a.href = 'oasis-logo.png'; return a.href; })();
+
+  function dot(param, val) {
+    const v = parseFloat(val);
+    const ranges = { chlorine:{ok:[1,3],warn:[0.5,5]}, pH:{ok:[7.2,7.6],warn:[7.0,7.8]}, alk:{ok:[80,120],warn:[60,180]}, cya:{ok:[30,50],warn:[20,80]}, calcium:{ok:[200,400],warn:[150,500]} };
+    const rng = ranges[param]; if (!rng || isNaN(v)) return '';
+    if (v >= rng.ok[0]   && v <= rng.ok[1])   return '<span style="color:#2a7a4f;font-size:13px">\u25cf</span> ';
+    if (v >= rng.warn[0] && v <= rng.warn[1])  return '<span style="color:#9a6f1e;font-size:13px">\u25cf</span> ';
+    return '<span style="color:#b53030;font-size:13px">\u25cf</span> ';
+  }
+  function rv(v, u) { return (v && String(v).trim()) ? v + (u||'') : '\u2014'; }
+
+  function chemRow(label, pv, pu, sv, param) {
+    return `<tr><td class="rl">${label}</td><td class="rv">${dot(param,pv)}${rv(pv,pu)}</td><td class="rv">${rv(sv,pu)}</td></tr>`;
+  }
+
+  function addedRows(o) {
+    const rows = [];
+    if (o.tabs)        rows.push(['Tabs',            o.tabs + ' ea']);
+    if (o.hypo)        rows.push(['Hypo-Chlorite',   o.hypo + ' lbs']);
+    if (o.acid)        rows.push(['Acid',            o.acid + ' gal']);
+    if (o.sodaAsh)     rows.push(['Soda Ash',        o.sodaAsh + ' lbs']);
+    if (o.bicarb)      rows.push(['Na Bicarbonate',  o.bicarb + ' lbs']);
+    if (o.conditioner) rows.push(['Conditioner',     o.conditioner + ' lbs']);
+    if (o.bromine)     rows.push(['Bromine',         o.bromine + ' ea']);
+    if (o.phosphateOz) rows.push(['Phosphate Rmvr',  o.phosphateOz + ' oz']);
+    if (o.saltBag)     rows.push(['Salt',            o.saltBag + ' bag']);
+    if (o.algaecide)   rows.push(['Algaecide',       o.algaecide + ' oz']);
+    if (o.clarifier)   rows.push(['Clarifier',       o.clarifier + ' oz']);
+    if (!rows.length)  return '<tr><td colspan="2" style="color:#999;font-style:italic;padding:6px 0">None added</td></tr>';
+    return rows.map(r => `<tr><td class="al">${r[0]}</td><td class="av">${r[1]}</td></tr>`).join('');
+  }
+
+  const photoHTML = photoEntries.length ? `
+    <div class="section-hd">SITE PHOTOS</div>
+    <div class="photos-grid">
+      ${photoEntries.map(k => {
+        const lbl = k==='before'?'Before':k==='after'?'After':'Photo '+k.replace('extra','');
+        return `<div class="photo-item"><img src="${photos[k]}"><div class="photo-cap">${lbl}</div></div>`;
+      }).join('')}
+    </div>` : '';
+
+  const css = `
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;background:#fff;color:#231F20;font-size:11px}
+    @page{size:A4;margin:0}
+    @media print{.no-print{display:none!important}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+    .bar{position:fixed;top:0;left:0;right:0;background:#1A405F;padding:11px 28px;display:flex;align-items:center;justify-content:space-between;z-index:100}
+    .bar-txt{color:#D4C9BB;font-size:12px;letter-spacing:.06em}
+    .bar-btn{background:linear-gradient(135deg,#539199,#226683);color:#fff;border:none;padding:10px 26px;border-radius:4px;font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}
+    .page{margin-top:52px}
+    .hdr{background:#0a1e2e;padding:20px 32px;display:flex;align-items:center;justify-content:space-between}
+    .hdr-left{display:flex;align-items:center;gap:14px}
+    .hdr-logo{width:52px;height:auto;display:block}
+    .hdr-brand{color:#D4C9BB;font-family:Georgia,serif;font-size:28px;font-weight:300;letter-spacing:.38em;text-transform:uppercase}
+    .hdr-right{text-align:right}
+    .hdr-title{color:#fff;font-size:13px;font-weight:700;letter-spacing:.2em;text-transform:uppercase}
+    .hdr-sub{color:#539199;font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;margin-top:5px}
+    .gold{height:3px;background:linear-gradient(90deg,#c9a87c,#D4C9BB,#c9a87c)}
+    .job{padding:16px 32px;background:#f8f5f1;border-bottom:1px solid #dbd5cc}
+    .job-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 32px}
+    .jl{font-size:8px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#a09589}
+    .jv{font-size:12px;font-weight:600;color:#1A405F;margin-top:2px;margin-bottom:8px}
+    .section-hd{background:#1A405F;color:#D4C9BB;font-size:8.5px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;padding:8px 32px}
+    .section-body{padding:14px 32px}
+    .chem-tbl{width:100%;border-collapse:collapse}
+    .chem-tbl th{background:#226683;color:#fff;font-size:8.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;padding:8px 12px;text-align:left}
+    .chem-tbl th:nth-child(2),.chem-tbl th:nth-child(3){text-align:center}
+    .rl{padding:7px 12px;font-size:10px;color:#334155;border-bottom:1px solid #ede9e3}
+    .rv{padding:7px 12px;font-size:10px;font-weight:600;color:#1A405F;text-align:center;border-bottom:1px solid #ede9e3}
+    .chem-tbl tr:nth-child(even) td{background:#f8f5f1}
+    .ideal{font-size:8px;color:#a09589;font-style:italic;padding:6px 12px 10px;border-bottom:2px solid #D4C9BB}
+    .added-wrap{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+    .added-title{font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#539199;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid #D4C9BB}
+    .added-tbl{width:100%;border-collapse:collapse}
+    .al{font-size:10px;color:#334155;padding:5px 0;border-bottom:1px solid #ede9e3}
+    .av{font-size:10px;font-weight:700;color:#1A405F;padding:5px 0;text-align:right;border-bottom:1px solid #ede9e3}
+    .notes-box{background:#f8f5f1;border-left:3px solid #D4C9BB;padding:12px 16px;font-size:11px;line-height:1.6;color:#334155;min-height:44px;border-radius:0 4px 4px 0}
+    .photos-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:14px 32px}
+    .photo-item img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:4px;border:1px solid #dbd5cc}
+    .photo-cap{font-size:8.5px;text-align:center;color:#a09589;margin-top:4px;letter-spacing:.08em;text-transform:uppercase}
+    .footer{background:#0a1e2e;padding:14px 32px;display:flex;align-items:center;justify-content:space-between;margin-top:24px}
+    .footer-logo{width:36px;height:auto;display:block}
+    .footer-brand{color:#D4C9BB;font-family:Georgia,serif;font-size:15px;font-weight:300;letter-spacing:.32em;text-transform:uppercase}
+    .footer-info{color:rgba(212,201,187,.5);font-size:8px;letter-spacing:.1em;margin-top:3px}
+    .footer-right{text-align:right;color:rgba(212,201,187,.55);font-size:8px;letter-spacing:.06em;line-height:1.8}`;
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>OASIS Service Report \u2014 ${cust ? cust.name : ''}</title>
+<style>${css}</style></head><body>
+<div class="bar no-print">
+  <div class="bar-txt">OASIS Report \u2014 ${cust ? cust.name : ''} \u2014 ${fmtDate(wo.date)}</div>
+  <button class="bar-btn" onclick="window.print()">Save as PDF \u2193</button>
+</div>
+<div class="page">
+  <div class="hdr">
+    <div class="hdr-left">
+      <img class="hdr-logo" src="${logoSrc}" alt="OASIS">
+      <div class="hdr-brand">Oasis</div>
+    </div>
+    <div class="hdr-right">
+      <div class="hdr-title">Service Report</div>
+      <div class="hdr-sub">Luxury Pool &amp; Watershape Design</div>
+    </div>
+  </div>
+  <div class="gold"></div>
+  <div class="job"><div class="job-grid">
+    <div><div class="jl">Client</div><div class="jv">${cust ? cust.name : '\u2014'}</div></div>
+    <div><div class="jl">Date</div><div class="jv">${fmtDate(wo.date)}</div></div>
+    <div><div class="jl">Address</div><div class="jv">${wo.address || '\u2014'}</div></div>
+    <div><div class="jl">Time In / Out</div><div class="jv">${fmtTime(wo.timeIn)||'\u2014'} \u2192 ${fmtTime(wo.timeOut)||'\u2014'}</div></div>
+    <div><div class="jl">Technician</div><div class="jv">${tech ? tech.name : '\u2014'}</div></div>
+    <div><div class="jl">Route &amp; Pool Size</div><div class="jv">Route ${wo.routeNumber||'\u2014'}${wo.gallons?' \u00b7 '+parseInt(wo.gallons).toLocaleString()+' gal':''}</div></div>
+    <div><div class="jl">Surface</div><div class="jv">${wo.surfaceType||'\u2014'}</div></div>
+    <div><div class="jl">Condition</div><div class="jv">${wo.condition||'\u2014'}</div></div>
+  </div></div>
+  <div class="section-hd">Chemical Readings</div>
+  <table class="chem-tbl">
+    <thead><tr><th style="width:38%">Parameter</th><th style="width:31%">Pool</th><th style="width:31%">Spa</th></tr></thead>
+    <tbody>
+      ${chemRow('Chlorine',   p.chlorine,  ' ppm', s.chlorine,  'chlorine')}
+      ${chemRow('pH',         p.pH,        '',     s.pH,        'pH')}
+      ${chemRow('Alkalinity', p.alk,       ' ppm', s.alk,       'alk')}
+      ${chemRow('CYA',        p.cya,       ' ppm', s.cya,       'cya')}
+      ${chemRow('Calcium',    p.calcium,   ' ppm', s.calcium,   'calcium')}
+      ${chemRow('Salt',       p.salt,      ' ppm', s.salt,      '')}
+      ${chemRow('Phosphate',  p.phosphate, ' ppb', s.phosphate, '')}
+      ${chemRow('TDS',        p.tds,       ' ppm', s.tds,       '')}
+    </tbody>
+  </table>
+  <div class="ideal">\u25cf Ideal: Chlorine 1\u20133 ppm \u00b7 pH 7.2\u20137.6 \u00b7 Alkalinity 80\u2013120 ppm \u00b7 CYA 30\u201350 ppm \u00b7 Calcium 200\u2013400 ppm</div>
+  <div class="section-hd">Chemicals Added</div>
+  <div class="section-body"><div class="added-wrap">
+    <div><div class="added-title">Pool</div><table class="added-tbl">${addedRows(p)}</table></div>
+    <div><div class="added-title">Spa</div><table class="added-tbl">${addedRows(s)}</table></div>
+  </div></div>
+  <div class="section-hd">Service Notes</div>
+  <div class="section-body"><div class="notes-box">${wo.notes || '<span style="color:#a09589;font-style:italic">No notes recorded.</span>'}</div></div>
+  ${photoHTML}
+  <div class="footer">
+    <div style="display:flex;align-items:center;gap:14px">
+      <img class="footer-logo" src="${logoSrc}" alt="OASIS">
+      <div>
+        <div class="footer-brand">Oasis</div>
+        <div class="footer-info">Luxury Pool &amp; Watershape Design, Construction &amp; Maintenance</div>
+      </div>
+    </div>
+    <div class="footer-right">
+      Harbour Walk, 2nd Floor \u2014 Grand Cayman, KY1-1001<br>
+      +1 345-945-7665 \u00b7 oasis.ky<br>
+      Generated ${new Date().toLocaleDateString('en-US',{day:'numeric',month:'long',year:'numeric'})}
+    </div>
+  </div>
+</div>
+</body></html>`;
+
+  const w = window.open('', '_blank', 'width=860,height=720');
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}
+
+
+function dataURLtoFile(dataURL,filename){const arr=dataURL.split(','),mime=arr[0].match(/:(.*?);/)[1],bstr=atob(arr[1]),u8=new Uint8Array(bstr.length);for(let i=0;i<bstr.length;i++)u8[i]=bstr.charCodeAt(i);return new File([u8],filename,{type:mime});}
+
+/* ── DOSING CALCULATOR ─────────────────────────────────────────── */
+function getTempFactor(t){const tbl=[[32,0],[41,.1],[50,.2],[59,.3],[68,.4],[77,.5],[86,.6],[95,.7],[104,.8],[113,.9]];t=parseFloat(t)||77;if(t<=32)return 0;if(t>=113)return.9;for(let i=0;i<tbl.length-1;i++){if(t>=tbl[i][0]&&t<=tbl[i+1][0]){const r=(t-tbl[i][0])/(tbl[i+1][0]-tbl[i][0]);return tbl[i][1]+r*(tbl[i+1][1]-tbl[i][1]);}}return.5;}
+function calcLSI(pH,ca,alk,tempF){const p=parseFloat(pH),c=parseFloat(ca),a=parseFloat(alk);if(isNaN(p)||isNaN(c)||isNaN(a)||c<=0||a<=0)return null;return parseFloat((p+Math.log10(c)+Math.log10(a)+getTempFactor(tempF)-12.1).toFixed(2));}
+function lsiStatus(lsi,surface){if(lsi===null)return{cls:'na',label:'—'};const pl=!surface||surface.includes('Plaster')||surface.includes('Concrete');if(lsi<-0.5)return{cls:'bad',label:'Very Corrosive'};if(lsi<(pl?-0.3:-0.5))return{cls:'warn',label:'Slightly Corrosive'};if(lsi<=(pl?0.3:0.0))return{cls:'ok',label:'Balanced ✓'};if(lsi<=0.5)return{cls:'warn',label:'Slightly Scaling'};return{cls:'bad',label:'Scaling'};}
+function calcDosing(gallons,r,tempF){const g=parseFloat(gallons)||0;if(g<=0)return[];const G=g/10000,items=[],cl=parseFloat(r.chlorine),ph=parseFloat(r.pH),alk=parseFloat(r.alk),cya=parseFloat(r.cya),ca=parseFloat(r.calcium),salt=parseFloat(r.salt),phos=parseFloat(r.phosphate);if(!isNaN(cl)){if(cl<1){const d=2-cl,ch=(d*G*.1316).toFixed(2),lq=(d*G*.10).toFixed(2);items.push({s:'low',icon:'⬇️',label:`Chlorine LOW — ${cl} ppm (1–3)`,add:`${ch} lbs Cal-Hypo (65%)`,note:`or ${lq} gal Liquid Chlorine — add at dusk`});}else if(cl>3)items.push({s:'high',icon:'⬆️',label:`Chlorine HIGH — ${cl} ppm (1–3)`,add:'Allow to dissipate naturally',note:'Sodium thiosulfate: ~1 oz per 1 ppm per 10,000 gal'});}if(!isNaN(ph)){const af=isNaN(alk)?1:Math.min(2,Math.max(.5,alk/100));if(ph>7.6){const d=ph-7.4,oz=Math.round(d/.1*6*G*af),qt=(oz/32).toFixed(1);items.push({s:'high',icon:'⬆️',label:`pH HIGH — ${ph} (7.2–7.6)`,add:`${oz} fl oz (${qt} qt) Muriatic Acid`,note:'Pre-dilute in bucket. Retest after 1 hr.'});}else if(ph<7.2){const d=7.4-ph,oz=Math.round(d/.2*6*G),lb=(oz/16).toFixed(2);items.push({s:'low',icon:'⬇️',label:`pH LOW — ${ph} (7.2–7.6)`,add:`${oz} oz (${lb} lbs) Soda Ash`,note:'Broadcast across pool with pump running.'});}}if(!isNaN(alk)){if(alk<80){const d=100-alk,lb=(d/10*1.5*G).toFixed(2);items.push({s:'low',icon:'⬇️',label:`ALK LOW — ${alk} ppm (80–120)`,add:`${lb} lbs Sodium Bicarbonate`,note:'Broadcast in front of a return fitting.'});}else if(alk>120){const d=alk-100,oz=Math.round(d/10*11*G);items.push({s:'high',icon:'⬆️',label:`ALK HIGH — ${alk} ppm (80–120)`,add:`${oz} fl oz Muriatic Acid`,note:'Add around perimeter with pump OFF.'});}}if(!isNaN(cya)){if(cya<30){const d=40-cya,oz=(d/10*13*G).toFixed(1),lb=(parseFloat(oz)/16).toFixed(2);items.push({s:'low',icon:'⬇️',label:`CYA LOW — ${cya} ppm (30–50)`,add:`${lb} lbs Cyanuric Acid`,note:'Add in skimmer sock or dissolve in warm water.'});}else if(cya>80)items.push({s:'high',icon:'⬆️',label:`CYA HIGH — ${cya} ppm (30–50)`,add:cya>100?'Partial drain & refill required':'Partial drain recommended',note:`At ${cya} ppm CYA, chlorine efficacy is impaired.`});}if(!isNaN(ca)){if(ca<200){const d=300-ca,lb=(d/10*1.25*G).toFixed(2);items.push({s:'low',icon:'⬇️',label:`Calcium LOW — ${ca} ppm (200–400)`,add:`${lb} lbs Calcium Chloride`,note:'Low calcium etches plaster.'});}else if(ca>400)items.push({s:'high',icon:'⬆️',label:`Calcium HIGH — ${ca} ppm (200–400)`,add:'Partial drain & refill',note:'High calcium causes scaling.'});}if(!isNaN(phos)&&phos>100){const oz=Math.ceil(phos/100*G*10);items.push({s:'high',icon:'⬆️',label:`Phosphates HIGH — ${phos} ppb (0–100)`,add:`~${oz} oz Phosphate Remover`,note:'Backwash filter 24 hrs after treating.'});}if(!isNaN(salt)&&salt>500){if(salt<3000){const d=3200-salt,lb=Math.round(d/100*8.3*G),bags=Math.ceil(lb/40);items.push({s:'low',icon:'⬇️',label:`Salt LOW — ${salt} ppm (3,000–4,000)`,add:`${lb} lbs Pool Salt (~${bags} × 40-lb bags)`,note:'Use pure NaCl. Allow 24 hrs to circulate.'});}else if(salt>4000)items.push({s:'high',icon:'⬆️',label:`Salt HIGH — ${salt} ppm (3,000–4,000)`,add:'Partial drain & refill',note:'Excess salt corrodes metal fixtures.'});}return items;}
+function renderDosingResults(gallons,r,tempF,surface){const g=parseFloat(gallons);if(!g||g<=0)return`<div class="dosing-empty"><p>Enter pool gallons &amp; readings above</p></div>`;const lsi=calcLSI(r.pH,r.calcium,r.alk,tempF||80);const st=lsiStatus(lsi,surface);const items=calcDosing(gallons,r,tempF);const sign=lsi!==null&&lsi>0?'+':'';const lsiHTML=`<div class="lsi-box lsi-${st.cls}"><div class="lsi-main"><div><div class="lsi-val">${lsi!==null?sign+lsi:'—'}</div><div class="lsi-name">Langelier Saturation Index</div></div><div class="lsi-badge lsi-bdg-${st.cls}">${st.label}</div></div>${lsi!==null?`<div class="lsi-track"><div class="lsi-dot" style="left:${Math.min(96,Math.max(4,((lsi+1)/2)*100))}%"></div></div><div class="lsi-labels"><span>−1.0 Corrosive</span><span>0 Balanced</span><span>+1.0 Scaling</span></div>`:''}  <div class="lsi-ideal">Ideal: −0.3 to +0.3 (plaster) · −0.3 to 0.0 (fiberglass/vinyl)</div></div>`;const allOk=items.length===0;const itemsHTML=allOk?`<div class="dosing-all-ok">✅ All parameters within range — water is balanced!</div>`:`<div class="dosing-hdr">RECOMMENDATIONS</div>`+items.map(it=>`<div class="dosing-item dosing-${it.s}"><div class="dosing-top"><span>${it.icon}</span><strong>${esc(it.label)}</strong></div><div class="dosing-add">${esc(it.add)}</div>${it.note?`<div class="dosing-note">${esc(it.note)}</div>`:''}</div>`).join('');return lsiHTML+itemsHTML;}
+function updateDosingCalc(){const g=document.getElementById('wo-gallons')?.value||'';const tmp=document.getElementById('wo-temp')?.value||'80';const sfc=document.getElementById('wo-surface')?.value||'Plaster / Concrete';const r={chlorine:document.getElementById('wo-pool-cl')?.value,pH:document.getElementById('wo-pool-ph')?.value,alk:document.getElementById('wo-pool-alk')?.value,cya:document.getElementById('wo-pool-cya')?.value,calcium:document.getElementById('wo-pool-ca')?.value,salt:document.getElementById('wo-pool-salt')?.value,phosphate:document.getElementById('wo-pool-phos')?.value};const el=document.getElementById('dosing-results');if(el)el.innerHTML=renderDosingResults(g,r,tmp,sfc);}
+
+/* ── VIEWS ─────────────────────────────────────────────────────── */
+
+/* DASHBOARD */
+function renderDashboard() {
+  const techId = Auth.techId, today = todayStr(), dow = todayDOW();
+  const h = new Date().getHours(), greet = h < 12 ? 'Good Morning' : h < 17 ? 'Good Afternoon' : 'Good Evening';
+
+  if (APP_MODE === 'tech') {
+    const myOrders = DB.techOrders.filter(o => o.technicianId === techId);
+    const openCount = myOrders.length;
+    const doneToday = myOrders.filter(o => o.date === today).length;
+    const recentHTML = myOrders.length === 0
+      ? `<p style="padding:16px;color:var(--gray-400);text-align:center;font-size:13px">No technician work orders created yet.</p>`
+      : myOrders.sort((a,b)=>(b.date+(b.timeIn||'')).localeCompare(a.date+(a.timeIn||''))).slice(0,5).map(order => {
+          const cust = DB.getCustomer(order.customerId);
+          return `<div class="schedule-item" onclick="techOrderState={view:'form',id:'${esc(order.id)}'};Router.navigate('tech-orders')" style="cursor:pointer">
+            <div class="schedule-dot pending"></div>
+            <div class="schedule-info"><div class="schedule-name">${esc(cust ? cust.name : 'Unknown')}</div><div class="schedule-detail">${esc(order.workType || 'Repair')} · ${esc(order.orderNumber || '')}</div></div>
+            ${techOrderBadge()}
+          </div>`;
+        }).join('');
+
+    return `<div class="wave-banner">
+      <div class="wave-banner-eyebrow">OASIS Technician Work Orders</div>
+      <div class="wave-banner-title">${esc(greet)}</div>
+      <div class="wave-banner-sub">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+    </div>
+    <div class="stats-grid" style="margin-top:20px">
+      <div class="stat-card primary"><div class="stat-icon">🛠️</div><div class="stat-value">${myOrders.length}</div><div class="stat-label">My Work Orders</div></div>
+      <div class="stat-card primary"><div class="stat-icon">✅</div><div class="stat-value">${doneToday}</div><div class="stat-label">Created Today</div></div>
+      <div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value" style="color:var(--warning)">${openCount}</div><div class="stat-label">Active WOs</div></div>
+      <div class="stat-card"><div class="stat-icon">👥</div><div class="stat-value" style="color:var(--teal)">${DB.customers.length}</div><div class="stat-label">Clients</div></div>
+    </div>
+    <div class="section-header"><span class="section-title">Recent Work Orders</span><button class="btn btn-sm btn-primary" onclick="Router.navigate('tech-orders')">Open All</button></div>
+    <div class="card">${recentHTML}</div>
+    <div class="section-header"><span class="section-title">Quick Actions</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 16px 16px">
+      <button class="btn btn-primary" style="justify-content:center" onclick="techOrderState={view:'form',id:null};Router.navigate('tech-orders')">🛠️ New Work Order</button>
+      <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('tech-orders')">📄 My Work Orders</button>
+      <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('customers')">👥 Clients</button>
+      <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('admin')">⚙️ Admin</button>
+    </div>`;
+  }
+
+  const todayStops = getTodaysStops(techId);
+  const done = todayStops.filter(s => { const wo = getStopWO(s.id, today); return wo && wo.status === 'completed'; }).length;
+  const myWOs = DB.workOrders.filter(w => w.technicianId === techId).length;
+  const stopsHTML = todayStops.length === 0
+    ? `<p style="padding:16px;color:var(--gray-400);text-align:center;font-size:13px">${DAY_NAMES[dow]} is not a scheduled service day.</p>`
+    : todayStops.map(s => { const cust = DB.getCustomer(s.customerId); const wo = getStopWO(s.id, today); const st = wo ? wo.status : 'pending';
+        return `<div class="schedule-item" onclick="Router.navigate('route')" style="cursor:pointer">
+          <div class="schedule-dot ${st}"></div>
+          <div style="min-width:24px;font-size:13px;font-weight:700;color:var(--champagne-dk)">${s.stopOrder}</div>
+          <div class="schedule-info"><div class="schedule-name">${esc(cust ? cust.name : 'Unknown')}</div><div class="schedule-detail">${esc(s.serviceType)}</div></div>
+          ${statusBadge(st)}</div>`;
+      }).join('');
+
+  return `<div class="wave-banner">
+    <div class="wave-banner-eyebrow">Luxury Pool &amp; Watershape Service</div>
+    <div class="wave-banner-title">${esc(greet)}</div>
+    <div class="wave-banner-sub">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+  </div>
+  <div class="stats-grid" style="margin-top:20px">
+    <div class="stat-card primary"><div class="stat-icon">📍</div><div class="stat-value">${todayStops.length}</div><div class="stat-label">Stops Today</div></div>
+    <div class="stat-card primary"><div class="stat-icon">✅</div><div class="stat-value">${done}</div><div class="stat-label">Completed</div></div>
+    <div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value" style="color:var(--warning)">${todayStops.length - done}</div><div class="stat-label">Remaining</div></div>
+    <div class="stat-card"><div class="stat-icon">📋</div><div class="stat-value" style="color:var(--teal)">${myWOs}</div><div class="stat-label">My Chem Sheets</div></div>
+  </div>
+  <div class="section-header"><span class="section-title">Today — ${DAY_SHORT[dow]}</span><button class="btn btn-sm btn-primary" onclick="Router.navigate('route')">Full Route</button></div>
+  <div class="card">${stopsHTML}</div>
+  <div class="section-header"><span class="section-title">Quick Actions</span></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 16px 16px">
+    <button class="btn btn-primary" style="justify-content:center" onclick="Router.navigate('route')">📍 My Route</button>
+    <button class="btn btn-secondary" style="justify-content:center" onclick="woState={view:'form',id:null};Router.navigate('logs')">📋 New Chem Sheet</button>
+    <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('customers')">👥 Clients</button>
+    <button class="btn btn-secondary" style="justify-content:center" onclick="Router.navigate('logs')">📄 My Sheets</button>
+  </div>`;
+}
+
+/* MY ROUTE */
+let routeViewDay=null;
+function renderRoute(){
+  const techId=Auth.techId,today=todayStr(),dow=routeViewDay!==null?routeViewDay:todayDOW(),isToday=dow===todayDOW();
+  const stops=getStopsByDay(techId,dow),tech=DB.getTechnician(techId);
+  const total=stops.length,done=stops.filter(s=>{const wo=getStopWO(s.id,today);return wo&&wo.status==='completed';}).length,pct=total>0?Math.round((done/total)*100):0;
+  const weekDays=[1,2,3,4,5,6];
+  const dayTabsHTML=weekDays.map(d=>{const has=DB.routes.some(r=>r.technicianId===techId&&r.dayOfWeek===d);return`<button class="filter-tab${dow===d?' active':''} ${has?'':'day-empty'}" onclick="routeViewDay=${d};App.render()">${DAY_SHORT[d]}</button>`;}).join('');
+  const stopsHTML=stops.length===0
+    ?`<div class="empty-state"><div class="empty-icon">🏖️</div><div class="empty-title">No stops on ${DAY_NAMES[dow]}</div></div>`
+    :stops.map(s=>{const cust=DB.getCustomer(s.customerId);const wo=getStopWO(s.id,today);const st=wo?wo.status:'pending';
+      const isDone=st==='completed',isActive=st==='in-progress';
+      return`<div class="route-stop ${isDone?'route-stop-done':isActive?'route-stop-active':''}">
+        <div class="route-stop-num">${s.stopOrder}</div>
+        <div class="route-stop-body">
+          <div class="route-stop-name">${esc(cust?cust.name:'Unknown')}</div>
+          <div class="route-stop-addr">${esc(cust?cust.address:'')}</div>
+          <div class="route-stop-meta">
+            <span class="route-type-badge">${esc(s.serviceType)}</span>
+            ${cust&&cust.poolSize?`<span class="route-meta-pill">${parseInt(cust.poolSize).toLocaleString()} gal</span>`:''}
+          </div>
+          ${cust&&cust.notes?`<div class="route-stop-notes">📌 ${esc(cust.notes)}</div>`:''}
+        </div>
+        <div class="route-stop-actions">
+          ${statusBadge(st)}
+          <div class="route-btn-row">
+            ${isToday&&st==='pending'?`<button class="btn btn-sm route-start-btn" onclick="startStop('${esc(s.id)}')">▶ Start</button>`:''}
+            ${isToday&&st==='in-progress'?`<button class="btn btn-sm route-complete-btn" onclick="showChemSheetForStop('${esc(s.id)}')">📋 Chem Sheet</button>`:''}
+            ${isDone&&wo?`<button class="btn btn-sm btn-secondary" onclick="woState={view:'form',id:'${esc(wo.id)}'};Router.navigate('logs')">📋 View</button>`:''}
+            ${cust?`<a class="btn btn-sm btn-secondary" href="https://maps.google.com/?q=${encodeURIComponent(cust.address||'')}" target="_blank">🗺️</a>`:''}
+          </div>
+        </div>
+      </div>`;}).join('');
+  return`<div class="page-header">
+    <div><div class="page-title">My Route</div><div class="page-subtitle">Route ${stops[0]?.routeNumber||'—'} · ${tech?tech.name:''}</div></div>
+  </div>
+  <div class="filter-tabs">${dayTabsHTML}</div>
+  ${total>0?`<div class="route-progress-bar"><div class="route-progress-inner" style="width:${pct}%"></div><span class="route-progress-label">${done}/${total} stops complete</span></div>`:''}
+  <div style="padding:4px 0">${stopsHTML}</div>`;
+}
+
+function startStop(routeId){
+  const route=DB.getRoute(routeId);if(!route)return;
+  const cust=DB.getCustomer(route.customerId),existing=getStopWO(routeId,todayStr());
+  if(existing){DB.updateWorkOrder(existing.id,{status:'in-progress'});}
+  else{DB.addWorkOrder({routeId,customerId:route.customerId,technicianId:Auth.techId,routeNumber:route.routeNumber,date:todayStr(),timeIn:new Date().toTimeString().slice(0,5),timeOut:'',condition:'Good',gallons:cust?cust.poolSize||'':'',address:cust?cust.address||'':'',temp:'80',surfaceType:cust?cust.poolType||'Plaster / Concrete':'Plaster / Concrete',notes:'',status:'in-progress',pool:{chlorine:'',pH:'',alk:'',cya:'',calcium:'',salt:'',phosphate:'',tds:'',tabs:'',hypo:'',acid:'',sodaAsh:'',bicarb:'',conditioner:'',bromine:'',phosphateOz:'',saltBag:'',algaecide:'',clarifier:''},spa:{chlorine:'',pH:'',alk:'',cya:'',calcium:'',salt:'',phosphate:'',tds:'',tabs:'',hypo:'',acid:'',sodaAsh:'',bicarb:'',conditioner:'',bromine:'',phosphateOz:'',saltBag:'',algaecide:'',clarifier:''},photos:{}});}
+  showToast('Stop started');App.render();
+}
+
+function showChemSheetForStop(routeId){const wo=getStopWO(routeId,todayStr());if(wo){woState={view:'form',id:wo.id};Router.navigate('logs');}}
+
+/* CHEM SHEETS */
+let woState={view:'list'};
+function renderWorkOrders(){if(woState.view==='form'){App._afterRender=updateDosingCalc;return renderWorkOrderForm(woState.id);}return renderWorkOrderList();}
+
+function renderWorkOrderList(){
+  const techId=Auth.techId;
+  const myWOs=Auth.isAdmin?[...DB.workOrders]:DB.workOrders.filter(w=>w.technicianId===techId);
+  const sorted=myWOs.sort((a,b)=>(b.date+(b.timeIn||'')).localeCompare(a.date+(a.timeIn||'')));
+  const condCls={Good:'completed',Excellent:'completed',Fair:'in-progress',Poor:'pending','Green Pool':'cancelled',Algae:'cancelled',Cloudy:'pending'};
+  const listHTML=sorted.length===0
+    ?`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-title">No chem sheets yet</div><div class="empty-subtitle">Start a route stop or tap + to add one manually.</div></div>`
+    :sorted.map(wo=>{const cust=DB.getCustomer(wo.customerId);const pool=wo.pool||{};
+      return`<div class="job-card">
+        <div class="job-card-header">
+          <div><div class="job-card-title">${esc(cust?cust.name:'Unknown')}</div>
+            <div class="job-card-customer">Route ${esc(wo.routeNumber||'—')}${wo.gallons?' · '+parseInt(wo.gallons).toLocaleString()+' gal':''}</div></div>
+          <span class="badge badge-${condCls[wo.condition]||'pending'}">${esc(wo.condition||'—')}</span>
+        </div>
+        <div class="job-card-body">
+          <div class="job-meta">
+            <div class="job-meta-item">📅 ${fmtDate(wo.date)}</div>
+            ${wo.timeIn?`<div class="job-meta-item">🕐 In: ${fmtTime(wo.timeIn)}</div>`:''}
+            ${wo.timeOut?`<div class="job-meta-item">🕓 Out: ${fmtTime(wo.timeOut)}</div>`:''}
+          </div>
+          ${pool.chlorine?`<div class="wo-pills">${woPill('Cl',pool.chlorine,1,3,'ppm')}${woPill('pH',pool.pH,7.2,7.6,'')}${woPill('Alk',pool.alk,80,120,'')}${pool.cya?woPill('CYA',pool.cya,30,50,''):''}</div>`:''}
+        </div>
+        <div class="job-card-footer">
+          <button class="btn btn-sm btn-primary" onclick="woState={view:'form',id:'${esc(wo.id)}'};App.render()">📋 Open</button>
+          <button class="btn btn-sm btn-secondary" onclick="savePDFReport('${esc(wo.id)}')">📄 Save PDF</button>
+          <button class="btn btn-sm btn-secondary" onclick="sharePDFReport('${esc(wo.id)}')">📲 Share</button>
+          <button class="btn btn-sm btn-secondary" style="color:var(--danger)" onclick="deleteWO('${esc(wo.id)}')">🗑️</button>
+        </div>
+      </div>`;}).join('');
+  return`<div class="page-header"><div><div class="page-title">Chem Sheets</div><div class="page-subtitle">${sorted.length} record${sorted.length!==1?'s':''}</div></div><button class="btn-fab" onclick="woState={view:'form',id:null};App.render()">+</button></div><div style="margin-top:4px">${listHTML}</div>`;
+}
+function woPill(lbl,val,min,max,unit){const v=parseFloat(val),ok=!isNaN(v)&&v>=min&&v<=max;return`<span class="wo-pill ${isNaN(v)?'':'wo-pill-'+(ok?'ok':'bad')}">${lbl}: ${val}${unit}</span>`;}
+function deleteWO(id){Confirm.show('Delete this chem sheet?',()=>{DB.deleteWorkOrder(id);App.render();showToast('Deleted');});}
+
+function renderWorkOrderForm(id){
+  const wo=id?(DB.getWorkOrder(id)||{}):{};resetPhotos(wo);
+  const p=wo.pool||{},s=wo.spa||{},custId=wo.customerId||'',today=todayStr();
+  const tech=DB.getTechnician(Auth.techId);
+  return`<div class="wo-form">
+  <div class="wo-bar"><button class="btn btn-secondary btn-sm" onclick="woState={view:'list'};App.render()">← Back</button><span class="wo-bar-title">${id?'Edit Chem Sheet':'New Chem Sheet'}</span><div style="display:flex;gap:8px">${id?`<button class="btn btn-secondary btn-sm" onclick="savePDFReport('${esc(id)}')">📄 Save PDF</button><button class="btn btn-secondary btn-sm" onclick="sharePDFReport('${esc(id)}')">📲 Share</button>`:''}<button class="btn btn-primary btn-sm" onclick="saveWorkOrder(${id?`'${esc(id)}'`:'null'})">💾 Save</button></div></div>
+  <div class="wo-sec"><div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>📋  Job Info</span><span class="wo-chev">▼</span></div>
+  <div class="wo-sec-bd">
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Technician</label><input class="form-control" value="${esc(tech?tech.name:'')}" readonly style="background:var(--gray-50)"></div>
+      <div class="form-group"><label class="form-label">Route #</label><input class="form-control" id="wo-route" value="${esc(wo.routeNumber||DB.routes.find(r=>r.technicianId===Auth.techId)?.routeNumber||'')}"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Customer *</label><select class="form-control" id="wo-customer" onchange="onWoCustChange()"><option value="">— Select client —</option>${customerOptions(custId)}</select></div>
+    <div class="form-group"><label class="form-label">Address</label><input class="form-control" id="wo-address" readonly style="background:var(--gray-50)" value="${esc(wo.address||(custId?DB.getCustomer(custId)?.address||'':''))}"></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Date *</label><input class="form-control" id="wo-date" type="date" value="${esc(wo.date||today)}"></div>
+      <div class="form-group"><label class="form-label">Pool Gallons</label><input class="form-control" id="wo-gallons" type="number" step="500" min="0" placeholder="15000" value="${esc(wo.gallons||(custId?DB.getCustomer(custId)?.poolSize||'':''))}" oninput="updateDosingCalc()"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Time In</label><input class="form-control" id="wo-timein" type="time" value="${esc(wo.timeIn||'')}"></div>
+      <div class="form-group"><label class="form-label">Time Out</label><input class="form-control" id="wo-timeout" type="time" value="${esc(wo.timeOut||'')}"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Condition</label><select class="form-control" id="wo-condition">${['Good','Excellent','Fair','Poor','Cloudy','Green Pool','Algae'].map(c=>`<option${(wo.condition||'Good')===c?' selected':''}>${c}</option>`).join('')}</select></div>
+  </div></div>
+  <div class="wo-sec"><div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>🧪  Chemical Readings</span><span class="wo-chev">▼</span></div>
+  <div class="wo-sec-bd">
+    <p class="wo-hint">Ideal ranges shown below each field.</p>
+    <div class="wo-blk-lbl">🏊  POOL</div><div class="wo-grid">
+      ${rf('Chlorine','wo-pool-cl',p.chlorine,'2–4 ppm')}${rf('pH','wo-pool-ph',p.pH,'7.2–7.6')}${rf('ALK','wo-pool-alk',p.alk,'80–120 ppm')}${rf('CYA','wo-pool-cya',p.cya,'30–50 ppm')}${rf('Ca Hardness','wo-pool-ca',p.calcium,'200–400 ppm')}${rf('Salt','wo-pool-salt',p.salt,'3000–4000')}${rf('Phosphate','wo-pool-phos',p.phosphate,'0 ppb')}${rf('TDS','wo-pool-tds',p.tds,'&lt;2000')}
+    </div>
+    <div class="wo-blk-lbl" style="margin-top:12px">🛁  SPA</div><div class="wo-grid">
+      ${rf('Chlorine','wo-spa-cl',s.chlorine,'3–5 ppm')}${rf('pH','wo-spa-ph',s.pH,'7.2–7.6')}${rf('ALK','wo-spa-alk',s.alk,'80–120 ppm')}${rf('CYA','wo-spa-cya',s.cya,'30–50 ppm')}${rf('Ca Hardness','wo-spa-ca',s.calcium,'150–400')}${rf('Salt','wo-spa-salt',s.salt,'—')}${rf('Phosphate','wo-spa-phos',s.phosphate,'0 ppb')}${rf('TDS','wo-spa-tds',s.tds,'&lt;1500')}
+    </div>
+  </div></div>
+  <div class="wo-sec"><div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>⚗️  Chemicals Added</span><span class="wo-chev">▼</span></div>
+  <div class="wo-sec-bd">
+    <div class="wo-blk-lbl">🏊  POOL</div><div class="wo-grid">
+      ${cf('Tabs','wo-pool-tabs',p.tabs,'ea')}${cf('Hypo','wo-pool-hypo',p.hypo,'lbs')}${cf('Acid','wo-pool-acid',p.acid,'gal')}${cf('Soda Ash','wo-pool-sodaash',p.sodaAsh,'lbs')}${cf('Na Bicarb','wo-pool-bicarb',p.bicarb,'lbs')}${cf('Conditioner','wo-pool-cond',p.conditioner,'lbs')}${cf('Bromine','wo-pool-brom',p.bromine,'ea')}${cf('Phos Rmvr','wo-pool-phosoz',p.phosphateOz,'oz')}${cf('Salt','wo-pool-saltbag',p.saltBag,'bag')}${cf('Algaecide','wo-pool-alg',p.algaecide,'oz')}${cf('Clarifier','wo-pool-clar',p.clarifier,'oz')}
+    </div>
+    <div class="wo-blk-lbl" style="margin-top:12px">🛁  SPA</div><div class="wo-grid">
+      ${cf('Tabs','wo-spa-tabs',s.tabs,'ea')}${cf('Hypo','wo-spa-hypo',s.hypo,'lbs')}${cf('Acid','wo-spa-acid',s.acid,'gal')}${cf('Soda Ash','wo-spa-sodaash',s.sodaAsh,'lbs')}${cf('Na Bicarb','wo-spa-bicarb',s.bicarb,'lbs')}${cf('Conditioner','wo-spa-cond',s.conditioner,'lbs')}${cf('Bromine','wo-spa-brom',s.bromine,'ea')}${cf('Phos Rmvr','wo-spa-phosoz',s.phosphateOz,'oz')}${cf('Salt','wo-spa-saltbag',s.saltBag,'bag')}${cf('Algaecide','wo-spa-alg',s.algaecide,'oz')}${cf('Clarifier','wo-spa-clar',s.clarifier,'oz')}
+    </div>
+    <div class="form-group" style="margin-top:14px"><label class="form-label">Service Notes</label><textarea class="form-control" id="wo-notes" rows="3">${esc(wo.notes||'')}</textarea></div>
+  </div></div>
+  <div class="wo-sec"><div class="wo-sec-hd wo-photo-hd" onclick="toggleWoSection(this)"><span>📸  Photos</span><span class="wo-chev">▼</span></div>
+  <div class="wo-sec-bd">
+    <p class="wo-hint">Tap a slot to photograph or choose from library.</p>
+    <div class="photo-ba-row">${photoSlot('before','Before')}${photoSlot('after','After')}</div>
+    <div class="wo-blk-lbl" style="margin-top:14px">Additional Photos</div>
+    <div class="photo-extra-grid">${photoSlot('extra1','1')}${photoSlot('extra2','2')}${photoSlot('extra3','3')}${photoSlot('extra4','4')}${photoSlot('extra5','5')}</div>
+  </div></div>
+  <div class="wo-sec"><div class="wo-sec-hd wo-calc-hd" onclick="toggleWoSection(this)"><span>🧮  Dosing Calculator</span><span class="wo-chev">▼</span></div>
+  <div class="wo-sec-bd">
+    <div class="form-row" style="margin-bottom:14px">
+      <div class="form-group"><label class="form-label">Water Temp (°F)</label><input class="form-control" id="wo-temp" type="number" min="32" max="120" placeholder="80" value="${esc(wo.temp||'80')}" oninput="updateDosingCalc()"></div>
+      <div class="form-group"><label class="form-label">Pool Surface</label><select class="form-control" id="wo-surface" onchange="updateDosingCalc()">${['Plaster / Concrete','Fiberglass','Vinyl Liner'].map(s=>`<option${(wo.surfaceType||'Plaster / Concrete')===s?' selected':''}>${s}</option>`).join('')}</select></div>
+    </div>
+    <div id="dosing-results"><div class="dosing-empty"><p>Enter pool readings &amp; gallons above</p></div></div>
+  </div></div>
+  ${wo.routeId?`<div style="padding:16px"><button class="btn btn-primary" style="width:100%;justify-content:center;padding:14px" onclick="completeStop('${esc(id||'')}')">✅  Mark Stop Complete &amp; Save</button></div>`:''}
+  <div style="height:24px"></div></div>`;
+}
+
+function rf(label,id,val,hint){return`<div class="wo-fld"><div class="wo-fld-lbl">${label}</div><input class="form-control wo-fld-inp" id="${id}" type="number" step="0.1" min="0" placeholder="—" value="${esc(val||'')}" oninput="updateDosingCalc()"><div class="wo-fld-hint">${hint}</div></div>`;}
+function cf(label,id,val,unit){return`<div class="wo-fld"><div class="wo-fld-lbl">${label} <span class="wo-unit">${unit}</span></div><input class="form-control wo-fld-inp" id="${id}" type="number" step="0.1" min="0" placeholder="0" value="${esc(val||'')}"></div>`;}
+function toggleWoSection(hd){const bd=hd.nextElementSibling,cv=hd.querySelector('.wo-chev');cv.textContent=bd.classList.toggle('collapsed')?'▶':'▼';}
+function onWoCustChange(){const sel=document.getElementById('wo-customer');const cust=sel?.value?DB.getCustomer(sel.value):null;const addr=document.getElementById('wo-address');const gal=document.getElementById('wo-gallons');if(addr)addr.value=cust?.address||'';if(gal&&!gal.value&&cust?.poolSize)gal.value=cust.poolSize;updateDosingCalc();}
+function saveWorkOrder(id,extra={}){const custId=document.getElementById('wo-customer')?.value;const date=document.getElementById('wo-date')?.value;if(!custId){alert('Please select a customer.');return;}if(!date){alert('Please enter a date.');return;}const v=eid=>document.getElementById(eid)?.value.trim()||'';const data={customerId:custId,technicianId:Auth.techId,routeNumber:v('wo-route'),date,timeIn:v('wo-timein'),timeOut:v('wo-timeout'),condition:v('wo-condition'),gallons:v('wo-gallons'),address:v('wo-address'),temp:v('wo-temp'),surfaceType:v('wo-surface'),notes:v('wo-notes'),photos:{...WO_PHOTOS},...extra,pool:{chlorine:v('wo-pool-cl'),pH:v('wo-pool-ph'),alk:v('wo-pool-alk'),cya:v('wo-pool-cya'),calcium:v('wo-pool-ca'),salt:v('wo-pool-salt'),phosphate:v('wo-pool-phos'),tds:v('wo-pool-tds'),tabs:v('wo-pool-tabs'),hypo:v('wo-pool-hypo'),acid:v('wo-pool-acid'),sodaAsh:v('wo-pool-sodaash'),bicarb:v('wo-pool-bicarb'),conditioner:v('wo-pool-cond'),bromine:v('wo-pool-brom'),phosphateOz:v('wo-pool-phosoz'),saltBag:v('wo-pool-saltbag'),algaecide:v('wo-pool-alg'),clarifier:v('wo-pool-clar')},spa:{chlorine:v('wo-spa-cl'),pH:v('wo-spa-ph'),alk:v('wo-spa-alk'),cya:v('wo-spa-cya'),calcium:v('wo-spa-ca'),salt:v('wo-spa-salt'),phosphate:v('wo-spa-phos'),tds:v('wo-spa-tds'),tabs:v('wo-spa-tabs'),hypo:v('wo-spa-hypo'),acid:v('wo-spa-acid'),sodaAsh:v('wo-spa-sodaash'),bicarb:v('wo-spa-bicarb'),conditioner:v('wo-spa-cond'),bromine:v('wo-spa-brom'),phosphateOz:v('wo-spa-phosoz'),saltBag:v('wo-spa-saltbag'),algaecide:v('wo-spa-alg'),clarifier:v('wo-spa-clar')}};if(id&&id!=='null'){DB.updateWorkOrder(id,data);showToast('Chem sheet updated');}else{DB.addWorkOrder(data);showToast('Chem sheet saved');}woState={view:'list'};App.render();}
+function completeStop(woId){const wo=DB.getWorkOrder(woId);if(!wo)return;const t=new Date().toTimeString().slice(0,5);saveWorkOrder(woId,{status:'completed',timeOut:t});DB.updateWorkOrder(woId,{status:'completed',timeOut:t});woState={view:'list'};Router.navigate('route');}
+
+/* TECH WORK ORDERS */
+let techOrderState = { view: 'list', id: null };
+let techItemRowCounter = 0;
+
+function techSelectOptions(list, selected = '') {
+  return list.map(o => `<option${o === selected ? ' selected' : ''}>${esc(o)}</option>`).join('');
+}
+function techCatalogItems(category) {
+  return (TECH_WO_CATALOG[category] || []).map(item =>
+    typeof item === 'string'
+      ? { partNumber: '', product: item, price: 0 }
+      : { partNumber: item.partNumber || '', product: item.product || '', price: Number(item.price) || 0 }
+  );
+}
+function techCategoryOptions(selected = '') {
+  return Object.keys(TECH_WO_CATALOG).map(o => `<option${o === selected ? ' selected' : ''}>${esc(o)}</option>`).join('');
+}
+function techEquipmentOptions(category, selected = '') {
+  return techCatalogItems(category).map(item => {
+    const label = item.partNumber ? `${item.product} — ${item.partNumber}` : item.product;
+    return `<option value="${esc(item.product)}"${item.product === selected ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+}
+function findTechCatalogItem(category, product) {
+  return techCatalogItems(category).find(item => item.product === product) || null;
+}
+function money(val) {
+  const num = Number(val) || 0;
+  return num.toFixed(2);
+}
+function techOrderNumberValue(order = {}) {
+  if (order.orderNumber) return order.orderNumber;
+  const nextNumber = (DB.techOrders?.length || 0) + 1;
+  return `#${nextNumber}`;
+}
+function techOrderBadge() {
+  return `<span class="badge badge-pending">Tech WO</span>`;
+}
+function defaultTechItem() {
+  return {
+    category: Object.keys(TECH_WO_CATALOG)[0] || 'PUMPS',
+    equipment: '',
+    partNumber: '',
+    qty: '1',
+    unit: 'ea',
+    price: '',
+    subtotal: '',
+    action: 'Repair',
+    note: ''
+  };
+}
+function techOrderTotalValue(order = {}) {
+  return (order.items || []).reduce((sum, item) => sum + (Number(item.subtotal) || ((Number(item.qty) || 0) * (Number(item.price) || 0))), 0);
+}
+function renderTechOrders() {
+  if (techOrderState.view === 'form') {
+    App._afterRender = () => {
+      document.querySelectorAll('#tech-items-list .tech-item-row').forEach(row => syncTechItemMeta(row.dataset.row));
+      updateTechOrderTotal();
+    };
+    return renderTechOrderForm(techOrderState.id);
+  }
+  return renderTechOrderList();
+}
+function renderTechOrderList() {
+  const techId = Auth.techId;
+  const orders = Auth.isAdmin ? [...DB.techOrders] : DB.techOrders.filter(o => o.technicianId === techId);
+  const sorted = orders.sort((a, b) => (b.date + (b.timeIn || '')).localeCompare(a.date + (a.timeIn || '')));
+  const listHTML = sorted.length === 0
+    ? `<div class="empty-state"><div class="empty-icon">🛠️</div><div class="empty-title">No technician work orders yet</div><div class="empty-subtitle">Tap + to create a repair or equipment work order.</div></div>`
+    : sorted.map(order => {
+        const cust = DB.getCustomer(order.customerId);
+        const itemCount = (order.items || []).length;
+        const totalAmount = techOrderTotalValue(order);
+        return `<div class="job-card">
+          <div class="job-card-header">
+            <div>
+              <div class="job-card-title">${esc(cust ? cust.name : 'Unknown')}</div>
+              <div class="job-card-customer">${esc(order.workType || 'Repair')} · ${itemCount} item${itemCount !== 1 ? 's' : ''}</div>
+            </div>
+            ${techOrderBadge()}
+          </div>
+          <div class="job-card-body">
+            <div class="job-meta">
+              <div class="job-meta-item">📅 ${fmtDate(order.date)}</div>
+              ${order.orderNumber ? `<div class="job-meta-item">WO ${esc(order.orderNumber)}</div>` : ''}
+              ${totalAmount ? `<div class="job-meta-item">💲 ${money(totalAmount)}</div>` : ''}
+            </div>
+            ${order.summary ? `<div class="list-item-sub" style="margin-top:6px">${esc(order.summary)}</div>` : ''}
+          </div>
+          <div class="job-card-footer">
+            <button class="btn btn-sm btn-primary" onclick="techOrderState={view:'form',id:'${esc(order.id)}'};App.render()">🛠️ Open</button>
+            <button class="btn btn-sm btn-secondary" onclick="saveTechOrderPDF('${esc(order.id)}')">📄 PDF</button>
+            <button class="btn btn-sm btn-secondary" onclick="shareTechOrderPDF('${esc(order.id)}')">📲 Share</button>
+            <button class="btn btn-sm btn-secondary" style="color:var(--danger)" onclick="deleteTechOrder('${esc(order.id)}')">🗑️</button>
+          </div>
+        </div>`;
+      }).join('');
+  return `<div class="page-header"><div><div class="page-title">Tech Work Orders</div><div class="page-subtitle">${sorted.length} record${sorted.length !== 1 ? 's' : ''}</div></div><button class="btn-fab" onclick="techOrderState={view:'form',id:null};App.render()">+</button></div><div style="margin-top:4px">${listHTML}</div>`;
+}
+function techItemRow(item = {}, idx) {
+  const cat = item.category || Object.keys(TECH_WO_CATALOG)[0] || '';
+  const price = item.price !== undefined && item.price !== '' ? money(item.price) : '';
+  const subtotal = item.subtotal !== undefined && item.subtotal !== ''
+    ? money(item.subtotal)
+    : ((Number(item.qty) || 0) && (Number(item.price) || 0) ? money((Number(item.qty) || 0) * (Number(item.price) || 0)) : '');
+  return `<div class="tech-item-row card" data-row="${idx}" style="margin-bottom:10px">
+    <div class="card-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Category</label>
+          <select class="form-control" id="two-cat-${idx}" onchange="updateTechEquipmentOptions(${idx})">
+            <option value="">— Select —</option>
+            ${techCategoryOptions(cat)}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Product</label>
+          <select class="form-control" id="two-item-${idx}" onchange="syncTechItemMeta(${idx})">
+            <option value="">— Select product —</option>
+            ${techEquipmentOptions(cat, item.equipment || '')}
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">MFG Part #</label>
+          <input class="form-control" id="two-part-${idx}" value="${esc(item.partNumber || '')}" readonly style="background:var(--gray-50)">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Quantity</label>
+          <input class="form-control" id="two-qty-${idx}" type="number" min="0" step="1" value="${esc(item.qty || '1')}" oninput="recalcTechItemSubtotal(${idx})">
+        </div>
+      </div>
+      <div class="form-row" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="form-group">
+          <label class="form-label">Unit</label>
+          <select class="form-control" id="two-unit-${idx}">${techSelectOptions(TECH_UNITS, item.unit || 'ea')}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Price</label>
+          <input class="form-control" id="two-price-${idx}" type="number" min="0" step="0.01" value="${esc(price)}" oninput="recalcTechItemSubtotal(${idx})">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Subtotal</label>
+          <input class="form-control" id="two-subtotal-${idx}" value="${esc(subtotal)}" readonly style="background:var(--gray-50)">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Work Action</label>
+        <select class="form-control" id="two-action-${idx}">${techSelectOptions(TECH_ITEM_ACTIONS, item.action || 'Repair')}</select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Line Notes</label>
+        <input class="form-control" id="two-note-${idx}" value="${esc(item.note || '')}" placeholder="Serial, colour, part details, etc.">
+      </div>
+      <div style="display:flex;justify-content:flex-end">
+        <button class="btn btn-sm btn-secondary" type="button" onclick="removeTechItemRow(${idx})">Remove Line</button>
+      </div>
+    </div>
+  </div>`;
+}
+function syncTechItemMeta(idx) {
+  const category = document.getElementById(`two-cat-${idx}`)?.value || '';
+  const product = document.getElementById(`two-item-${idx}`)?.value || '';
+  const partField = document.getElementById(`two-part-${idx}`);
+  const priceField = document.getElementById(`two-price-${idx}`);
+  const item = findTechCatalogItem(category, product);
+  if (partField) partField.value = item ? item.partNumber : '';
+  if (priceField && item) priceField.value = money(item.price);
+  recalcTechItemSubtotal(idx);
+}
+function recalcTechItemSubtotal(idx) {
+  const qty = Number(document.getElementById(`two-qty-${idx}`)?.value || 0);
+  const price = Number(document.getElementById(`two-price-${idx}`)?.value || 0);
+  const subtotalField = document.getElementById(`two-subtotal-${idx}`);
+  if (subtotalField) subtotalField.value = qty || price ? money(qty * price) : '';
+  updateTechOrderTotal();
+}
+function updateTechEquipmentOptions(idx) {
+  const cat = document.getElementById(`two-cat-${idx}`)?.value || '';
+  const sel = document.getElementById(`two-item-${idx}`);
+  if (!sel) return;
+  sel.innerHTML = `<option value="">— Select product —</option>${techEquipmentOptions(cat)}`;
+  syncTechItemMeta(idx);
+}
+function addTechItemRow(item = defaultTechItem()) {
+  const list = document.getElementById('tech-items-list');
+  if (!list) return;
+  const idx = techItemRowCounter++;
+  list.insertAdjacentHTML('beforeend', techItemRow(item, idx));
+  syncTechItemMeta(idx);
+}
+function removeTechItemRow(idx) {
+  document.querySelector(`#tech-items-list .tech-item-row[data-row="${idx}"]`)?.remove();
+  updateTechOrderTotal();
+}
+function getTechOrderItems() {
+  return Array.from(document.querySelectorAll('#tech-items-list .tech-item-row')).map(row => {
+    const idx = row.dataset.row;
+    return {
+      category: document.getElementById(`two-cat-${idx}`)?.value || '',
+      equipment: document.getElementById(`two-item-${idx}`)?.value || '',
+      partNumber: document.getElementById(`two-part-${idx}`)?.value || '',
+      qty: document.getElementById(`two-qty-${idx}`)?.value.trim() || '',
+      unit: document.getElementById(`two-unit-${idx}`)?.value || 'ea',
+      price: document.getElementById(`two-price-${idx}`)?.value.trim() || '',
+      subtotal: document.getElementById(`two-subtotal-${idx}`)?.value.trim() || '',
+      action: document.getElementById(`two-action-${idx}`)?.value || 'Repair',
+      note: document.getElementById(`two-note-${idx}`)?.value.trim() || ''
+    };
+  }).filter(item => item.category || item.equipment || item.qty || item.note);
+}
+function updateTechOrderTotal() {
+  const total = Array.from(document.querySelectorAll('#tech-items-list .tech-item-row')).reduce((sum, row) => {
+    const idx = row.dataset.row;
+    return sum + (Number(document.getElementById(`two-subtotal-${idx}`)?.value || 0) || 0);
+  }, 0);
+  const el = document.getElementById('two-total');
+  if (el) el.value = money(total);
+}
+function techLaborRow(entry = {}, idx, techName = '') {
+  return `<div class="card" style="margin-bottom:10px"><div class="card-body"><div class="form-row"><div class="form-group"><label class="form-label">Date</label><input class="form-control" id="two-labor-date-${idx}" type="date" value="${esc(entry.date || '')}"></div><div class="form-group"><label class="form-label">Tech Name</label><input class="form-control" id="two-labor-tech-${idx}" value="${esc(entry.techName || techName)}"></div></div><div class="form-row" style="grid-template-columns:1fr 1fr 1fr"><div class="form-group"><label class="form-label">Time In</label><input class="form-control" id="two-labor-timein-${idx}" type="time" value="${esc(entry.timeIn || '')}"></div><div class="form-group"><label class="form-label">Time Out</label><input class="form-control" id="two-labor-timeout-${idx}" type="time" value="${esc(entry.timeOut || '')}"></div><div class="form-group"><label class="form-label">Total Hrs</label><input class="form-control" id="two-labor-hrs-${idx}" type="number" min="0" step="0.25" value="${esc(entry.totalHrs || '')}" placeholder="0.0"></div></div></div></div>`;
+}
+function getTechLaborEntries() {
+  return [0,1,2,3].map(idx => ({
+    date: document.getElementById(`two-labor-date-${idx}`)?.value || '',
+    techName: document.getElementById(`two-labor-tech-${idx}`)?.value.trim() || '',
+    timeIn: document.getElementById(`two-labor-timein-${idx}`)?.value || '',
+    timeOut: document.getElementById(`two-labor-timeout-${idx}`)?.value || '',
+    totalHrs: document.getElementById(`two-labor-hrs-${idx}`)?.value.trim() || ''
+  })).filter(entry => entry.date || entry.techName || entry.timeIn || entry.timeOut || entry.totalHrs);
+}
+function onTechOrderCustChange() {
+  const sel = document.getElementById('two-customer');
+  const cust = sel?.value ? DB.getCustomer(sel.value) : null;
+  const addr = document.getElementById('two-address');
+  if (addr) addr.value = cust?.address || '';
+}
+function renderTechOrderForm(id) {
+  const order = id ? (DB.getTechOrder(id) || {}) : {};
+  resetPhotos(order);
+  const custId = order.customerId || '';
+  const today = todayStr();
+  const tech = DB.getTechnician(Auth.techId);
+  const items = (order.items && order.items.length ? order.items : [defaultTechItem()]);
+  const laborEntries = Array.from({ length: 4 }, (_, idx) => (order.laborEntries && order.laborEntries[idx]) || { date: order.date || today, techName: tech ? tech.name : '', timeIn: '', timeOut: '', totalHrs: '' });
+  techItemRowCounter = items.length;
+  return `<div class="wo-form">
+    <div class="wo-bar">
+      <button class="btn btn-secondary btn-sm" onclick="techOrderState={view:'list',id:null};App.render()">← Back</button>
+      <span class="wo-bar-title">${id ? 'Edit Tech Work Order' : 'New Tech Work Order'}</span>
+      <div style="display:flex;gap:8px">
+        ${id ? `<button class="btn btn-secondary btn-sm" onclick="saveTechOrderPDF('${esc(id)}')">📄 PDF</button><button class="btn btn-secondary btn-sm" onclick="shareTechOrderPDF('${esc(id)}')">📲 Share</button>` : ''}
+        <button class="btn btn-primary btn-sm" onclick="saveTechOrder(${id ? `'${esc(id)}'` : 'null'})">💾 Save</button>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>🛠️  Work Sheet</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">W/O #</label><input class="form-control" id="two-number" value="${esc(techOrderNumberValue(order))}"></div>
+          <div class="form-group"><label class="form-label">Date Created *</label><input class="form-control" id="two-date" type="date" value="${esc(order.date || today)}"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Property *</label><select class="form-control" id="two-customer" onchange="onTechOrderCustChange()"><option value="">— Select client —</option>${customerOptions(custId)}</select></div>
+        <div class="form-group"><label class="form-label">Address</label><input class="form-control" id="two-address" readonly style="background:var(--gray-50)" value="${esc(order.address || (custId ? DB.getCustomer(custId)?.address || '' : ''))}"></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Technician</label><input class="form-control" value="${esc(tech ? tech.name : '')}" readonly style="background:var(--gray-50)"></div>
+          <div class="form-group"><label class="form-label">Work Type</label><select class="form-control" id="two-type">${techSelectOptions(TECH_WO_TYPES, order.workType || 'Repair')}</select></div>
+        </div>
+        <div class="form-group"><label class="form-label">Work Description</label><textarea class="form-control" id="two-summary" rows="3" placeholder="Describe the issue or requested work">${esc(order.summary || '')}</textarea></div>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>⏱️  Labour Log</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <p class="wo-hint">Matches the workbook labour entry rows for date, tech name, time in/out, and total hours.</p>
+        ${laborEntries.map((entry, idx) => techLaborRow(entry, idx, tech ? tech.name : '')).join('')}
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>📦  Materials / Equipment</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <p class="wo-hint">Loaded from <code>WO_TEMPLATE.xlsm</code> by category with part numbers, products, quantities and pricing.</p>
+        <div id="tech-items-list">${items.map((item, idx) => techItemRow(item, idx)).join('')}</div>
+        <button class="btn btn-secondary" style="width:100%;justify-content:center" type="button" onclick="addTechItemRow()">+ Add Equipment Line</button>
+        <div class="form-row" style="margin-top:12px">
+          <div class="form-group"><label class="form-label">Materials Total</label><input class="form-control" id="two-total" value="${esc(money(order.total || techOrderTotalValue(order)))}" readonly style="background:var(--gray-50)"></div>
+          <div class="form-group"><label class="form-label">Customer Approval</label><select class="form-control" id="two-approval">${techSelectOptions(['Yes','No','N/A'], order.approval || 'N/A')}</select></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd" onclick="toggleWoSection(this)"><span>✅  Completion</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <div class="form-group"><label class="form-label">Work Performed</label><textarea class="form-control" id="two-performed" rows="3" placeholder="Describe what was repaired, installed, tested, or recommended">${esc(order.performed || '')}</textarea></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Follow-up Required</label><select class="form-control" id="two-followup">${techSelectOptions(['No','Yes — return visit','Yes — order parts','Yes — quote required'], order.followUp || 'No')}</select></div>
+          <div class="form-group"><label class="form-label">Comments</label><input class="form-control" id="two-comments" value="${esc(order.comments || '')}" placeholder="Office / manager comment"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wo-sec">
+      <div class="wo-sec-hd wo-photo-hd" onclick="toggleWoSection(this)"><span>📸  Photos</span><span class="wo-chev">▼</span></div>
+      <div class="wo-sec-bd">
+        <p class="wo-hint">Attach before/after photos and any equipment close-ups.</p>
+        <div class="photo-ba-row">${photoSlot('before','Before')}${photoSlot('after','After')}</div>
+        <div class="wo-blk-lbl" style="margin-top:14px">Additional Photos</div>
+        <div class="photo-extra-grid">${photoSlot('extra1','1')}${photoSlot('extra2','2')}${photoSlot('extra3','3')}${photoSlot('extra4','4')}${photoSlot('extra5','5')}</div>
+      </div>
+    </div>
+    <div style="height:24px"></div>
+  </div>`;
+}
+function saveTechOrder(id) {
+  const custId = document.getElementById('two-customer')?.value;
+  const date = document.getElementById('two-date')?.value;
+  if (!custId) { alert('Please select a client.'); return; }
+  if (!date) { alert('Please enter a date.'); return; }
+  const v = eid => document.getElementById(eid)?.value.trim() || '';
+  const items = getTechOrderItems();
+  const data = {
+    orderNumber: v('two-number'),
+    customerId: custId,
+    technicianId: Auth.techId,
+    address: v('two-address'),
+    date,
+    workType: document.getElementById('two-type')?.value || 'Repair',
+    summary: v('two-summary'),
+    laborEntries: getTechLaborEntries(),
+    performed: v('two-performed'),
+    approval: document.getElementById('two-approval')?.value || 'N/A',
+    followUp: document.getElementById('two-followup')?.value || 'No',
+    comments: v('two-comments'),
+    total: v('two-total'),
+    items,
+    photos: { ...WO_PHOTOS }
+  };
+  if (id && id !== 'null') {
+    DB.updateTechOrder(id, data);
+    showToast('Tech work order updated');
+  } else {
+    DB.addTechOrder(data);
+    showToast('Tech work order saved');
+  }
+  techOrderState = { view:'list', id:null };
+  App.render();
+}
+function deleteTechOrder(id) {
+  Confirm.show('Delete this tech work order?', () => {
+    DB.deleteTechOrder(id);
+    App.render();
+    showToast('Deleted');
+  });
+}
+async function saveTechOrderPDF(id, mode = 'save') {
+  const order = DB.getTechOrder(id);
+  if (!order) { showToast('Save this tech work order first'); return; }
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) { showToast('PDF library not loaded'); return; }
+
+  const cust = DB.getCustomer(order.customerId);
+  const tech = DB.getTechnician(order.technicianId);
+  const activePhotos = (techOrderState.view === 'form' && techOrderState.id === id)
+    ? { ...(order.photos || {}), ...WO_PHOTOS }
+    : (order.photos || {});
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+
+  doc.setFillColor(10,30,46);
+  doc.rect(0,0,210,28,'F');
+  doc.setTextColor(212,201,187);
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(22);
+  doc.text('OASIS',15,13);
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(8);
+  doc.text('TECHNICIAN WORK ORDER',15,20);
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(10);
+  doc.text(fmtDate(order.date),195,13,{align:'right'});
+  doc.text(order.orderNumber || '—',195,20,{align:'right'});
+
+  let y = 38;
+  const nextLine = (step = 6) => {
+    y += step;
+    if (y > 270) {
+      doc.addPage();
+      y = 20;
+    }
+  };
+  const writeSection = (title) => {
+    if (y > 255) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.setTextColor(26,64,95);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(11);
+    doc.text(title,15,y);
+    nextLine(7);
+  };
+  const writeDetail = (label, value, x = 15, valueX = 62) => {
+    doc.setTextColor(80,80,80);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(9);
+    doc.text(`${label}:`,x,y);
+    doc.setFont('helvetica','normal');
+    doc.text(String(value || '—'),valueX,y);
+    nextLine();
+  };
+
+  writeSection('WORK SHEET');
+  writeDetail('Property', cust ? cust.name : '—');
+  writeDetail('Address', order.address || '—');
+  writeDetail('Date Created', fmtDate(order.date));
+  writeDetail('Technician', tech ? tech.name : '—');
+  writeDetail('Work Type', order.workType || '—');
+
+  writeSection('LABOUR LOG');
+  if (order.laborEntries && order.laborEntries.length) {
+    order.laborEntries.forEach((entry, idx) => {
+      doc.setTextColor(80,80,80);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(9);
+      doc.text(`Entry ${idx + 1}: ${entry.techName || '—'}`, 15, y);
+      nextLine(5);
+      doc.setFont('helvetica','normal');
+      doc.text(`Date: ${entry.date ? fmtDate(entry.date) : '—'} · Time: ${fmtTime(entry.timeIn) || '—'} → ${fmtTime(entry.timeOut) || '—'} · Total Hrs: ${entry.totalHrs || '—'}`, 18, y);
+      nextLine(6);
+    });
+  } else {
+    doc.setTextColor(80,80,80);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9);
+    doc.text('No labour entries recorded.', 15, y);
+    nextLine();
+  }
+
+  writeSection('WORK DESCRIPTION');
+  doc.setTextColor(80,80,80);
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  let lines = doc.splitTextToSize(order.summary || 'No work description entered.', 175);
+  doc.text(lines, 15, y);
+  y += lines.length * 5 + 6;
+
+  writeSection('PARTS / MATERIALS');
+  if (order.items && order.items.length) {
+    order.items.forEach(item => {
+      doc.setTextColor(80,80,80);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(9);
+      doc.text(`${item.partNumber || '—'} | ${item.equipment || 'Item'}`, 15, y);
+      nextLine(5);
+      doc.setFont('helvetica','normal');
+      doc.text(`Category: ${item.category || '—'} · Qty: ${item.qty || '—'} ${item.unit || ''}`, 18, y);
+      nextLine(5);
+      doc.text(`Price: $${money(item.price)} · Subtotal: $${money(item.subtotal || ((Number(item.qty)||0) * (Number(item.price)||0)))}`, 18, y);
+      nextLine(5);
+      doc.text(`Action: ${item.action || 'Repair'}`, 18, y);
+      nextLine(5);
+      if (item.note) {
+        const note = doc.splitTextToSize(`Note: ${item.note}`, 170);
+        doc.text(note, 18, y);
+        y += note.length * 4.5;
+      }
+      nextLine(3);
+    });
+  } else {
+    doc.setTextColor(80,80,80);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(9);
+    doc.text('No equipment lines entered.', 15, y);
+    nextLine();
+  }
+  writeDetail('Materials Total', `$${money(order.total || techOrderTotalValue(order))}`);
+
+  writeSection('COMPLETION / COMMENTS');
+  const completionText = `Work Performed: ${order.performed || 'None'}\nCustomer Approval: ${order.approval || 'N/A'}\nFollow-up: ${order.followUp || 'No'}\nComments: ${order.comments || 'None'}`;
+  lines = doc.splitTextToSize(completionText, 175);
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  doc.text(lines, 15, y);
+  y += lines.length * 5 + 6;
+
+  const getImageSize = dataUrl => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth || img.width || 1, height: img.naturalHeight || img.height || 1 });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+  const photoEntries = PHOTO_KEYS.filter(key => activePhotos[key]);
+  if (photoEntries.length) {
+    writeSection('SITE PHOTOS');
+    let col = 0;
+    const boxW = 82;
+    const boxH = 58;
+    for (const key of photoEntries) {
+      const x = col === 0 ? 15 : 108;
+      if (col === 0 && y + boxH + 16 > 280) {
+        doc.addPage();
+        y = 20;
+      }
+      const label = key === 'before' ? 'Before' : key === 'after' ? 'After' : `Photo ${key.replace('extra', '')}`;
+      doc.setTextColor(80,80,80);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(8);
+      doc.text(label, x, y);
+      const imgY = y + 4;
+      doc.setFillColor(248,245,241);
+      doc.rect(x, imgY, boxW, boxH, 'F');
+      doc.setDrawColor(220,220,220);
+      doc.rect(x, imgY, boxW, boxH);
+      try {
+        const dataUrl = activePhotos[key];
+        const format = dataUrl.includes('image/png') ? 'PNG' : 'JPEG';
+        const { width, height } = await getImageSize(dataUrl);
+        const scale = Math.min(boxW / width, boxH / height);
+        const drawW = Math.max(10, width * scale);
+        const drawH = Math.max(10, height * scale);
+        const drawX = x + (boxW - drawW) / 2;
+        const drawY = imgY + (boxH - drawH) / 2;
+        doc.addImage(dataUrl, format, drawX, drawY, drawW, drawH);
+      } catch (err) {
+        console.warn('Tech order photo skipped in PDF:', err);
+      }
+      if (col === 1) {
+        y += boxH + 14;
+        col = 0;
+      } else {
+        col = 1;
+      }
+    }
+    if (col === 1) y += boxH + 14;
+  }
+
+  const fileName = `OASIS_TechWO_${(cust ? cust.name : 'Client').replace(/[^a-z0-9]+/gi,'-')}_${order.date || todayStr()}.pdf`;
+  const pdfBlob = doc.output('blob');
+  if (mode === 'share') {
+    try {
+      const pdfFile = new File([pdfBlob], fileName, { type:'application/pdf' });
+      const canShareFile = !!(navigator.share && (!navigator.canShare || navigator.canShare({ files:[pdfFile] })));
+      if (window.isSecureContext && canShareFile) {
+        await navigator.share({
+          title: `OASIS Tech Work Order — ${cust ? cust.name : 'Client'}`,
+          text: 'Choose WhatsApp or another app to send this technician work order PDF.',
+          files: [pdfFile]
+        });
+        showToast('📲 Choose WhatsApp to send the PDF');
+        return;
+      }
+      if (!window.isSecureContext) showToast('Open the secure app link to share via WhatsApp');
+      else showToast('Share not available on this device — saving PDF instead');
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      console.warn('Tech order PDF share fallback:', err);
+      showToast('Could not share directly — saving PDF instead');
+    }
+  }
+  presentPDFBlob(pdfBlob, fileName);
+}
+function shareTechOrderPDF(id) { return saveTechOrderPDF(id, 'share'); }
+
+/* CLIENTS */
+let custSearch='';
+function renderCustomers(){
+  const filtered=DB.customers.filter(c=>!custSearch||c.name.toLowerCase().includes(custSearch.toLowerCase())||(c.address||'').toLowerCase().includes(custSearch.toLowerCase()));
+  const listHTML=filtered.length===0?`<div class="empty-state"><div class="empty-icon">👥</div><div class="empty-title">No clients found</div></div>`:filtered.map(c=>`<div class="list-item"><div class="list-item-avatar">${esc(initials(c.name))}</div><div class="list-item-info"><div class="list-item-name">${esc(c.name)}</div><div class="list-item-sub">${esc(c.address||'')}${c.poolSize?' · '+parseInt(c.poolSize).toLocaleString()+' gal':''}</div>${c.notes?`<div class="list-item-sub" style="color:var(--warning)">📌 ${esc(c.notes)}</div>`:''}</div>${Auth.isAdmin?`<div class="list-item-actions"><button class="btn btn-icon btn-sm" onclick="showEditCust('${esc(c.id)}')">✏️</button><button class="btn btn-icon btn-sm" style="background:var(--danger-light);color:var(--danger)" onclick="delCust('${esc(c.id)}')">🗑️</button></div>`:''}</div>`).join('');
+  return`<div class="page-header"><div><div class="page-title">Clients</div><div class="page-subtitle">${DB.customers.length} properties</div></div>${Auth.isAdmin?`<button class="btn-fab" onclick="showAddCust()">+</button>`:''}</div><div class="search-bar"><span class="search-icon">🔍</span><input type="search" placeholder="Search clients…" value="${esc(custSearch)}" oninput="custSearch=this.value;App.render()"></div><div style="margin-top:8px">${listHTML}</div>`;
+}
+function custForm(c={}){return`<div class="form-group"><label class="form-label">Client Name *</label><input class="form-control" id="cf-name" value="${esc(c.name||'')}"></div><div class="form-group"><label class="form-label">Address</label><input class="form-control" id="cf-addr" value="${esc(c.address||'')}"></div><div class="form-row"><div class="form-group"><label class="form-label">Pool Gallons</label><input class="form-control" id="cf-gal" type="number" value="${esc(c.poolSize||'')}"></div><div class="form-group"><label class="form-label">Pool Type</label><select class="form-control" id="cf-type">${['Inground Gunite','Inground Fiberglass','Inground Vinyl','Above Ground','Commercial Gunite','Spa / Hot Tub','Other'].map(o=>`<option${(c.poolType||'')===o?' selected':''}>${o}</option>`).join('')}</select></div></div><div class="form-group"><label class="form-label">Access Notes</label><textarea class="form-control" id="cf-notes" rows="2">${esc(c.notes||'')}</textarea></div>`;}
+function getCustData(){const n=document.getElementById('cf-name').value.trim();if(!n){alert('Name required.');return null;}return{name:n,address:document.getElementById('cf-addr').value.trim(),poolSize:document.getElementById('cf-gal').value.trim(),poolType:document.getElementById('cf-type').value,notes:document.getElementById('cf-notes').value.trim()};}
+function showAddCust(){Modal.show('Add Client',custForm(),()=>{const d=getCustData();if(!d)return;DB.addCustomer(d);Modal.hide();App.render();showToast('Client added');});}
+function showEditCust(id){const c=DB.getCustomer(id);if(!c)return;Modal.show('Edit Client',custForm(c),()=>{const d=getCustData();if(!d)return;DB.updateCustomer(id,d);Modal.hide();App.render();showToast('Updated');});}
+function delCust(id){Confirm.show('Remove this client?',()=>{DB.deleteCustomer(id);App.render();showToast('Removed');});}
+
+/* ADMIN */
+let adminTab='techs';
+function renderAdmin(){
+  if(!Auth.isAdmin)return`<div class="empty-state"><div class="empty-icon">🔒</div><div class="empty-title">Admin only</div></div>`;
+  const tabs=['techs','routes'].map(t=>`<button class="filter-tab${adminTab===t?' active':''}" onclick="adminTab='${t}';App.render()">${t==='techs'?'Technicians':'Route Setup'}</button>`).join('');
+  return`<div class="page-header"><div><div class="page-title">Admin</div><div class="page-subtitle">Route &amp; Team Management</div></div></div><div class="filter-tabs">${tabs}</div>${adminTab==='techs'?renderAdminTechs():renderAdminRoutes()}`;
+}
+function renderAdminTechs(){
+  const list=DB.technicians.map(t=>`<div class="list-item"><div class="list-item-avatar" style="background:var(--navy);color:var(--champagne)">${esc(initials(t.name))}</div><div class="list-item-info"><div class="list-item-name">${esc(t.name)}${t.isAdmin?' 👑':''}</div><div class="list-item-sub">PIN: ${esc(t.pin||'—')}</div></div><div class="list-item-actions"><button class="btn btn-icon btn-sm" onclick="showEditTech('${esc(t.id)}')">✏️</button>${!t.isAdmin?`<button class="btn btn-icon btn-sm" style="background:var(--danger-light);color:var(--danger)" onclick="delTech('${esc(t.id)}')">🗑️</button>`:''}</div></div>`).join('');
+  return`<div style="margin-top:8px">${list}<div style="padding:0 16px 16px"><button class="btn btn-primary" style="width:100%;justify-content:center" onclick="showAddTech()">+ Add Technician</button></div></div>`;
+}
+function renderAdminRoutes(){
+  const tgs=DB.technicians.filter(t=>!t.isAdmin).map(t=>{const stops=DB.routes.filter(r=>r.technicianId===t.id).sort((a,b)=>a.dayOfWeek-b.dayOfWeek||a.stopOrder-b.stopOrder);const byDay=[1,2,3,4,5,6].map(d=>{const ds=stops.filter(s=>s.dayOfWeek===d);if(!ds.length)return'';return`<div class="route-day-block"><div class="route-day-hdr">${DAY_NAMES[d]}</div>${ds.map(s=>{const cust=DB.getCustomer(s.customerId);return`<div class="route-admin-stop"><span class="route-stop-num-sm">${s.stopOrder}</span><span>${esc(cust?cust.name:'?')}</span><span class="route-type-sm">${esc(s.serviceType)}</span><button class="btn btn-icon btn-sm" style="padding:4px" onclick="delRouteStop('${esc(s.id)}')">🗑️</button></div>`;}).join('')}</div>`;}).join('');return`<div class="card" style="margin-bottom:12px"><div class="card-header"><div class="card-title">${esc(t.name)} — Route ${stops[0]?.routeNumber||'?'}</div><button class="btn btn-sm btn-primary" onclick="showAddRouteStop('${esc(t.id)}')">+ Stop</button></div><div class="card-body">${byDay||'<p style="color:var(--gray-400);font-size:13px">No stops</p>'}</div></div>`;}).join('');
+  return`<div style="padding:8px 16px">${tgs}</div>`;
+}
+function techForm(t={}){return`<div class="form-group"><label class="form-label">Full Name *</label><input class="form-control" id="tf-name" value="${esc(t.name||'')}"></div><div class="form-row"><div class="form-group"><label class="form-label">Phone</label><input class="form-control" id="tf-phone" type="tel" value="${esc(t.phone||'')}"></div><div class="form-group"><label class="form-label">PIN (4–6 digits)*</label><input class="form-control" id="tf-pin" type="text" inputmode="numeric" maxlength="6" placeholder="1111" value="${esc(t.pin||'')}"></div></div>`;}
+function getTechData(){const n=document.getElementById('tf-name').value.trim(),p=document.getElementById('tf-pin').value.trim();if(!n){alert('Name required.');return null;}if(!p||p.length<4){alert('PIN must be 4–6 digits.');return null;}return{name:n,phone:document.getElementById('tf-phone').value.trim(),email:'',pin:p,specialty:'Cleaning & Chemicals',isAdmin:false};}
+function showAddTech(){Modal.show('Add Technician',techForm(),()=>{const d=getTechData();if(!d)return;DB.addTechnician(d);Modal.hide();App.render();showToast('Added');});}
+function showEditTech(id){const t=DB.getTechnician(id);if(!t)return;Modal.show('Edit Technician',techForm(t),()=>{const d=getTechData();if(!d)return;DB.updateTechnician(id,d);Modal.hide();populateLoginDropdown();App.render();showToast('Updated');});}
+function delTech(id){Confirm.show('Remove this technician?',()=>{DB.deleteTechnician(id);App.render();showToast('Removed');});}
+function routeStopForm(techId){const num=DB.routes.find(r=>r.technicianId===techId)?.routeNumber||'';const max=DB.routes.filter(r=>r.technicianId===techId).length+1;return`<div class="form-group"><label class="form-label">Client *</label><select class="form-control" id="rs-cust"><option value="">— Select —</option>${customerOptions('')}</select></div><div class="form-row"><div class="form-group"><label class="form-label">Day *</label><select class="form-control" id="rs-day">${[1,2,3,4,5,6].map(d=>`<option value="${d}">${DAY_NAMES[d]}</option>`).join('')}</select></div><div class="form-group"><label class="form-label">Stop #</label><input class="form-control" id="rs-stop" type="number" min="1" value="${max}"></div></div><div class="form-row"><div class="form-group"><label class="form-label">Service Type</label><select class="form-control" id="rs-type">${['Weekly Clean','Chemical Check','Chemical Treatment','Filter Clean','Equipment Check','Green Pool Treatment','Inspection'].map(s=>`<option>${s}</option>`).join('')}</select></div><div class="form-group"><label class="form-label">Route #</label><input class="form-control" id="rs-route" value="${esc(num)}"></div></div>`;}
+function showAddRouteStop(techId){const tech=DB.getTechnician(techId);Modal.show(`Add Stop — ${tech?tech.name:''}`,routeStopForm(techId),()=>{const cid=document.getElementById('rs-cust').value;const day=parseInt(document.getElementById('rs-day').value);if(!cid){alert('Please select a client.');return;}DB.addRoute({technicianId:techId,customerId:cid,dayOfWeek:day,stopOrder:parseInt(document.getElementById('rs-stop').value)||1,serviceType:document.getElementById('rs-type').value,routeNumber:document.getElementById('rs-route').value.trim()});Modal.hide();App.render();showToast('Stop added');});}
+function delRouteStop(id){Confirm.show('Remove this route stop?',()=>{DB.deleteRoute(id);App.render();showToast('Removed');});}
+
+/* ── ROUTER ────────────────────────────────────────────────────── */
+const Router={current:'dashboard',navigate(view){this.current=view;document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===view));App.render();document.getElementById('main').scrollTop=0;}};
+
+/* ── APP CONTROLLER ────────────────────────────────────────────── */
+const App={
+  _afterRender:null,
+  render(){
+    const m=document.getElementById('main');
+    switch(Router.current){
+      case 'dashboard': m.innerHTML=renderDashboard();  break;
+      case 'route':     m.innerHTML=renderRoute();      break;
+      case 'customers':   m.innerHTML=renderCustomers();  break;
+      case 'logs':        m.innerHTML=renderWorkOrders(); break;
+      case 'tech-orders': m.innerHTML=renderTechOrders(); break;
+      case 'admin':       m.innerHTML=renderAdmin();      break;
+    }
+    if(this._afterRender){const fn=this._afterRender;this._afterRender=null;setTimeout(fn,50);}
+  },
+  init(){
+    DB.load(); seedDemoData(); DB.load(); // seed first, then reload
+    Auth.load();
+    document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>Router.navigate(el.dataset.view)));
+    document.getElementById('modal-save-btn').addEventListener('click',()=>Modal.save());
+    document.getElementById('modal-close-btn').addEventListener('click',()=>Modal.hide());
+    document.getElementById('modal-cancel-btn').addEventListener('click',()=>Modal.hide());
+    document.getElementById('modal-overlay').addEventListener('click',e=>{if(e.target===document.getElementById('modal-overlay'))Modal.hide();});
+    document.getElementById('confirm-cancel-btn').addEventListener('click',()=>Confirm.hide());
+    document.getElementById('confirm-overlay').addEventListener('click',e=>{if(e.target===document.getElementById('confirm-overlay'))Confirm.hide();});
+    // Dropdown is pre-populated in HTML; also dynamically update in case techs changed
+    populateLoginDropdown();
+    if(Auth.current){showAppShell();}
+  }
+};
+document.addEventListener('DOMContentLoaded',()=>App.init());

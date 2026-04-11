@@ -11,7 +11,6 @@
   <title>OASIS — Service</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
   <style>
 /* ============================================================
    OASIS — Luxury Pool & Watershape Design
@@ -1745,9 +1744,6 @@ select.form-control {
             <option value="t6">Kadeem</option>
             <option value="t7">Kingsley</option>
             <option value="t8">Malik</option>
-            <option value="t9">Jet</option>
-            <option value="t10">Mark</option>
-            <option value="t11">Admin</option>
             <option value="admin">Chris Mills (Admin)</option>
           </select>
         </div>
@@ -1830,7 +1826,1535 @@ select.form-control {
     <div id="toast" class="toast hidden"></div>
   </div>
 
-  <script src="tech-catalog.js"></script>
-  <script src="app.js"></script>
+  <script>
+// OASIS Service App — Fully Operational
+// Features: Login · Dashboard · Routes · Clients · Work Orders · PDF Reports
+// © OASIS Luxury Pool & Watershape Service
+
+'use strict';
+
+// ══════════════════════════════════════════════════
+//  DB — localStorage wrapper
+// ══════════════════════════════════════════════════
+const db = {
+  get(key, def = null) {
+    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : def; }
+    catch { return def; }
+  },
+  set(key, val) {
+    try { localStorage.setItem(key, JSON.stringify(val)); return true; }
+    catch { return false; }
+  },
+  remove(key) { localStorage.removeItem(key); }
+};
+
+// ══════════════════════════════════════════════════
+//  AUTH
+// ══════════════════════════════════════════════════
+const USERS = {
+  t1:    { role: 'technician', name: 'Ace' },
+  t2:    { role: 'technician', name: 'Ariel' },
+  t3:    { role: 'technician', name: 'Donald' },
+  t4:    { role: 'technician', name: 'Elvin' },
+  t5:    { role: 'technician', name: 'Jermaine' },
+  t6:    { role: 'technician', name: 'Kadeem' },
+  t7:    { role: 'technician', name: 'Kingsley' },
+  t8:    { role: 'technician', name: 'Malik' },
+  admin: { role: 'admin',      name: 'Chris Mills' }
+};
+
+const auth = {
+  login(username) {
+    if (!USERS[username]) return null;
+    const user = { ...USERS[username], username };
+    db.set('currentUser', user);
+    return user;
+  },
+  logout()         { db.remove('currentUser'); },
+  user()           { return db.get('currentUser'); },
+  isLoggedIn()     { return !!this.user(); },
+  isAdmin()        { const u = this.user(); return u && u.role === 'admin'; },
+  techName(id)     { return USERS[id]?.name || id; }
+};
+
+// ══════════════════════════════════════════════════
+//  TOAST
+// ══════════════════════════════════════════════════
+let _toastTimer;
+function showToast(msg, ms = 3000) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
+}
+
+// ══════════════════════════════════════════════════
+//  CONFIRM DIALOG (promise-based, using native overlay)
+// ══════════════════════════════════════════════════
+function confirmDialog(msg, okLabel = 'Delete', okClass = 'btn-danger') {
+  return new Promise(resolve => {
+    const overlay = document.getElementById('confirm-overlay');
+    document.getElementById('confirm-title').textContent = 'Confirm';
+    document.getElementById('confirm-message').textContent = msg;
+    const okBtn = document.getElementById('confirm-ok-btn');
+    okBtn.textContent = okLabel;
+    okBtn.className = `btn ${okClass}`;
+    overlay.classList.remove('hidden');
+    const finish = val => {
+      overlay.classList.add('hidden');
+      okBtn.onclick = null;
+      document.getElementById('confirm-cancel-btn').onclick = null;
+      resolve(val);
+    };
+    okBtn.onclick     = () => finish(true);
+    document.getElementById('confirm-cancel-btn').onclick = () => finish(false);
+  });
+}
+
+// ══════════════════════════════════════════════════
+//  MODAL
+// ══════════════════════════════════════════════════
+const modal = (() => {
+  let _onSave = null;
+  const overlay  = () => document.getElementById('modal-overlay');
+  const titleEl  = () => document.getElementById('modal-title');
+  const bodyEl   = () => document.getElementById('modal-body');
+  const saveBtn  = () => document.getElementById('modal-save-btn');
+  const cancelBtn= () => document.getElementById('modal-cancel-btn');
+
+  function open(title, html, onSave, saveLabel = 'Save', hideSave = false) {
+    titleEl().textContent  = title;
+    bodyEl().innerHTML     = html;
+    _onSave                = onSave;
+    saveBtn().textContent  = saveLabel;
+    saveBtn().style.display = hideSave ? 'none' : '';
+    cancelBtn().textContent = hideSave ? 'Close' : 'Cancel';
+    overlay().classList.remove('hidden');
+  }
+
+  function close() {
+    overlay().classList.add('hidden');
+    _onSave = null;
+  }
+
+  return { open, close,
+    _init() {
+      document.getElementById('modal-close-btn').onclick = close;
+      cancelBtn().onclick = close;
+      saveBtn().onclick   = () => { if (_onSave) _onSave(); };
+      overlay().addEventListener('click', e => { if (e.target === overlay()) close(); });
+    }
+  };
+})();
+
+// ══════════════════════════════════════════════════
+//  ROUTER / MAIN APP
+// ══════════════════════════════════════════════════
+const app = {
+
+  // ─────────────────────────────────────────────
+  //  INIT
+  // ─────────────────────────────────────────────
+  init() {
+    modal._init();
+
+    // Nav
+    document.querySelectorAll('.nav-item').forEach(btn =>
+      btn.addEventListener('click', () => this.go(btn.dataset.view))
+    );
+
+    // Login
+    document.getElementById('login-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const val = document.getElementById('login-tech').value;
+      if (!val) { document.getElementById('login-error').style.display = ''; return; }
+      if (auth.login(val)) this._showApp();
+      else document.getElementById('login-error').style.display = '';
+    });
+
+    // Confirm cancel
+    document.getElementById('confirm-cancel-btn').addEventListener('click',
+      () => document.getElementById('confirm-overlay').classList.add('hidden'));
+
+    if (auth.isLoggedIn()) this._showApp();
+    else this._showLogin();
+  },
+
+  _showLogin() {
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('app').classList.add('hidden');
+  },
+
+  _showApp() {
+    document.getElementById('login-screen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    this.go('dashboard');
+  },
+
+  go(view) {
+    this._view = view;
+    document.querySelectorAll('.nav-item').forEach(btn =>
+      btn.classList.toggle('active', btn.dataset.view === view)
+    );
+    const renders = {
+      dashboard:  () => this.renderDashboard(),
+      routes:     () => this.renderRoutes(),
+      clients:    () => this.renderClients(),
+      workorders: () => this.renderWorkOrders(),
+      settings:   () => this.renderSettings()
+    };
+    (renders[view] || renders.dashboard)();
+  },
+
+  setContent(html) {
+    document.getElementById('main-content').innerHTML = html;
+  },
+
+  // ─────────────────────────────────────────────
+  //  HELPERS
+  // ─────────────────────────────────────────────
+  _uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); },
+
+  _badge(status) {
+    return `<span class="badge badge-${status||'pending'}">${(status||'pending').replace('-',' ')}</span>`;
+  },
+
+  _pillClass(param, val) {
+    const n = parseFloat(val);
+    if (!val || isNaN(n)) return '';
+    if (param === 'ph')  return (n >= 7.2 && n <= 7.6) ? 'wo-pill-ok' : 'wo-pill-bad';
+    if (param === 'cl')  return (n >= 1   && n <= 3)   ? 'wo-pill-ok' : 'wo-pill-bad';
+    if (param === 'alk') return (n >= 80  && n <= 120) ? 'wo-pill-ok' : 'wo-pill-bad';
+    return '';
+  },
+
+  _today() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  },
+
+  _fmtDate(d) {
+    if (!d) return '';
+    const dt = new Date(d + 'T00:00:00');
+    return dt.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+  },
+
+  _techSelect(selectedId, id = 'mf-tech') {
+    const opts = Object.entries(USERS)
+      .filter(([k]) => k !== 'admin')
+      .map(([k,v]) => `<option value="${k}" ${k===selectedId?'selected':''}>${v.name}</option>`)
+      .join('');
+    return `<select class="form-control" id="${id}">${opts}</select>`;
+  },
+
+  _clientSelect(selectedId, id = 'wf-client') {
+    const clients = db.get('clients', []);
+    if (!clients.length) return `<select class="form-control" id="${id}"><option value="">No clients — add one first</option></select>`;
+    return `<select class="form-control" id="${id}">
+      ${clients.map(c => `<option value="${c.id}" ${c.id===selectedId?'selected':''}>${c.name}</option>`).join('')}
+    </select>`;
+  },
+
+  // ─────────────────────────────────────────────
+  //  DASHBOARD
+  // ─────────────────────────────────────────────
+  renderDashboard() {
+    const user = auth.user();
+    const allOrders  = db.get('workorders', []);
+    const allClients = db.get('clients', []);
+    const todayStr   = this._today();
+
+    let todayOrders = allOrders.filter(o => o.date === todayStr);
+    if (!auth.isAdmin()) todayOrders = todayOrders.filter(o => o.techId === user.username);
+
+    const pendingCount  = allOrders.filter(o => o.status === 'pending').length;
+    const doneToday     = todayOrders.filter(o => o.status === 'completed').length;
+
+    this.setContent(`
+      <div class="wave-banner">
+        <div class="wave-banner-eyebrow">Welcome back</div>
+        <div class="wave-banner-title">${user.name}</div>
+        <div class="wave-banner-sub">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon">👥</div>
+          <div class="stat-value">${allClients.length}</div>
+          <div class="stat-label">Clients</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">📋</div>
+          <div class="stat-value">${allOrders.length}</div>
+          <div class="stat-label">Work Orders</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">📅</div>
+          <div class="stat-value">${todayOrders.length}</div>
+          <div class="stat-label">Today</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">⏳</div>
+          <div class="stat-value">${pendingCount}</div>
+          <div class="stat-label">Pending</div>
+        </div>
+      </div>
+
+      <div class="section-header">
+        <div class="section-title">Today's Schedule</div>
+        <button class="btn btn-primary btn-sm" onclick="app.createWorkOrder()">+ New</button>
+      </div>
+
+      <div id="today-list">
+        ${todayOrders.length === 0
+          ? `<div class="empty-state">
+               <div class="empty-icon">📅</div>
+               <div class="empty-title">No jobs today</div>
+               <div class="empty-subtitle">Enjoy your day off!</div>
+             </div>`
+          : todayOrders.sort((a,b)=>(a.time||'').localeCompare(b.time||'')).map(o => `
+              <div class="schedule-item" onclick="app.openWorkOrder('${o.id}')">
+                <div class="schedule-time">${o.time || '—'}</div>
+                <div class="schedule-info">
+                  <div class="schedule-name">${o.clientName}</div>
+                  <div class="schedule-detail">${o.address.split(',')[0]}${auth.isAdmin() && o.techName ? ' · ' + o.techName : ''}</div>
+                </div>
+                <div class="schedule-dot ${o.status||'pending'}"></div>
+              </div>`).join('')
+        }
+      </div>
+    `);
+  },
+
+  // ─────────────────────────────────────────────
+  //  CLIENTS
+  // ─────────────────────────────────────────────
+  renderClients(query = '') {
+    const allClients = db.get('clients', []);
+    const q = query.toLowerCase();
+    const list = q
+      ? allClients.filter(c => (c.name + c.address + (c.notes||'')).toLowerCase().includes(q))
+      : allClients;
+
+    this.setContent(`
+      <div class="section-header">
+        <div class="section-title">Clients (${allClients.length})</div>
+        ${auth.isAdmin() ? `<button class="btn btn-primary btn-sm" onclick="app.openClientModal()">+ Add</button>` : ''}
+      </div>
+      <div class="search-bar">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="client-search" placeholder="Search clients…"
+          value="${query}" oninput="app.renderClients(this.value)">
+      </div>
+      <div id="clients-list">${this._clientListHTML(list)}</div>
+    `);
+  },
+
+  _clientListHTML(list) {
+    if (!list.length) return `
+      <div class="empty-state">
+        <div class="empty-icon">👥</div>
+        <div class="empty-title">No clients found</div>
+        <div class="empty-subtitle">${auth.isAdmin() ? 'Add your first client above' : 'No clients to display'}</div>
+      </div>`;
+    return list.map(c => `
+      <div class="list-item" onclick="app.viewClient('${c.id}')">
+        <div class="list-item-avatar">${c.name.charAt(0).toUpperCase()}</div>
+        <div class="list-item-info">
+          <div class="list-item-name">${c.name}</div>
+          <div class="list-item-sub">${c.address}</div>
+          ${c.poolType ? `<div class="list-item-sub">${c.poolType}${c.poolSize ? ' · ' + Number(c.poolSize).toLocaleString() + ' gal' : ''}</div>` : ''}
+        </div>
+        <div class="list-item-actions">
+          ${auth.isAdmin() ? `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();app.openClientModal('${c.id}')">Edit</button>` : ''}
+        </div>
+      </div>`).join('');
+  },
+
+  viewClient(id) {
+    const clients   = db.get('clients', []);
+    const orders    = db.get('workorders', []);
+    const c = clients.find(x => x.id === id);
+    if (!c) return;
+
+    const history = orders.filter(o => o.clientId === id)
+      .sort((a,b) => (b.date||'').localeCompare(a.date||''));
+
+    this.setContent(`
+      <div class="wo-bar">
+        <button class="btn btn-secondary btn-sm" onclick="app.renderClients()">← Back</button>
+        <div class="wo-bar-title">${c.name}</div>
+        ${auth.isAdmin()
+          ? `<button class="btn btn-secondary btn-sm" onclick="app.openClientModal('${c.id}')">Edit</button>`
+          : '<div></div>'}
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-body">
+          <div class="detail-row"><span class="detail-label">Address</span>
+            <a class="detail-value" href="https://maps.apple.com/?q=${encodeURIComponent(c.address)}" target="_blank" style="color:var(--teal)">${c.address}</a></div>
+          ${c.phone   ? `<div class="detail-row"><span class="detail-label">Phone</span><a class="detail-value" href="tel:${c.phone}" style="color:var(--teal)">${c.phone}</a></div>` : ''}
+          ${c.email   ? `<div class="detail-row"><span class="detail-label">Email</span><span class="detail-value">${c.email}</span></div>` : ''}
+          ${c.poolType? `<div class="detail-row"><span class="detail-label">Pool Type</span><span class="detail-value">${c.poolType}</span></div>` : ''}
+          ${c.poolSize? `<div class="detail-row"><span class="detail-label">Pool Size</span><span class="detail-value">${Number(c.poolSize).toLocaleString()} gal</span></div>` : ''}
+          ${c.serviceFreq ? `<div class="detail-row"><span class="detail-label">Frequency</span><span class="detail-value">${c.serviceFreq}</span></div>` : ''}
+          ${c.notes   ? `<div class="detail-row"><span class="detail-label">Notes</span><span class="detail-value" style="text-align:right;max-width:200px;white-space:pre-wrap">${c.notes}</span></div>` : ''}
+        </div>
+      </div>
+
+      <div class="section-header">
+        <div class="section-title">Service History (${history.length})</div>
+        <button class="btn btn-primary btn-sm" onclick="app.createWorkOrder('${c.id}')">+ Work Order</button>
+      </div>
+
+      ${!history.length
+        ? `<div class="empty-state" style="padding:32px 24px">
+             <div class="empty-icon" style="font-size:36px">📋</div>
+             <div class="empty-subtitle">No work orders yet</div>
+           </div>`
+        : history.map(o => `
+            <div class="list-item" onclick="app.openWorkOrder('${o.id}')">
+              <div class="list-item-avatar">📋</div>
+              <div class="list-item-info">
+                <div class="list-item-name">${this._fmtDate(o.date)}</div>
+                <div class="list-item-sub">${o.type||'Service'}${o.time ? ' · ' + o.time : ''}${o.techName ? ' · ' + o.techName : ''}</div>
+                ${o.readings?.pool?.ph
+                  ? `<div class="wo-pills" style="margin-top:4px">
+                       <span class="wo-pill ${this._pillClass('ph',  o.readings.pool.ph)}">pH ${o.readings.pool.ph}</span>
+                       <span class="wo-pill ${this._pillClass('cl',  o.readings.pool.chlorine)}">Cl ${o.readings.pool.chlorine}</span>
+                       <span class="wo-pill ${this._pillClass('alk', o.readings.pool.alkalinity)}">Alk ${o.readings.pool.alkalinity}</span>
+                     </div>` : ''}
+              </div>
+              <div class="list-item-actions">${this._badge(o.status)}</div>
+            </div>`).join('')
+      }
+    `);
+  },
+
+  openClientModal(id = null) {
+    const clients = db.get('clients', []);
+    const c = id ? clients.find(x => x.id === id) : null;
+    const v = k => c?.[k] || '';
+
+    modal.open(
+      id ? 'Edit Client' : 'Add Client',
+      `<div class="form-group">
+         <label class="form-label">Full Name *</label>
+         <input class="form-control" id="cf-name" value="${v('name')}" placeholder="John Smith">
+       </div>
+       <div class="form-group">
+         <label class="form-label">Service Address *</label>
+         <input class="form-control" id="cf-address" value="${v('address')}" placeholder="123 Main St, City, State">
+       </div>
+       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+         <div class="form-group">
+           <label class="form-label">Phone</label>
+           <input class="form-control" id="cf-phone" type="tel" value="${v('phone')}" placeholder="(345) 555-0100">
+         </div>
+         <div class="form-group">
+           <label class="form-label">Email</label>
+           <input class="form-control" id="cf-email" type="email" value="${v('email')}">
+         </div>
+       </div>
+       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+         <div class="form-group">
+           <label class="form-label">Pool Type</label>
+           <select class="form-control" id="cf-type">
+             ${['In-Ground','Above-Ground','Spa/Hot Tub','Commercial'].map(t =>
+               `<option ${v('poolType')===t?'selected':''}>${t}</option>`).join('')}
+           </select>
+         </div>
+         <div class="form-group">
+           <label class="form-label">Pool Size (gal)</label>
+           <input class="form-control" id="cf-size" type="number" value="${v('poolSize')}" placeholder="15000">
+         </div>
+       </div>
+       <div class="form-group">
+         <label class="form-label">Service Frequency</label>
+         <select class="form-control" id="cf-freq">
+           ${['Weekly','Bi-Weekly','Monthly','One-Time'].map(f =>
+             `<option ${v('serviceFreq')===f?'selected':''}>${f}</option>`).join('')}
+         </select>
+       </div>
+       <div class="form-group">
+         <label class="form-label">Gate Code / Notes</label>
+         <textarea class="form-control" id="cf-notes" placeholder="Gate code: 1234 · Dog in yard · etc.">${v('notes')}</textarea>
+       </div>
+       ${id && auth.isAdmin()
+         ? `<button class="btn btn-danger" style="width:100%;margin-top:4px;font-size:12px"
+              onclick="app._deleteClient('${id}')">Delete Client</button>`
+         : ''}`,
+      () => {
+        const name    = document.getElementById('cf-name').value.trim();
+        const address = document.getElementById('cf-address').value.trim();
+        if (!name || !address) { showToast('Name and address required'); return; }
+        const data = {
+          name, address,
+          phone:      document.getElementById('cf-phone').value.trim(),
+          email:      document.getElementById('cf-email').value.trim(),
+          poolType:   document.getElementById('cf-type').value,
+          poolSize:   document.getElementById('cf-size').value,
+          serviceFreq:document.getElementById('cf-freq').value,
+          notes:      document.getElementById('cf-notes').value.trim()
+        };
+        if (id) {
+          const i = clients.findIndex(x => x.id === id);
+          clients[i] = { ...clients[i], ...data };
+        } else {
+          clients.push({ id: this._uid(), ...data });
+        }
+        db.set('clients', clients);
+        modal.close();
+        showToast(id ? 'Client updated ✓' : 'Client added ✓');
+        this.renderClients();
+      }
+    );
+  },
+
+  async _deleteClient(id) {
+    const ok = await confirmDialog('Delete this client? This cannot be undone.');
+    if (!ok) return;
+    db.set('clients', db.get('clients', []).filter(c => c.id !== id));
+    modal.close();
+    showToast('Client deleted');
+    this.renderClients();
+  },
+
+  // ─────────────────────────────────────────────
+  //  ROUTES
+  // ─────────────────────────────────────────────
+  renderRoutes() {
+    const user   = auth.user();
+    const routes = db.get('routes', []);
+    const mine   = auth.isAdmin()
+      ? routes
+      : routes.filter(r => r.techId === user.username);
+
+    this.setContent(`
+      <div class="section-header">
+        <div class="section-title">Daily Routes</div>
+        ${auth.isAdmin()
+          ? `<button class="btn btn-primary btn-sm" onclick="app.openRouteModal()">+ New Route</button>`
+          : ''}
+      </div>
+
+      ${!mine.length
+        ? `<div class="empty-state">
+             <div class="empty-icon">🗺️</div>
+             <div class="empty-title">No routes planned</div>
+             <div class="empty-subtitle">${auth.isAdmin() ? 'Create the first daily route' : 'No routes assigned to you yet'}</div>
+           </div>`
+        : [...mine].sort((a,b)=>b.date.localeCompare(a.date)).map(r => {
+            const stops = r.stops || [];
+            const done  = stops.filter(s => s.status === 'completed').length;
+            const pct   = stops.length ? Math.round(done/stops.length*100) : 0;
+            return `
+            <div class="list-item" onclick="app.viewRoute('${r.id}')">
+              <div class="list-item-avatar">📍</div>
+              <div class="list-item-info">
+                <div class="list-item-name">${r.name}</div>
+                <div class="list-item-sub">${this._fmtDate(r.date)} · ${stops.length} stop${stops.length!==1?'s':''}${auth.isAdmin() && r.techName ? ' · ' + r.techName : ''}</div>
+                <div style="margin-top:7px;background:var(--gray-100);border-radius:10px;height:5px;overflow:hidden">
+                  <div style="width:${pct}%;height:100%;background:linear-gradient(90deg,var(--teal),var(--ocean));border-radius:10px;transition:width .3s"></div>
+                </div>
+                <div style="font-size:10px;color:var(--gray-400);margin-top:3px;letter-spacing:.05em">${done}/${stops.length} completed</div>
+              </div>
+              <div class="list-item-actions" style="align-items:center">
+                <span style="font-size:20px;color:var(--gray-300)">›</span>
+              </div>
+            </div>`;
+          }).join('')
+      }
+    `);
+  },
+
+  openRouteModal(routeId = null) {
+    const routes  = db.get('routes', []);
+    const route   = routeId ? routes.find(r => r.id === routeId) : null;
+    const clients = db.get('clients', []);
+
+    const clientOpts = clients.map(c =>
+      `<option value="${c.id}">${c.name} — ${c.address.split(',')[0]}</option>`
+    ).join('');
+
+    // Build existing stops HTML
+    const existingStops = (route?.stops || []).map((s,i) => this._stopRowHTML(i+1, s.clientId, s.clientName, s.address, s.type)).join('');
+
+    modal.open(
+      routeId ? 'Edit Route' : 'New Route',
+      `${routeId ? `<input type="hidden" id="rf-id" value="${routeId}">` : ''}
+       <div class="form-group">
+         <label class="form-label">Technician</label>
+         ${this._techSelect(route?.techId || 't1', 'rf-tech')}
+       </div>
+       <div class="form-group">
+         <label class="form-label">Route Name</label>
+         <input class="form-control" id="rf-name" value="${route?.name||''}" placeholder="e.g. Monday South Route">
+       </div>
+       <div class="form-group">
+         <label class="form-label">Date</label>
+         <input class="form-control" id="rf-date" type="date" value="${route?.date || this._today()}">
+       </div>
+       <div class="form-group">
+         <label class="form-label">Add Stops</label>
+         ${clients.length
+           ? `<select class="form-control" id="rf-stop-sel">
+                <option value="">— Select a client —</option>${clientOpts}
+              </select>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+                <select class="form-control" id="rf-stop-type">
+                  <option>Service</option><option>Chemical</option><option>Repair</option><option>Inspection</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" onclick="app._addStop()" style="width:100%">+ Add Stop</button>
+              </div>`
+           : `<div style="font-size:13px;color:var(--gray-400)">Add clients first to create stops.</div>`
+         }
+         <div id="rf-stops-list" style="margin-top:10px">${existingStops}</div>
+       </div>`,
+      () => {
+        const name = document.getElementById('rf-name').value.trim();
+        const date = document.getElementById('rf-date').value;
+        if (!name || !date) { showToast('Name and date required'); return; }
+
+        const stopEls = document.querySelectorAll('#rf-stops-list .rf-stop-row');
+        const stops   = Array.from(stopEls).map(el => ({
+          clientId:   el.dataset.cid,
+          clientName: el.dataset.cname,
+          address:    el.dataset.addr,
+          type:       el.querySelector('select').value,
+          status:     el.dataset.status || 'pending'
+        }));
+
+        const techId   = document.getElementById('rf-tech').value;
+        const techName = USERS[techId]?.name || '';
+
+        if (routeId) {
+          const idx = routes.findIndex(r => r.id === routeId);
+          routes[idx] = { ...routes[idx], techId, techName, name, date, stops };
+        } else {
+          routes.push({ id: this._uid(), techId, techName, name, date, stops });
+        }
+        db.set('routes', routes);
+        modal.close();
+        showToast(routeId ? 'Route updated ✓' : 'Route created ✓');
+        this.renderRoutes();
+      }
+    );
+  },
+
+  _stopRowHTML(num, cid, cname, addr, type, status = 'pending') {
+    return `<div class="rf-stop-row" data-cid="${cid}" data-cname="${cname}" data-addr="${addr}" data-status="${status}"
+      style="display:flex;align-items:center;gap:8px;padding:9px 10px;background:var(--surface-alt);border-radius:8px;margin-bottom:6px;border:1px solid var(--gray-200)">
+      <div class="route-stop-num-sm">${num}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${cname}</div>
+        <div style="font-size:11px;color:var(--gray-400)">${addr.split(',')[0]}</div>
+      </div>
+      <select class="form-control" style="width:auto;font-size:11px;padding:4px 6px">
+        ${['Service','Chemical','Repair','Inspection'].map(t => `<option ${t===type?'selected':''}>${t}</option>`).join('')}
+      </select>
+      <button onclick="this.closest('.rf-stop-row').remove();app._renumberStops()"
+        style="background:none;border:none;color:var(--gray-400);cursor:pointer;font-size:20px;line-height:1;padding:0">×</button>
+    </div>`;
+  },
+
+  _addStop() {
+    const sel = document.getElementById('rf-stop-sel');
+    if (!sel || !sel.value) return;
+    const clients = db.get('clients', []);
+    const c = clients.find(x => x.id === sel.value);
+    if (!c) return;
+    const list = document.getElementById('rf-stops-list');
+    const num  = list.querySelectorAll('.rf-stop-row').length + 1;
+    const type = document.getElementById('rf-stop-type')?.value || 'Service';
+    list.insertAdjacentHTML('beforeend', this._stopRowHTML(num, c.id, c.name, c.address, type));
+    sel.value = '';
+  },
+
+  _renumberStops() {
+    document.querySelectorAll('#rf-stops-list .route-stop-num-sm').forEach((el, i) => {
+      el.textContent = i + 1;
+    });
+  },
+
+  viewRoute(id) {
+    const routes = db.get('routes', []);
+    const route  = routes.find(r => r.id === id);
+    if (!route) return;
+    const stops = route.stops || [];
+    const done  = stops.filter(s => s.status === 'completed').length;
+    const pct   = stops.length ? Math.round(done/stops.length*100) : 0;
+
+    this.setContent(`
+      <div class="wo-bar">
+        <button class="btn btn-secondary btn-sm" onclick="app.renderRoutes()">← Back</button>
+        <div class="wo-bar-title">${route.name}</div>
+        ${auth.isAdmin()
+          ? `<button class="btn btn-secondary btn-sm" onclick="app.openRouteModal('${route.id}')">Edit</button>`
+          : '<div></div>'}
+      </div>
+
+      <div style="padding:10px 16px 4px;font-size:12px;color:var(--gray-500)">
+        ${this._fmtDate(route.date)}${route.techName ? ' · ' + route.techName : ''}
+      </div>
+
+      <div class="route-progress-bar">
+        <div class="route-progress-inner" style="width:${pct}%"></div>
+        <div class="route-progress-label">${done} of ${stops.length} completed${stops.length ? ' · ' + pct + '%' : ''}</div>
+      </div>
+
+      ${!stops.length
+        ? `<div class="empty-state"><div class="empty-icon">📍</div><div class="empty-subtitle">No stops on this route</div></div>`
+        : stops.map((s, i) => `
+            <div class="route-stop ${s.status==='completed'?'route-stop-done':s.status==='in-progress'?'route-stop-active':''}">
+              <div class="route-stop-num">${s.status==='completed' ? '✓' : i+1}</div>
+              <div class="route-stop-body">
+                <div class="route-stop-name">${s.clientName}</div>
+                <div class="route-stop-addr">${s.address}</div>
+                <div class="route-stop-meta">
+                  <span class="route-type-badge">${s.type}</span>
+                  ${this._badge(s.status||'pending')}
+                </div>
+                ${s.notes ? `<div class="route-stop-notes">${s.notes}</div>` : ''}
+              </div>
+              <div class="route-stop-actions">
+                <div class="route-btn-row">
+                  ${s.status !== 'completed' && s.status !== 'in-progress'
+                    ? `<button class="btn route-start-btn btn-sm" onclick="app._setStop('${id}',${i},'in-progress')">Start</button>`
+                    : ''}
+                  ${s.status !== 'completed'
+                    ? `<button class="btn route-complete-btn btn-sm" onclick="app._setStop('${id}',${i},'completed')">Done ✓</button>`
+                    : ''}
+                </div>
+              </div>
+            </div>`).join('')
+      }
+      ${auth.isAdmin() ? `
+        <div style="padding:16px">
+          <button class="btn btn-danger" style="width:100%;font-size:12px" onclick="app._deleteRoute('${id}')">Delete Route</button>
+        </div>` : ''}
+    `);
+  },
+
+  _setStop(routeId, idx, status) {
+    const routes = db.get('routes', []);
+    const route  = routes.find(r => r.id === routeId);
+    if (!route) return;
+    route.stops[idx].status = status;
+    db.set('routes', routes);
+    showToast(status === 'completed' ? 'Stop complete ✓' : 'Stop started');
+    this.viewRoute(routeId);
+  },
+
+  async _deleteRoute(id) {
+    const ok = await confirmDialog('Delete this route?');
+    if (!ok) return;
+    db.set('routes', db.get('routes', []).filter(r => r.id !== id));
+    showToast('Route deleted');
+    this.renderRoutes();
+  },
+
+  // ─────────────────────────────────────────────
+  //  WORK ORDERS — list
+  // ─────────────────────────────────────────────
+  renderWorkOrders(filter = '') {
+    const user   = auth.user();
+    const all    = db.get('workorders', []);
+    let   list   = auth.isAdmin() ? all : all.filter(o => o.techId === user.username);
+    if (filter)  list = list.filter(o => o.status === filter);
+    list = [...list].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+
+    this.setContent(`
+      <div class="section-header">
+        <div class="section-title">Work Orders (${list.length})</div>
+        <button class="btn btn-primary btn-sm" onclick="app.createWorkOrder()">+ New</button>
+      </div>
+
+      <div class="filter-tabs">
+        ${['','pending','in-progress','completed','cancelled'].map(s =>
+          `<button class="filter-tab ${filter===s?'active':''}"
+            onclick="app.renderWorkOrders('${s}')">${s||'All'}</button>`
+        ).join('')}
+      </div>
+
+      <div id="wo-list">
+        ${!list.length
+          ? `<div class="empty-state">
+               <div class="empty-icon">📋</div>
+               <div class="empty-title">No work orders</div>
+               <div class="empty-subtitle">Tap + New to create one</div>
+             </div>`
+          : list.map(o => `
+              <div class="job-card" onclick="app.openWorkOrder('${o.id}')">
+                <div class="job-card-header">
+                  <div style="flex:1;min-width:0">
+                    <div class="job-card-title">${o.clientName}</div>
+                    <div class="job-card-customer">${o.address.split(',')[0]}</div>
+                    <div class="job-meta">
+                      <div class="job-meta-item">📅 ${this._fmtDate(o.date)}</div>
+                      ${o.time ? `<div class="job-meta-item">⏰ ${o.time}</div>` : ''}
+                      ${o.type ? `<div class="job-meta-item">🔧 ${o.type}</div>` : ''}
+                      ${auth.isAdmin() && o.techName ? `<div class="job-meta-item">👤 ${o.techName}</div>` : ''}
+                    </div>
+                  </div>
+                  ${this._badge(o.status)}
+                </div>
+                ${o.readings?.pool?.ph ? `
+                  <div class="job-card-body">
+                    <div class="wo-pills">
+                      <span class="wo-pill ${this._pillClass('ph',  o.readings.pool.ph)}">pH ${o.readings.pool.ph}</span>
+                      <span class="wo-pill ${this._pillClass('cl',  o.readings.pool.chlorine)}">Cl ${o.readings.pool.chlorine}</span>
+                      <span class="wo-pill ${this._pillClass('alk', o.readings.pool.alkalinity)}">Alk ${o.readings.pool.alkalinity}</span>
+                    </div>
+                  </div>` : ''}
+              </div>`).join('')
+        }
+      </div>
+    `);
+  },
+
+  // ─────────────────────────────────────────────
+  //  WORK ORDERS — create
+  // ─────────────────────────────────────────────
+  createWorkOrder(prefClientId = null) {
+    const user    = auth.user();
+    const clients = db.get('clients', []);
+
+    modal.open(
+      'New Work Order',
+      `<div class="form-group">
+         <label class="form-label">Client *</label>
+         ${this._clientSelect(prefClientId, 'wf-client')}
+       </div>
+       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+         <div class="form-group">
+           <label class="form-label">Date *</label>
+           <input class="form-control" id="wf-date" type="date" value="${this._today()}">
+         </div>
+         <div class="form-group">
+           <label class="form-label">Time</label>
+           <input class="form-control" id="wf-time" type="time" value="09:00">
+         </div>
+       </div>
+       <div class="form-group">
+         <label class="form-label">Service Type</label>
+         <select class="form-control" id="wf-type">
+           <option>Regular Service</option><option>Chemical Balance</option><option>Equipment Check</option>
+           <option>Repair</option><option>Opening Service</option><option>Closing Service</option><option>Other</option>
+         </select>
+       </div>
+       ${auth.isAdmin()
+         ? `<div class="form-group"><label class="form-label">Technician</label>${this._techSelect(null, 'wf-tech')}</div>`
+         : `<input type="hidden" id="wf-tech" value="${user.username}">`}
+       <div class="form-group">
+         <label class="form-label">Notes</label>
+         <textarea class="form-control" id="wf-notes" placeholder="Special instructions…"></textarea>
+       </div>`,
+      () => {
+        if (!clients.length) { showToast('Add a client first'); return; }
+        const clientEl = document.getElementById('wf-client');
+        const client   = clients.find(c => c.id === clientEl.value);
+        if (!client) { showToast('Select a client'); return; }
+        const techId  = document.getElementById('wf-tech').value;
+        const order   = {
+          id:         this._uid(),
+          clientId:   client.id,
+          clientName: client.name,
+          address:    client.address,
+          date:       document.getElementById('wf-date').value,
+          time:       document.getElementById('wf-time').value,
+          type:       document.getElementById('wf-type').value,
+          techId,
+          techName:   USERS[techId]?.name || '',
+          status:     'pending',
+          notes:      document.getElementById('wf-notes').value.trim(),
+          readings:   {
+            pool: { ph:'', chlorine:'', alkalinity:'', calcium:'', cya:'', salt:'' },
+            spa:  { ph:'', chlorine:'', alkalinity:'', calcium:'', cya:'', salt:'' }
+          },
+          chemicals:  [],
+          photos:     {},
+          _showSpa:   false,
+          _poolSize:  client.poolSize || 15000
+        };
+        const orders = db.get('workorders', []);
+        orders.push(order);
+        db.set('workorders', orders);
+        modal.close();
+        showToast('Work order created ✓');
+        this.openWorkOrder(order.id);
+      }
+    );
+  },
+
+  // ─────────────────────────────────────────────
+  //  WORK ORDERS — detail / edit form
+  // ─────────────────────────────────────────────
+  openWorkOrder(id) {
+    const orders = db.get('workorders', []);
+    const wo     = orders.find(o => o.id === id);
+    if (!wo) { showToast('Work order not found'); return; }
+
+    const user    = auth.user();
+    const canEdit = auth.isAdmin() || wo.techId === user.username;
+    const hasSpa  = wo._showSpa || Object.values(wo.readings.spa||{}).some(Boolean);
+
+    this.setContent(`
+      <div class="wo-bar">
+        <button class="btn btn-secondary btn-sm" onclick="app.renderWorkOrders()">← Back</button>
+        <div class="wo-bar-title">${wo.clientName}</div>
+        <div></div>
+      </div>
+
+      <div class="wo-form">
+
+        <!-- ── JOB DETAILS ── -->
+        <div class="wo-sec">
+          <div class="wo-sec-hd" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+            <span>Job Details</span><span class="wo-chev">▾</span>
+          </div>
+          <div class="wo-sec-bd">
+            <div class="detail-row"><span class="detail-label">Client</span><span class="detail-value">${wo.clientName}</span></div>
+            <div class="detail-row"><span class="detail-label">Address</span>
+              <a class="detail-value" href="https://maps.apple.com/?q=${encodeURIComponent(wo.address)}" target="_blank" style="color:var(--teal);text-align:right;max-width:200px">${wo.address}</a>
+            </div>
+            <div class="detail-row"><span class="detail-label">Date</span><span class="detail-value">${this._fmtDate(wo.date)}</span></div>
+            <div class="detail-row"><span class="detail-label">Time</span><span class="detail-value">${wo.time||'—'}</span></div>
+            <div class="detail-row"><span class="detail-label">Type</span><span class="detail-value">${wo.type||'Service'}</span></div>
+            ${auth.isAdmin() ? `<div class="detail-row"><span class="detail-label">Technician</span><span class="detail-value">${wo.techName||'—'}</span></div>` : ''}
+            <div class="detail-row">
+              <span class="detail-label">Status</span>
+              ${canEdit
+                ? `<select class="form-control" style="width:auto;font-size:13px;padding:4px 8px"
+                     onchange="app._saveField('${id}','status',this.value)">
+                     ${['pending','in-progress','completed','cancelled'].map(s =>
+                       `<option ${wo.status===s?'selected':''}>${s}</option>`).join('')}
+                   </select>`
+                : this._badge(wo.status)
+              }
+            </div>
+          </div>
+        </div>
+
+        <!-- ── POOL READINGS ── -->
+        <div class="wo-sec">
+          <div class="wo-sec-hd" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+            <span>Pool Readings</span><span class="wo-chev">▾</span>
+          </div>
+          <div class="wo-sec-bd">
+            <div class="wo-blk-lbl">POOL</div>
+            ${this._readingsGrid(id, 'pool', wo.readings.pool, canEdit)}
+
+            ${hasSpa ? `
+              <div style="margin-top:14px">
+                <div class="wo-blk-lbl">SPA / HOT TUB</div>
+                ${this._readingsGrid(id, 'spa', wo.readings.spa, canEdit)}
+              </div>` : ''}
+
+            ${canEdit ? `
+              <button class="btn btn-secondary btn-sm" style="margin-top:14px;width:100%"
+                onclick="app._toggleSpa('${id}')">
+                ${hasSpa ? '— Hide Spa Readings' : '+ Add Spa Readings'}
+              </button>` : ''}
+          </div>
+        </div>
+
+        <!-- ── DOSING CALCULATOR ── -->
+        <div class="wo-sec">
+          <div class="wo-sec-hd wo-calc-hd" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+            <span>Dosing Calculator</span><span class="wo-chev">▾</span>
+          </div>
+          <div class="wo-sec-bd" id="dosing-bd">
+            ${this._renderDosing(wo)}
+          </div>
+        </div>
+
+        <!-- ── CHEMICALS ADDED ── -->
+        <div class="wo-sec">
+          <div class="wo-sec-hd" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+            <span>Chemicals Added</span><span class="wo-chev">▾</span>
+          </div>
+          <div class="wo-sec-bd" id="chems-bd">
+            ${this._renderChemicals(id, wo.chemicals||[], canEdit)}
+          </div>
+        </div>
+
+        <!-- ── PHOTOS ── -->
+        <div class="wo-sec">
+          <div class="wo-sec-hd wo-photo-hd" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+            <span>Photos</span><span class="wo-chev">▾</span>
+          </div>
+          <div class="wo-sec-bd" id="photos-bd">
+            ${this._renderPhotos(id, wo.photos||{}, canEdit)}
+          </div>
+        </div>
+
+        <!-- ── NOTES ── -->
+        <div class="wo-sec">
+          <div class="wo-sec-hd" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+            <span>Notes</span><span class="wo-chev">▾</span>
+          </div>
+          <div class="wo-sec-bd">
+            ${canEdit
+              ? `<textarea class="form-control" id="wo-notes-ta" placeholder="Observations, follow-up items…"
+                   onblur="app._saveField('${id}','notes',this.value)">${wo.notes||''}</textarea>`
+              : `<p style="font-size:14px;color:var(--near-black);line-height:1.6">${wo.notes||'<em style="color:var(--gray-400)">No notes</em>'}</p>`
+            }
+          </div>
+        </div>
+
+        <div style="padding:16px;display:flex;flex-direction:column;gap:10px">
+          <button class="btn btn-primary" onclick="app.generatePDF('${id}')">📄 Save PDF to Device</button>
+          ${auth.isAdmin()
+            ? `<button class="btn btn-danger" onclick="app._deleteWorkOrder('${id}')">Delete Work Order</button>`
+            : ''}
+        </div>
+
+      </div><!-- /wo-form -->
+    `);
+  },
+
+  // ── readings grid ──
+  _readingsGrid(woId, zone, readings, canEdit) {
+    const params = [
+      { k:'ph',         label:'pH',             unit:'',    hint:'7.2 – 7.6' },
+      { k:'chlorine',   label:'Free Chlorine',  unit:'ppm', hint:'1 – 3' },
+      { k:'alkalinity', label:'Alkalinity',     unit:'ppm', hint:'80 – 120' },
+      { k:'calcium',    label:'Calcium Hard.',  unit:'ppm', hint:'200 – 400' },
+      { k:'cya',        label:'Cyanuric Acid',  unit:'ppm', hint:'30 – 50' },
+      { k:'salt',       label:'Salt',           unit:'ppm', hint:'2700 – 3400' },
+    ];
+    return `<div class="wo-grid">
+      ${params.map(p => `
+        <div class="wo-fld">
+          <div class="wo-fld-lbl">${p.label} <span class="wo-unit">${p.unit}</span></div>
+          ${canEdit
+            ? `<input class="form-control wo-fld-inp" type="number" step="0.1"
+                 value="${readings[p.k]||''}" placeholder="—"
+                 onblur="app._saveReading('${woId}','${zone}','${p.k}',this.value)">`
+            : `<div class="wo-fld-inp" style="padding:5px 7px;font-size:17px;font-weight:600;color:var(--navy)">${readings[p.k]||'—'}</div>`
+          }
+          <div class="wo-fld-hint">${p.hint}</div>
+        </div>`).join('')}
+    </div>`;
+  },
+
+  _saveReading(woId, zone, key, value) {
+    const orders = db.get('workorders', []);
+    const wo     = orders.find(o => o.id === woId);
+    if (!wo) return;
+    wo.readings[zone][key] = value;
+    db.set('workorders', orders);
+    // Refresh dosing section live
+    const el = document.getElementById('dosing-bd');
+    if (el) el.innerHTML = this._renderDosing(wo);
+  },
+
+  _saveField(woId, field, value) {
+    const orders = db.get('workorders', []);
+    const wo     = orders.find(o => o.id === woId);
+    if (!wo) return;
+    wo[field] = value;
+    db.set('workorders', orders);
+    if (field === 'status') showToast(`Status → ${value}`);
+  },
+
+  _toggleSpa(woId) {
+    const orders = db.get('workorders', []);
+    const wo     = orders.find(o => o.id === woId);
+    if (!wo) return;
+    wo._showSpa = !wo._showSpa;
+    db.set('workorders', orders);
+    this.openWorkOrder(woId);
+  },
+
+  // ── dosing calculator ──
+  _renderDosing(wo) {
+    const r    = wo.readings?.pool || {};
+    const size = parseFloat(wo._poolSize) || 15000;
+    const ph   = parseFloat(r.ph);
+    const cl   = parseFloat(r.chlorine);
+    const alk  = parseFloat(r.alkalinity);
+    const ca   = parseFloat(r.calcium);
+    const cya  = parseFloat(r.cya);
+
+    if (!r.ph && !r.chlorine && !r.alkalinity) {
+      return `<div class="dosing-empty">
+        <span style="font-size:36px">🧪</span>
+        <div>Enter pool readings above to see dosing recommendations</div>
+      </div>`;
+    }
+
+    const items = [];
+
+    // pH
+    if (!isNaN(ph)) {
+      if (ph < 7.2) {
+        const oz = Math.round(((7.4-ph)/0.2) * (size/10000) * 6);
+        items.push({ t:'low', icon:'⬆️', chem:'Soda Ash (pH+)', add:`≈ ${oz} oz`, note:`pH ${ph} → target 7.2–7.6` });
+      } else if (ph > 7.6) {
+        const qt = Math.round(((ph-7.4)/0.2) * (size/10000) * 0.5 * 10)/10;
+        items.push({ t:'high', icon:'⬇️', chem:'Muriatic Acid (pH−)', add:`≈ ${qt} qt`, note:`pH ${ph} → target 7.2–7.6` });
+      }
+    }
+    // Chlorine
+    if (!isNaN(cl)) {
+      if (cl < 1) {
+        const tabs = Math.max(1, Math.ceil(size/10000));
+        items.push({ t:'low', icon:'⬆️', chem:'Chlorine Tablets', add:`${tabs} tablet${tabs>1?'s':''}`, note:`Free Cl ${cl} ppm → target 1–3 ppm` });
+      } else if (cl > 5) {
+        items.push({ t:'high', icon:'⬇️', chem:'Allow to off-gas / dilute', add:'Withhold treatment', note:`Free Cl ${cl} ppm → target 1–3 ppm` });
+      }
+    }
+    // Alkalinity
+    if (!isNaN(alk)) {
+      if (alk < 80) {
+        const lbs = Math.round((80-alk)/10 * (size/10000) * 1.4 * 10)/10;
+        items.push({ t:'low', icon:'⬆️', chem:'Sodium Bicarbonate', add:`≈ ${lbs} lb`, note:`Alk ${alk} ppm → target 80–120 ppm` });
+      } else if (alk > 120) {
+        items.push({ t:'high', icon:'⬇️', chem:'Muriatic Acid', add:'Lower carefully', note:`Alk ${alk} ppm → target 80–120 ppm` });
+      }
+    }
+    // Calcium
+    if (!isNaN(ca)) {
+      if (ca < 200) {
+        const lbs = Math.round((200-ca)/10 * (size/10000) * 1.25 * 10)/10;
+        items.push({ t:'low', icon:'⬆️', chem:'Calcium Chloride', add:`≈ ${lbs} lb`, note:`Ca ${ca} ppm → target 200–400 ppm` });
+      } else if (ca > 400) {
+        items.push({ t:'high', icon:'⬇️', chem:'Partial drain & refill', add:'Dilution needed', note:`Ca ${ca} ppm → target 200–400 ppm` });
+      }
+    }
+    // CYA
+    if (!isNaN(cya)) {
+      if (cya < 30) {
+        const lbs = Math.round((30-cya)/10 * (size/10000) * 1.5 * 10)/10;
+        items.push({ t:'low', icon:'⬆️', chem:'Cyanuric Acid (Stabilizer)', add:`≈ ${lbs} lb`, note:`CYA ${cya} ppm → target 30–50 ppm` });
+      } else if (cya > 80) {
+        items.push({ t:'high', icon:'⬇️', chem:'Partial drain & refill', add:'Dilution needed', note:`CYA ${cya} ppm → target 30–50 ppm` });
+      }
+    }
+
+    // Langelier Saturation Index
+    let lsiHTML = '';
+    if (!isNaN(ph) && !isNaN(alk) && !isNaN(ca) && ph && alk && ca) {
+      const tf  = 0.188 * (Math.log10(80) - 1) + 0.7;        // ~80°F constant
+      const lsi = Math.round((ph + tf + Math.log10(ca/100) + Math.log10(alk/10) - 12.1) * 100) / 100;
+      const cls  = Math.abs(lsi) <= 0.3 ? 'lsi-ok' : Math.abs(lsi) <= 0.5 ? 'lsi-warn' : 'lsi-bad';
+      const bdg  = cls.replace('lsi-','lsi-bdg-');
+      const label = Math.abs(lsi) <= 0.3 ? 'Balanced' : lsi > 0 ? 'Scaling Risk' : 'Corrosive';
+      const pct  = Math.min(100, Math.max(0, (lsi + 1.5) / 3 * 100));
+      lsiHTML = `
+        <div class="lsi-box ${cls}">
+          <div class="lsi-main">
+            <div>
+              <div class="lsi-val">${lsi > 0 ? '+' : ''}${lsi}</div>
+              <div class="lsi-name">Langelier Saturation Index</div>
+            </div>
+            <div class="lsi-badge ${bdg}">${label}</div>
+          </div>
+          <div class="lsi-track"><div class="lsi-dot" style="left:${pct}%"></div></div>
+          <div class="lsi-labels"><span>−2 Corrosive</span><span>0 Ideal</span><span>+2 Scaling</span></div>
+          <div class="lsi-ideal">Ideal range: −0.3 to +0.3</div>
+        </div>`;
+    }
+
+    const dosingHTML = items.length === 0
+      ? `<div class="dosing-all-ok">✓ All readings in range — no adjustments needed</div>`
+      : `<div class="dosing-hdr">Recommended Adjustments</div>
+         ${items.map(item => `
+           <div class="dosing-item dosing-${item.t}">
+             <div class="dosing-top"><span>${item.icon}</span> <strong>${item.chem}</strong></div>
+             <div class="dosing-add">${item.add}</div>
+             <div class="dosing-note">${item.note}</div>
+           </div>`).join('')}`;
+
+    return lsiHTML + dosingHTML;
+  },
+
+  // ── chemicals ──
+  _renderChemicals(woId, chems, canEdit) {
+    const list = chems.length
+      ? chems.map((c, i) => `
+          <div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--gray-100)">
+            <div style="flex:1">
+              <div style="font-size:14px;font-weight:600;color:var(--navy)">${c.name}</div>
+              <div style="font-size:12px;color:var(--gray-400)">${c.amount} ${c.unit}</div>
+            </div>
+            ${canEdit ? `<button onclick="app._removeChem('${woId}',${i})"
+              style="background:none;border:none;color:var(--gray-400);cursor:pointer;font-size:20px;line-height:1">×</button>` : ''}
+          </div>`).join('')
+      : `<div style="font-size:13px;color:var(--gray-400);padding:8px 0">No chemicals logged yet</div>`;
+
+    const addForm = canEdit ? `
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;margin-top:12px">
+        <input class="form-control" id="chem-name" placeholder="Chemical name">
+        <input class="form-control" id="chem-amt"  placeholder="Amt" type="number" step="0.5">
+        <select class="form-control" id="chem-unit">
+          <option>oz</option><option>lb</option><option>qt</option><option>gal</option><option>tab</option><option>bag</option>
+        </select>
+      </div>
+      <button class="btn btn-secondary" style="margin-top:8px;width:100%" onclick="app._addChem('${woId}')">+ Log Chemical</button>` : '';
+
+    return `<div id="chem-list">${list}</div>${addForm}`;
+  },
+
+  _addChem(woId) {
+    const name = (document.getElementById('chem-name')?.value||'').trim();
+    const amt  = document.getElementById('chem-amt')?.value;
+    const unit = document.getElementById('chem-unit')?.value || 'oz';
+    if (!name || !amt) { showToast('Enter chemical name and amount'); return; }
+    const orders = db.get('workorders', []);
+    const wo     = orders.find(o => o.id === woId);
+    if (!wo) return;
+    wo.chemicals = wo.chemicals || [];
+    wo.chemicals.push({ name, amount: amt, unit });
+    db.set('workorders', orders);
+    // Refresh chemicals section
+    const bd = document.getElementById('chems-bd');
+    if (bd) bd.innerHTML = this._renderChemicals(woId, wo.chemicals, true);
+    showToast('Chemical logged ✓');
+  },
+
+  _removeChem(woId, idx) {
+    const orders = db.get('workorders', []);
+    const wo     = orders.find(o => o.id === woId);
+    if (!wo) return;
+    wo.chemicals.splice(idx, 1);
+    db.set('workorders', orders);
+    const bd = document.getElementById('chems-bd');
+    if (bd) bd.innerHTML = this._renderChemicals(woId, wo.chemicals, true);
+  },
+
+  // ── photos ──
+  _renderPhotos(woId, photos, canEdit) {
+    const slots = [
+      { key:'before', label:'Before' },
+      { key:'after',  label:'After'  },
+      { key:'extra1', label:'Issue / Extra' },
+      { key:'extra2', label:'Issue / Extra' },
+    ];
+    return `
+      <div class="photo-ba-row">
+        ${slots.slice(0,2).map(s => this._photoSlot(woId, s, photos[s.key], canEdit)).join('')}
+      </div>
+      <div class="photo-extra-grid">
+        ${slots.slice(2).map(s => this._photoSlot(woId, s, photos[s.key], canEdit)).join('')}
+      </div>`;
+  },
+
+  _photoSlot(woId, slot, dataUrl, canEdit) {
+    return `<div class="photo-slot">
+      <div class="photo-slot-lbl">${slot.label}</div>
+      <div class="photo-preview-box">
+        ${dataUrl
+          ? `<img src="${dataUrl}" class="photo-thumb" onclick="app._viewPhoto('${woId}','${slot.key}')">
+             ${canEdit ? `<button class="photo-remove" onclick="app._removePhoto('${woId}','${slot.key}')">×</button>` : ''}`
+          : canEdit
+            ? `<div class="photo-picker-options">
+                 <div class="photo-picker-title">${slot.label}</div>
+                 <div class="photo-picker-actions">
+                   <label class="photo-source-btn">📷 Camera
+                     <input type="file" accept="image/*" capture="environment" class="photo-file-inp"
+                       onchange="app._handlePhoto('${woId}','${slot.key}',this)">
+                   </label>
+                   <label class="photo-source-btn">🖼️ Gallery
+                     <input type="file" accept="image/*" class="photo-file-inp"
+                       onchange="app._handlePhoto('${woId}','${slot.key}',this)">
+                   </label>
+                 </div>
+               </div>`
+            : `<span style="color:var(--gray-300);font-size:28px">📷</span>`
+        }
+      </div>
+    </div>`;
+  },
+
+  _handlePhoto(woId, key, input) {
+    const file = input.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const orders = db.get('workorders', []);
+      const wo     = orders.find(o => o.id === woId);
+      if (!wo) return;
+      wo.photos       = wo.photos || {};
+      wo.photos[key]  = e.target.result;
+      db.set('workorders', orders);
+      showToast('Photo saved ✓');
+      const bd = document.getElementById('photos-bd');
+      if (bd) bd.innerHTML = this._renderPhotos(woId, wo.photos, true);
+    };
+    reader.readAsDataURL(file);
+  },
+
+  _removePhoto(woId, key) {
+    const orders = db.get('workorders', []);
+    const wo     = orders.find(o => o.id === woId);
+    if (!wo) return;
+    delete wo.photos[key];
+    db.set('workorders', orders);
+    const bd = document.getElementById('photos-bd');
+    if (bd) bd.innerHTML = this._renderPhotos(woId, wo.photos, true);
+  },
+
+  _viewPhoto(woId, key) {
+    const orders = db.get('workorders', []);
+    const wo     = orders.find(o => o.id === woId);
+    if (!wo?.photos?.[key]) return;
+    modal.open('Photo', `<img src="${wo.photos[key]}" style="width:100%;border-radius:8px">`,
+      null, 'Close', true);
+  },
+
+  async _deleteWorkOrder(id) {
+    const ok = await confirmDialog('Delete this work order?');
+    if (!ok) return;
+    db.set('workorders', db.get('workorders',[]).filter(o => o.id !== id));
+    showToast('Work order deleted');
+    this.renderWorkOrders();
+  },
+
+  // ─────────────────────────────────────────────
+  //  PDF REPORT
+  // ─────────────────────────────────────────────
+  generatePDF(id) {
+    const orders = db.get('workorders', []);
+    const wo     = orders.find(o => o.id === id);
+    if (!wo) return;
+
+    if (typeof window.jspdf === 'undefined') {
+      showToast('PDF library not loaded — check connection');
+      return;
+    }
+
+    try {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+      const W = 210, M = 20;
+
+      // ── Header ──
+      doc.setFillColor(10, 30, 46);
+      doc.rect(0, 0, W, 42, 'F');
+
+      doc.setTextColor(212, 201, 187);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(26);
+      doc.text('OASIS', M, 18);
+
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.setLetterSpacing(1.5);
+      doc.text('LUXURY POOL & WATERSHAPE SERVICE', M, 26);
+      doc.text('SERVICE REPORT', M, 33);
+      doc.setLetterSpacing(0);
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(10);
+      doc.text(wo.date, W - M, 20, { align:'right' });
+      if (wo.time) doc.text(wo.time, W - M, 27, { align:'right' });
+
+      // ── Client block ──
+      let y = 54;
+      doc.setTextColor(26, 64, 95);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(15);
+      doc.text(wo.clientName, M, y); y += 7;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(90, 80, 72);
+      doc.text(wo.address, M, y); y += 6;
+      if (wo.type)     doc.text(`Type: ${wo.type}`, M, y), y += 6;
+      if (wo.techName) doc.text(`Technician: ${wo.techName}`, M, y), y += 6;
+
+      // Status pill
+      const statusColors = { completed:[42,122,79], 'in-progress':[34,102,131], pending:[154,111,30], cancelled:[150,150,150] };
+      const [sr,sg,sb] = statusColors[wo.status] || statusColors.pending;
+      doc.setFillColor(sr,sg,sb);
+      doc.roundedRect(W-60, 50, 40, 12, 3, 3, 'F');
+      doc.setTextColor(255,255,255);
+      doc.setFontSize(8);
+      doc.setFont('helvetica','bold');
+      doc.text((wo.status||'PENDING').toUpperCase(), W-40, 57.5, {align:'center'});
+
+      // ── Divider ──
+      y += 4;
+      doc.setDrawColor(212,201,187);
+      doc.line(M, y, W-M, y); y += 10;
+
+      // ── Pool readings ──
+      doc.setTextColor(26,64,95);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(11);
+      doc.text('POOL READINGS', M, y); y += 7;
+
+      const params = [
+        ['pH',                    wo.readings.pool.ph,          '7.2–7.6'],
+        ['Free Chlorine (ppm)',    wo.readings.pool.chlorine,    '1–3'],
+        ['Total Alkalinity (ppm)', wo.readings.pool.alkalinity,  '80–120'],
+        ['Calcium Hardness (ppm)', wo.readings.pool.calcium,     '200–400'],
+        ['Cyanuric Acid (ppm)',    wo.readings.pool.cya,         '30–50'],
+        ['Salt (ppm)',             wo.readings.pool.salt,        '2700–3400'],
+      ];
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(9);
+      params.forEach(([label, val, ideal]) => {
+        if (!val) return;
+        doc.setTextColor(90,80,72);  doc.text(label, M, y);
+        doc.setTextColor(26,64,95);  doc.setFont('helvetica','bold');  doc.text(val.toString(), 115, y);
+        doc.setTextColor(140,130,120); doc.setFont('helvetica','normal'); doc.text(`(${ideal})`, 145, y);
+        y += 7;
+      });
+
+      // Spa readings
+      const spaHasData = Object.values(wo.readings.spa||{}).some(Boolean);
+      if (spaHasData) {
+        y += 4;
+        doc.setTextColor(26,64,95);
+        doc.setFont('helvetica','bold'); doc.setFontSize(11);
+        doc.text('SPA / HOT TUB READINGS', M, y); y += 7;
+        params.forEach(([label, , ideal], idx) => {
+          const spaKeys = ['ph','chlorine','alkalinity','calcium','cya','salt'];
+          const val = wo.readings.spa[spaKeys[idx]];
+          if (!val) return;
+          doc.setFont('helvetica','normal'); doc.setFontSize(9);
+          doc.setTextColor(90,80,72);  doc.text(label, M, y);
+          doc.setTextColor(26,64,95);  doc.setFont('helvetica','bold'); doc.text(val.toString(), 115, y);
+          doc.setTextColor(140,130,120); doc.setFont('helvetica','normal'); doc.text(`(${ideal})`, 145, y);
+          y += 7;
+        });
+      }
+
+      // ── Chemicals ──
+      if (wo.chemicals?.length) {
+        y += 4;
+        doc.setDrawColor(212,201,187); doc.line(M, y, W-M, y); y += 8;
+        doc.setTextColor(26,64,95); doc.setFont('helvetica','bold'); doc.setFontSize(11);
+        doc.text('CHEMICALS ADDED', M, y); y += 7;
+        wo.chemicals.forEach(c => {
+          doc.setFont('helvetica','normal'); doc.setFontSize(9);
+          doc.setTextColor(90,80,72);
+          doc.text(`• ${c.name}: ${c.amount} ${c.unit}`, M, y); y += 6;
+        });
+      }
+
+      // ── Notes ──
+      if (wo.notes) {
+        y += 4;
+        doc.setDrawColor(212,201,187); doc.line(M, y, W-M, y); y += 8;
+        doc.setTextColor(26,64,95); doc.setFont('helvetica','bold'); doc.setFontSize(11);
+        doc.text('NOTES', M, y); y += 7;
+        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90,80,72);
+        const lines = doc.splitTextToSize(wo.notes, W - M*2);
+        doc.text(lines, M, y); y += lines.length * 5.5;
+      }
+
+      // ── Footer ──
+      doc.setFillColor(10,30,46);
+      doc.rect(0, 282, W, 15, 'F');
+      doc.setTextColor(212,201,187); doc.setFontSize(8); doc.setFont('helvetica','normal');
+      doc.text('OASIS Luxury Pool & Watershape Service', M, 290);
+      doc.text(`Generated ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`,
+        W-M, 290, {align:'right'});
+
+      doc.save(`OASIS_${wo.clientName.replace(/\s+/g,'-')}_${wo.date}.pdf`);
+      showToast('📄 PDF saved to device');
+    } catch(err) {
+      console.error('PDF error:', err);
+      showToast('PDF failed — check console');
+    }
+  },
+
+
+  // ─────────────────────────────────────────────
+  //  LEGACY SEND / SHARE ACTIONS → PDF ONLY
+  // ─────────────────────────────────────────────
+  shareReport(id) {
+    return this.generatePDF(id);
+  },
+
+  sendReport(id) {
+    return this.generatePDF(id);
+  },
+
+  // ─────────────────────────────────────────────
+  //  SETTINGS
+  // ─────────────────────────────────────────────
+  renderSettings() {
+    const user = auth.user();
+    this.setContent(`
+      <div class="section-header">
+        <div class="section-title">Settings</div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">Account</div></div>
+        <div class="card-body">
+          <div class="detail-row"><span class="detail-label">Name</span><span class="detail-value">${user.name}</span></div>
+          <div class="detail-row"><span class="detail-label">Role</span><span class="detail-value" style="text-transform:capitalize">${user.role}</span></div>
+        </div>
+      </div>
+
+      ${auth.isAdmin() ? `
+      <div class="card">
+        <div class="card-header"><div class="card-title">Team</div></div>
+        <div class="card-body">
+          ${Object.entries(USERS).filter(([k])=>k!=='admin').map(([,v]) => `
+            <div class="detail-row"><span class="detail-label">${v.name}</span><span class="detail-value" style="color:var(--teal)">Technician</span></div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">Data Overview</div></div>
+        <div class="card-body">
+          <div class="detail-row"><span class="detail-label">Clients</span><span class="detail-value">${db.get('clients',[]).length}</span></div>
+          <div class="detail-row"><span class="detail-label">Work Orders</span><span class="detail-value">${db.get('workorders',[]).length}</span></div>
+          <div class="detail-row"><span class="detail-label">Routes</span><span class="detail-value">${db.get('routes',[]).length}</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">Danger Zone</div></div>
+        <div class="card-body">
+          <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">Clearing data is permanent and cannot be undone.</div>
+          <button class="btn btn-danger btn-sm" onclick="app._clearData()">Clear All Data</button>
+        </div>
+      </div>` : ''}
+
+      <div class="card">
+        <div class="card-body">
+          <button class="btn btn-danger" style="width:100%" onclick="signOut()">Sign Out</button>
+        </div>
+      </div>
+    `);
+  },
+
+  async _clearData() {
+    const ok = await confirmDialog('Clear ALL clients, routes, and work orders? This cannot be undone.', 'Clear All', 'btn-danger');
+    if (!ok) return;
+    db.remove('clients');
+    db.remove('workorders');
+    db.remove('routes');
+    showToast('All data cleared');
+    this.renderSettings();
+  }
+};
+
+// ══════════════════════════════════════════════════
+//  GLOBALS expected by index.html
+// ══════════════════════════════════════════════════
+function signOut() {
+  auth.logout();
+  location.reload();
+}
+
+// Expose for inline onclick in html
+window.app    = app;
+window.router = app;   // legacy compat
+
+document.addEventListener('DOMContentLoaded', () => app.init());
+
+  </script>
 </body>
 </html>
