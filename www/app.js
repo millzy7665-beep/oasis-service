@@ -56,7 +56,8 @@ class Auth {
       't8': { role: 'technician', name: 'Malik' },
       't9': { role: 'technician', name: 'Jet' },
       't10': { role: 'technician', name: 'Mark' },
-      'admin': { role: 'admin', name: 'Chris Mills' }
+      'admin': { role: 'admin', name: 'Chris Mills' },
+      'admin2': { role: 'admin', name: 'James Bussey' }
     };
   }
 
@@ -113,7 +114,7 @@ class Auth {
     const user = this.getCurrentUser();
     if (!user) return false;
     // Chris (admin), Jet (t9), Mark (t10)
-    return user.username === 'admin' || user.username === 't9' || user.username === 't10';
+    return user.role === 'admin' || user.username === 't9' || user.username === 't10';
   }
 }
 
@@ -337,8 +338,19 @@ class NotificationManager {
 
 const notificationManager = new NotificationManager();
 
+function getAdminNames() {
+  return Object.values(auth.users)
+    .filter(user => user.role === 'admin')
+    .map(user => user.name)
+    .sort((a, b) => a.localeCompare(b));
+}
+
 function getAdminName() {
-  return auth.users?.admin?.name || 'Chris Mills';
+  return getAdminNames()[0] || 'Chris Mills';
+}
+
+function getAdminRecipients(excludeName = '') {
+  return getAdminNames().filter(name => name && name !== excludeName);
 }
 
 function getTechnicianNames() {
@@ -471,7 +483,7 @@ class Router {
     const currentUser = auth.getCurrentUser();
     if (!currentUser) return [];
 
-    return currentUser.username === 'admin'
+    return currentUser.role === 'admin'
       ? items
       : items.filter(item => (item?.[technicianField] || '') === currentUser.name);
   }
@@ -656,7 +668,7 @@ class Router {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
-    const isMainAdmin = user && user.username === 'admin';
+    const isMainAdmin = user && user.role === 'admin';
 
     content.innerHTML = `
       <div class="section-header">
@@ -776,7 +788,7 @@ class Router {
     const isAdmin = auth.isAdmin();
     const canShare = auth.canShare();
 
-    let workorders = (currentUser && currentUser.username === 'admin')
+    let workorders = (currentUser && currentUser.role === 'admin')
       ? allWorkorders
       : allWorkorders.filter(wo => wo.technician === currentUser.name);
 
@@ -815,7 +827,7 @@ class Router {
             <div class="job-meta">
               <div class="job-meta-item">📅 ${wo.date}</div>
               <div class="job-meta-item">⏰ ${wo.time || 'TBD'}</div>
-              ${currentUser.username === 'admin' ? `<div class="job-meta-item">👤 ${wo.technician || 'Unknown'}</div>` : ''}
+              ${currentUser.role === 'admin' ? `<div class="job-meta-item">👤 ${wo.technician || 'Unknown'}</div>` : ''}
             </div>
           </div>
           <button class="btn btn-icon" onclick="openMap('${wo.address}')" title="View on Map">📍</button>
@@ -826,7 +838,7 @@ class Router {
         <div class="job-card-footer">
           <button class="btn ${isCompleted ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="router.viewWorkOrder('${wo.id}')">${isCompleted ? 'Completed' : 'Open'}</button>
           ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareReport('${wo.id}')">Share</button>` : ''}
-          ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteWorkOrder('${wo.id}')">Delete</button>` : ''}
+          ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteWorkOrder('${wo.id}')">Delete</button>` : ''}
         </div>
       </div>
     `;
@@ -836,7 +848,7 @@ class Router {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
-    const isMainAdmin = user && user.username === 'admin';
+    const isMainAdmin = user && user.role === 'admin';
 
     content.innerHTML = `
       <div class="section-header">
@@ -1727,8 +1739,8 @@ async function exportCompletedToExcel() {
     const base64 = btoa(binary);
     const filename = `OASIS_Completed_Orders_${new Date().toISOString().split('T')[0]}.xlsx`;
 
-    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast('Completed orders Excel ready');
+    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast('Completed orders Excel ready to email');
   } catch (error) {
     console.error('Excel export failed:', error);
     showToast('Excel export failed');
@@ -2102,7 +2114,7 @@ function populateLoginTechOptions() {
   select.innerHTML = `
     <option value="" disabled selected>— Select your name —</option>
     ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
+      <option value="${id}">${user.name}${user.role === 'admin' ? ' (Admin)' : ''}</option>
     `).join('')}
   `;
 }
@@ -2442,7 +2454,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  let orders = (currentUser && currentUser.username === 'admin')
+  let orders = (currentUser && currentUser.role === 'admin')
     ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
@@ -2490,7 +2502,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
       <div class="job-card-footer">
         <button class="btn ${order.status === 'completed' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">${order.status === 'completed' ? 'Completed' : 'Open'}</button>
         ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
-        ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
+        ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
       </div>
     </div>
   `).join('');
@@ -3563,6 +3575,61 @@ async function sharePDF(doc, filename) {
   await shareFile(b64, filename, 'application/pdf');
 }
 
+async function shareFileByEmail(base64Data, filename, contentType = 'application/octet-stream') {
+  const subject = filename.toLowerCase().endsWith('.xlsx') ? 'OASIS Completed Orders Spreadsheet' : 'OASIS File';
+  const body = `Please send the attached file:\n\n${filename}`;
+
+  try {
+    const plugins = (typeof Capacitor !== 'undefined' && Capacitor.Plugins) ? Capacitor.Plugins : {};
+    const { Filesystem, Share } = plugins;
+
+    if (Filesystem && Share) {
+      const saveResult = await Filesystem.writeFile({
+        path: filename,
+        data: base64Data,
+        directory: 'CACHE'
+      });
+
+      await Share.share({
+        title: subject,
+        text: body,
+        files: [saveResult.uri],
+        dialogTitle: 'Choose Email to send the spreadsheet'
+      });
+
+      showToast('Choose Email to send the spreadsheet');
+      return;
+    }
+  } catch (error) {
+    console.warn('Native email share failed, using fallback:', error);
+  }
+
+  try {
+    if (navigator.share && typeof File !== 'undefined' && typeof atob === 'function') {
+      const byteCharacters = atob(base64Data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+
+      const file = new File([new Uint8Array(byteNumbers)], filename, { type: contentType });
+      const shareData = { title: subject, text: body, files: [file] };
+
+      if (!navigator.canShare || navigator.canShare(shareData)) {
+        await navigator.share(shareData);
+        showToast('Choose Email to send the spreadsheet');
+        return;
+      }
+    }
+  } catch (error) {
+    console.warn('Web email share failed, downloading instead:', error);
+  }
+
+  downloadBase64File(base64Data, filename, contentType);
+  openEmailShare(subject, `${body}\n\nThe spreadsheet has also been downloaded to your device if it needs attaching manually.`);
+  showToast('Email draft opened with spreadsheet download ready');
+}
+
 async function exportRepairToExcel(orderId) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) {
@@ -4166,8 +4233,8 @@ async function exportCompletedToExcel() {
     const base64 = btoa(binary);
     const filename = `OASIS_Completed_Orders_${new Date().toISOString().split('T')[0]}.xlsx`;
 
-    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast('Completed orders Excel ready');
+    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast('Completed orders Excel ready to email');
   } catch (error) {
     console.error('Excel export failed:', error);
     showToast('Excel export failed');
@@ -4541,7 +4608,7 @@ function populateLoginTechOptions() {
   select.innerHTML = `
     <option value="" disabled selected>— Select your name —</option>
     ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
+      <option value="${id}">${user.name}${user.role === 'admin' ? ' (Admin)' : ''}</option>
     `).join('')}
   `;
 }
@@ -4881,7 +4948,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  let orders = (currentUser && currentUser.username === 'admin')
+  let orders = (currentUser && currentUser.role === 'admin')
     ? allOrders
     : allOrders.filter(o => o.assignedTo === currentUser.name);
 
@@ -4929,7 +4996,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
       <div class="job-card-footer">
         <button class="btn ${order.status === 'completed' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">${order.status === 'completed' ? 'Completed' : 'Open'}</button>
         ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
-        ${currentUser.username === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
+        ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
       </div>
     </div>
   `).join('');
@@ -5866,8 +5933,8 @@ async function exportCompletedToExcel() {
     const base64 = btoa(binary);
     const filename = `OASIS_Completed_Orders_${new Date().toISOString().split('T')[0]}.xlsx`;
 
-    await shareFile(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast('Completed orders Excel ready');
+    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast('Completed orders Excel ready to email');
   } catch (error) {
     console.error('Excel export failed:', error);
     showToast('Excel export failed');
@@ -6241,7 +6308,7 @@ function populateLoginTechOptions() {
   select.innerHTML = `
     <option value="" disabled selected>— Select your name —</option>
     ${entries.map(([id, user]) => `
-      <option value="${id}">${user.name}${id === 'admin' ? ' (Admin)' : ''}</option>
+      <option value="${id}">${user.name}${user.role === 'admin' ? ' (Admin)' : ''}</option>
     `).join('')}
   `;
 }
@@ -6688,7 +6755,7 @@ function quickAddClient() {
     type: 'client',
     title: 'New client from Admin',
     message: `${name} has been added and sent to ${technician}.`,
-    recipients: [technician, getAdminName()],
+    recipients: [technician, ...getAdminRecipients()],
     targetView: 'clients',
     targetId: clientId,
     actionLabel: 'Open Clients'
@@ -6736,7 +6803,7 @@ function saveWorkOrderForm(orderId) {
         type: 'chem',
         title: 'New chem sheet from Admin',
         message: `${order.clientName || 'A chem sheet'} has been sent directly to you.`,
-        recipients: [order.technician, getAdminName()],
+        recipients: [order.technician, ...getAdminRecipients(order.technician)],
         targetView: 'chem',
         targetId: order.id,
         actionLabel: 'Open Chem Sheet'
@@ -6749,7 +6816,7 @@ function saveWorkOrderForm(orderId) {
         type: 'chem',
         title: order.status === 'completed' ? 'Completed chem sheet received' : 'Chem sheet received from technician',
         message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a chem sheet'}.`,
-        recipients: [getAdminName()],
+        recipients: getAdminRecipients(currentUser?.name),
         targetView: 'chem',
         targetId: order.id,
         actionLabel: 'Open Chem Sheet'
@@ -6807,7 +6874,7 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
         type: 'repair',
         title: 'New repair order from Admin',
         message: `${order.clientName || 'A repair order'} has been sent directly to you.`,
-        recipients: [order.assignedTo, getAdminName()],
+        recipients: [order.assignedTo, ...getAdminRecipients(order.assignedTo)],
         targetView: 'repair',
         targetId: order.id,
         actionLabel: 'Open Repair Order'
@@ -6820,7 +6887,7 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
         type: 'repair',
         title: order.status === 'completed' ? 'Completed repair order received' : 'Repair order received from technician',
         message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a repair order'}.`,
-        recipients: [getAdminName()],
+        recipients: getAdminRecipients(currentUser?.name),
         targetView: 'repair',
         targetId: order.id,
         actionLabel: 'Open Repair Order'
