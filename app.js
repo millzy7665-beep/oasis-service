@@ -1077,6 +1077,7 @@ class Router {
         <div class="list-item-actions">
           <button class="btn btn-icon" onclick="openMap('${escapeHtml(client.address)}')" title="View on Map">📍</button>
           ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${escapeHtml(client.id)}')">Edit</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteClient('${escapeHtml(client.id)}')">Delete</button>` : ''}
         </div>
       </div>
     `;
