@@ -4,6 +4,7 @@
   "description": "",
   "main": "app.js",
   "scripts": {
+    "start": "npx serve . -p 4177",
     "test": "echo \"Error: no test specified\" && exit 1",
     "build:web": "mkdir -p www && cp index.html app.js tech-catalog.js styles.css sw.js manifest.json icon-180.png icon-192.png icon-512.png oasis-logo.png WO_TEMPLATE.xlsm www/ && if [ -f \"QUOTE_TEMPLATE.xlsx\" ]; then cp \"QUOTE_TEMPLATE.xlsx\" www/; elif [ -f \"QUOTE TEMPLATE.xlsx\" ]; then cp \"QUOTE TEMPLATE.xlsx\" www/; elif [ -f \"1. QUOTE TEMPLATE.xlsx\" ]; then cp \"1. QUOTE TEMPLATE.xlsx\" www/; fi",
     "test:estimate-export": "node test-estimate-export.js",
