@@ -1124,7 +1124,8 @@ class Router {
       <div class="section-header">
         <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Create Work Order</div></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="downloadCompletedWorkOrders()">📥 Download WOs</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="downloadCompletedWorkOrders()">📥 Download WO</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="downloadBulkChemSheets()">📥 Download Chem Sheets</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
           ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ Chem Sheet</button>` : ''}
         </div>
@@ -2423,6 +2424,149 @@ async function downloadCompletedWorkOrders() {
     showToast(`Downloaded ${completed.length} completed work orders`);
   } catch (error) {
     console.error('Download failed:', error);
+    showToast('Download failed - check console');
+  }
+}
+
+
+async function downloadBulkChemSheets() {
+  const fieldTechs = ['Ace', 'Ariel', 'Donald', 'Elvin', 'Jermaine', 'Kadeem', 'Kingsley', 'Malik'];
+  const allChem = db.get('workorders', []);
+  const completed = allChem.filter(wo =>
+    (wo.status || '').toLowerCase() === 'completed' &&
+    wo.technician && fieldTechs.includes(wo.technician)
+  );
+
+  if (completed.length === 0) {
+    showToast('No completed chem sheets from field techs to download');
+    return;
+  }
+
+  showToast('Generating Chem Sheets Excel...');
+
+  try {
+    const wb = XLSX.utils.book_new();
+
+    // Group by client
+    const byClient = {};
+    completed.forEach(wo => {
+      const key = wo.clientName || wo.clientId || 'Unknown';
+      if (!byClient[key]) byClient[key] = { address: wo.address || '', visits: [] };
+      byClient[key].visits.push(wo);
+    });
+
+    // Sort clients alphabetically
+    const clientNames = Object.keys(byClient).sort((a, b) => a.localeCompare(b));
+
+    const readingLabels = [
+      { key: 'chlorine', label: 'Chlorine' },
+      { key: 'ph', label: 'pH' },
+      { key: 'alkalinity', label: 'Alkalinity' },
+      { key: 'calcium', label: 'Calcium' },
+      { key: 'cya', label: 'CYA' },
+      { key: 'salt', label: 'Salt' },
+      { key: 'temp', label: 'Temp' },
+      { key: 'tds', label: 'TDS' },
+      { key: 'phosphates', label: 'Phosphates' }
+    ];
+
+    const chemLabels = [
+      { key: 'tabs', label: 'Tabs' },
+      { key: 'shock', label: 'Shock' },
+      { key: 'muriaticAcid', label: 'Muriatic Acid' },
+      { key: 'sodaAsh', label: 'Soda Ash' },
+      { key: 'sodiumBicarb', label: 'Sodium Bicarb' },
+      { key: 'calcium', label: 'Calcium' },
+      { key: 'stabilizer', label: 'Stabilizer' },
+      { key: 'salt', label: 'Salt' },
+      { key: 'phosphateRemover', label: 'Phos Remover' },
+      { key: 'algaecide', label: 'Algaecide' }
+    ];
+
+    // Build a single summary sheet with all clients
+    // Each client gets a header row, then rows for readings/chemicals per visit date
+    const summaryRows = [];
+
+    clientNames.forEach(clientName => {
+      const data = byClient[clientName];
+      // Sort visits by date
+      const visits = data.visits.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+
+      // Header row: Client | Address | then date columns
+      const headerRow = ['Client', 'Address', 'Field'];
+      visits.forEach(v => {
+        const d = v.date || 'No Date';
+        headerRow.push(d);
+      });
+      summaryRows.push(headerRow);
+
+      // Technician row
+      const techRow = [clientName, data.address, 'Technician'];
+      visits.forEach(v => techRow.push(v.technician || ''));
+      summaryRows.push(techRow);
+
+      // Time In row
+      const timeInRow = ['', '', 'Time In'];
+      visits.forEach(v => timeInRow.push(v.timeIn || v.time || ''));
+      summaryRows.push(timeInRow);
+
+      // Time Out row
+      const timeOutRow = ['', '', 'Time Out'];
+      visits.forEach(v => timeOutRow.push(v.timeOut || ''));
+      summaryRows.push(timeOutRow);
+
+      // Pool readings
+      readingLabels.forEach(rl => {
+        const row = ['', '', 'Pool ' + rl.label];
+        visits.forEach(v => row.push((v.readings && v.readings.pool && v.readings.pool[rl.key]) || ''));
+        summaryRows.push(row);
+      });
+
+      // Pool chemicals added
+      chemLabels.forEach(cl => {
+        const row = ['', '', 'Pool ' + cl.label + ' Added'];
+        visits.forEach(v => row.push((v.chemicalsAdded && v.chemicalsAdded.pool && v.chemicalsAdded.pool[cl.key]) || ''));
+        summaryRows.push(row);
+      });
+
+      // Spa readings
+      readingLabels.forEach(rl => {
+        const row = ['', '', 'Spa ' + rl.label];
+        visits.forEach(v => row.push((v.readings && v.readings.spa && v.readings.spa[rl.key]) || ''));
+        summaryRows.push(row);
+      });
+
+      // Spa chemicals added
+      chemLabels.forEach(cl => {
+        const row = ['', '', 'Spa ' + cl.label + ' Added'];
+        visits.forEach(v => row.push((v.chemicalsAdded && v.chemicalsAdded.spa && v.chemicalsAdded.spa[cl.key]) || ''));
+        summaryRows.push(row);
+      });
+
+      // Notes row
+      const notesRow = ['', '', 'Notes'];
+      visits.forEach(v => notesRow.push(((v.workPerformed || '') + ' ' + (v.followUpNotes || v.notes || '')).trim()));
+      summaryRows.push(notesRow);
+
+      // Blank separator row
+      summaryRows.push([]);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(summaryRows);
+
+    // Set column widths
+    const maxCols = Math.max(...summaryRows.map(r => r.length));
+    const cols = [{ wch: 25 }, { wch: 35 }, { wch: 22 }];
+    for (let i = 3; i < maxCols; i++) cols.push({ wch: 14 });
+    ws['!cols'] = cols;
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Chem Sheets');
+
+    const filename = `OASIS_Chem_Sheets_${new Date().toISOString().split('T')[0]}.xlsx`;
+    XLSX.writeFile(wb, filename);
+    showToast(`Downloaded chem sheets for ${clientNames.length} clients`);
+  } catch (error) {
+    console.error('Chem sheet download failed:', error);
     showToast('Download failed - check console');
   }
 }
