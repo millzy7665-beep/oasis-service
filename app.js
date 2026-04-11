@@ -543,6 +543,11 @@ class Router {
     document.querySelectorAll('.nav-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === this.currentView);
     });
+    // Hide Work Orders tab for field techs (only Admin, Jet, Mark can see it)
+    const user = auth.getCurrentUser();
+    const canSeeWorkOrders = auth.isAdmin() || (user && (user.name === 'Jet' || user.name === 'Mark'));
+    const woBtn = document.querySelector('.nav-item[data-view="workorders"]');
+    if (woBtn) woBtn.style.display = canSeeWorkOrders ? '' : 'none';
   }
 
   setAdminJobStatusFilter(value = 'all') {
