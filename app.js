@@ -639,6 +639,10 @@ class Router {
     const myTotalClients = isAdmin ? allClients.length : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
     const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
 
+    // Work orders for dashboard - admin sees all, techs see their own
+    const myRepairOrders = visibleRepairOrders.filter(r => (r.status || 'open') !== 'completed')
+      .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
     content.innerHTML = `
       <div class="wave-banner">
         <div class="wave-banner-eyebrow">Welcome back</div>
@@ -657,14 +661,33 @@ class Router {
           <div class="stat-value">${myTotalClients}</div>
           <div class="stat-label">Total Visits</div>
         </div>
-        ${isOfficeUser ? `
-        <div class="stat-card" onclick="router.navigate('routes')">
+        <div class="stat-card">
           <div class="stat-icon">🛠️</div>
-          <div class="stat-value">${visibleRepairOrders.length}</div>
-          <div class="stat-label">Work Orders</div>
+          <div class="stat-value">${myRepairOrders.length}</div>
+          <div class="stat-label">Open Work Orders</div>
         </div>
-        ` : ''}
       </div>
+
+      ${myRepairOrders.length > 0 ? `
+      <div class="section-header">
+        <div class="section-title">${isAdmin ? 'All Open Work Orders' : 'My Work Orders'}</div>
+      </div>
+      ${myRepairOrders.map(order => `
+        <div class="list-item" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')" style="cursor:pointer;">
+          <div class="list-item-avatar" style="background:#fff3e0; color:#e65100;">🛠️</div>
+          <div class="list-item-info">
+            <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
+            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
+            <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
+          </div>
+          <div class="list-item-actions">
+            <span style="font-size:11px; padding:3px 8px; border-radius:12px; background:${order.status === 'in-progress' ? '#fff3e0' : '#e3f2fd'}; color:${order.status === 'in-progress' ? '#e65100' : '#1565c0'};">${escapeHtml(order.status || 'open')}</span>
+          </div>
+        </div>
+      `).join('')}
+      ` : `
+      <div class="card" style="margin:16px;"><div class="card-body"><div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">No open work orders</div></div></div></div>
+      `}
 
     `;
   }
