@@ -626,14 +626,6 @@ class Router {
     const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
     const unreadNotifications = notificationManager.getUnreadForUser(user).length;
 
-    const canSeeNotifications = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
-    if (canSeeNotifications) {
-      notificationManager.requestPermission();
-      if (unreadNotifications) {
-        setTimeout(() => notificationManager.showUnreadToast(user), 150);
-      }
-    }
-
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
@@ -645,7 +637,7 @@ class Router {
 
     // Total assigned clients for this tech
     const myTotalClients = isAdmin ? allClients.length : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
-    const isFieldTech = !isAdmin && user && user.name !== 'Jet' && user.name !== 'Mark';
+    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
 
     content.innerHTML = `
       <div class="wave-banner">
@@ -665,47 +657,14 @@ class Router {
           <div class="stat-value">${myTotalClients}</div>
           <div class="stat-label">Total Visits</div>
         </div>
-        ${isFieldTech ? '' : `
-        <div class="stat-card" onclick="router.navigate('workorders')">
+        ${isOfficeUser ? `
+        <div class="stat-card" onclick="router.navigate('routes')">
           <div class="stat-icon">🛠️</div>
           <div class="stat-value">${visibleRepairOrders.length}</div>
-          <div class="stat-label">Repair Orders</div>
+          <div class="stat-label">Work Orders</div>
         </div>
-        `}
+        ` : ''}
       </div>
-
-      <div class="section-header">
-        <div class="section-title">Today's Route · ${todayDay}</div>
-        <button class="btn btn-secondary btn-sm" onclick="router.navigate('routes')">Full Route →</button>
-      </div>
-
-      <div id="today-route">
-        ${myRouteClients.length > 0
-          ? myRouteClients.sort((a, b) => a.name.localeCompare(b.name)).map(c => `
-            <div class="list-item" onclick="router.editClient('${escapeHtml(c.id)}')" style="cursor:pointer;">
-              <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
-              <div class="list-item-info">
-                <div class="list-item-name">${escapeHtml(c.name)}</div>
-                <div class="list-item-sub">${escapeHtml(c.address)}</div>
-              </div>
-              <div class="list-item-actions">
-                <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(c.address)}')" title="Navigate">📍</button>
-              </div>
-            </div>
-          `).join('')
-          : `<div class="card" style="margin:0 16px 12px;"><div class="card-body"><div class="empty-title">No route stops for ${todayDay}</div><div class="empty-subtitle">Import a route sheet to see your daily schedule</div></div></div>`
-        }
-      </div>
-
-      ${isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark')) ? `
-      <div class="section-header">
-        <div class="section-title">Notifications${unreadNotifications ? ` (${unreadNotifications} new)` : ''}</div>
-      </div>
-
-      <div id="dashboard-notifications">
-        ${notificationManager.renderDashboardPanel()}
-      </div>
-      ` : ''}
 
     `;
   }
