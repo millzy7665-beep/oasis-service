@@ -2492,60 +2492,96 @@ async function downloadBulkChemSheets() {
       // Sort visits by date
       const visits = data.visits.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
 
-      // Header row: Client | Address | then date columns
+      // Helper to sum numeric values from visit cells, parsing numbers from strings
+      const sumVisitValues = (values) => {
+        let total = 0;
+        let hasValue = false;
+        values.forEach(val => {
+          const num = parseFloat(String(val).replace(/[^0-9.\-]/g, ''));
+          if (!isNaN(num)) { total += num; hasValue = true; }
+        });
+        return hasValue ? total : '';
+      };
+
+      // Header row: Client | Address | Field | date columns | Total
       const headerRow = ['Client', 'Address', 'Field'];
       visits.forEach(v => {
         const d = v.date || 'No Date';
         headerRow.push(d);
       });
+      headerRow.push('TOTAL');
       summaryRows.push(headerRow);
 
+      // Total visits row
+      const visitsRow = [clientName, data.address, 'Total Visits'];
+      visits.forEach(() => visitsRow.push(''));
+      visitsRow.push(visits.length);
+      summaryRows.push(visitsRow);
+
       // Technician row
-      const techRow = [clientName, data.address, 'Technician'];
+      const techRow = ['', '', 'Technician'];
       visits.forEach(v => techRow.push(v.technician || ''));
+      techRow.push('');
       summaryRows.push(techRow);
 
       // Time In row
       const timeInRow = ['', '', 'Time In'];
       visits.forEach(v => timeInRow.push(v.timeIn || v.time || ''));
+      timeInRow.push('');
       summaryRows.push(timeInRow);
 
       // Time Out row
       const timeOutRow = ['', '', 'Time Out'];
       visits.forEach(v => timeOutRow.push(v.timeOut || ''));
+      timeOutRow.push('');
       summaryRows.push(timeOutRow);
 
-      // Pool readings
+      // Pool readings (no totals for readings - they are measurements not quantities)
       readingLabels.forEach(rl => {
         const row = ['', '', 'Pool ' + rl.label];
         visits.forEach(v => row.push((v.readings && v.readings.pool && v.readings.pool[rl.key]) || ''));
+        row.push('');
         summaryRows.push(row);
       });
 
-      // Pool chemicals added
+      // Pool chemicals added (with totals)
       chemLabels.forEach(cl => {
         const row = ['', '', 'Pool ' + cl.label + ' Added'];
-        visits.forEach(v => row.push((v.chemicalsAdded && v.chemicalsAdded.pool && v.chemicalsAdded.pool[cl.key]) || ''));
+        const vals = [];
+        visits.forEach(v => {
+          const val = (v.chemicalsAdded && v.chemicalsAdded.pool && v.chemicalsAdded.pool[cl.key]) || '';
+          vals.push(val);
+          row.push(val);
+        });
+        row.push(sumVisitValues(vals));
         summaryRows.push(row);
       });
 
-      // Spa readings
+      // Spa readings (no totals)
       readingLabels.forEach(rl => {
         const row = ['', '', 'Spa ' + rl.label];
         visits.forEach(v => row.push((v.readings && v.readings.spa && v.readings.spa[rl.key]) || ''));
+        row.push('');
         summaryRows.push(row);
       });
 
-      // Spa chemicals added
+      // Spa chemicals added (with totals)
       chemLabels.forEach(cl => {
         const row = ['', '', 'Spa ' + cl.label + ' Added'];
-        visits.forEach(v => row.push((v.chemicalsAdded && v.chemicalsAdded.spa && v.chemicalsAdded.spa[cl.key]) || ''));
+        const vals = [];
+        visits.forEach(v => {
+          const val = (v.chemicalsAdded && v.chemicalsAdded.spa && v.chemicalsAdded.spa[cl.key]) || '';
+          vals.push(val);
+          row.push(val);
+        });
+        row.push(sumVisitValues(vals));
         summaryRows.push(row);
       });
 
       // Notes row
       const notesRow = ['', '', 'Notes'];
       visits.forEach(v => notesRow.push(((v.workPerformed || '') + ' ' + (v.followUpNotes || v.notes || '')).trim()));
+      notesRow.push('');
       summaryRows.push(notesRow);
 
       // Blank separator row
