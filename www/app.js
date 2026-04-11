@@ -7481,32 +7481,38 @@ function quickAddClient() {
     return;
   }
 
-  const name = prompt('Client name');
-  if (!name) return;
+  const techOptions = getTechnicianNames().map(n => `<option value="${n}">${n}</option>`).join('');
 
-  const address = prompt('Client address') || '';
-  const contact = prompt('Contact name') || '';
-  const technicianInput = prompt(
-    `Assign this client to which technician?\n\n${getTechnicianNames().join(', ')}`,
-    getTechnicianNames()[0] || ''
-  );
-  const technician = normalizeTechnicianName(technicianInput);
+  const content = document.getElementById('main-content');
+  content.innerHTML = `
+    <div class="section-header">
+      <div class="section-title">Add New Client</div>
+      <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">Cancel</button>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <div class="form-row"><label>Client Name</label><input id="new-client-name" class="form-control" type="text" placeholder="Enter client name" required></div>
+        <div class="form-row"><label>Address</label><input id="new-client-address" class="form-control" type="text" placeholder="Enter address"></div>
+        <div class="form-row"><label>Contact</label><input id="new-client-contact" class="form-control" type="text" placeholder="Contact name"></div>
+        <div class="form-row"><label>Assign Technician</label><select id="new-client-tech" class="form-control"><option value="">— Select technician —</option>${techOptions}</select></div>
+        <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="submitNewClient()">Save Client</button>
+      </div>
+    </div>
+  `;
+}
 
-  if (!technician) {
-    showToast('Please select the technician for this client');
-    return;
-  }
+function submitNewClient() {
+  const name = (document.getElementById('new-client-name')?.value || '').trim();
+  const address = (document.getElementById('new-client-address')?.value || '').trim();
+  const contact = (document.getElementById('new-client-contact')?.value || '').trim();
+  const technician = normalizeTechnicianName(document.getElementById('new-client-tech')?.value || '');
+
+  if (!name) { showToast('Please enter a client name'); return; }
+  if (!technician) { showToast('Please select a technician'); return; }
 
   const clients = db.get('clients', []);
   const clientId = `c${Date.now()}`;
-  clients.unshift({
-    id: clientId,
-    name,
-    address,
-    contact,
-    technician
-  });
-
+  clients.unshift({ id: clientId, name, address, contact, technician });
   db.set('clients', clients);
 
   notificationManager.create({
