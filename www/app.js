@@ -768,7 +768,7 @@ class Router {
 
     content.innerHTML = `
       <div class="section-header">
-        <div class="section-title">${isAdmin ? 'Route Schedule' : (user ? user.name + "'s Route" : 'My Route')}</div>
+        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">${isAdmin ? 'Route Schedule' : (user ? user.name + "'s Route" : 'My Route')}</div></div>
         ${isAdmin ? '' : `<div style="font-size:12px; color:#666;">${techClients.length} clients assigned</div>`}
       </div>
 
@@ -864,7 +864,7 @@ class Router {
 
     content.innerHTML = `
       <div class="section-header">
-        <div class="section-title">${isAdmin ? 'Clients' : (user ? user.name + "'s Clients" : 'My Clients')}</div>
+        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">${isAdmin ? 'Clients' : (user ? user.name + "'s Clients" : 'My Clients')}</div></div>
         <div style="display:flex; gap:8px;">
           ${isMainAdmin ? '<button class="btn btn-secondary btn-sm" onclick="importRouteSchedule()">Import Route Sheet</button>' : ''}
           ${isAdmin ? '<button class="btn btn-primary btn-sm" onclick="quickAddClient()">+ Add Client</button>' : ''}
@@ -1040,7 +1040,7 @@ class Router {
 
     content.innerHTML = `
       <div class="section-header">
-        <div class="section-title">Service & Repair Jobs</div>
+        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Service & Repair Jobs</div></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download Excel</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
@@ -1139,7 +1139,7 @@ class Router {
 
     content.innerHTML = `
       <div class="section-header">
-        <div class="section-title">Settings</div>
+        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Settings</div></div>
       </div>
 
       <div class="card">
