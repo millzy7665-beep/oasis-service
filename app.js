@@ -609,9 +609,12 @@ class Router {
     const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
     const unreadNotifications = notificationManager.getUnreadForUser(user).length;
 
-    notificationManager.requestPermission();
-    if (unreadNotifications) {
-      setTimeout(() => notificationManager.showUnreadToast(user), 150);
+    const canSeeNotifications = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
+    if (canSeeNotifications) {
+      notificationManager.requestPermission();
+      if (unreadNotifications) {
+        setTimeout(() => notificationManager.showUnreadToast(user), 150);
+      }
     }
 
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
