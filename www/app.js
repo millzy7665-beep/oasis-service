@@ -748,7 +748,6 @@ class Router {
           ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download Excel</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
           <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Repair Order</button>
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.createEstimate()">+ Estimate Sheet</button>` : ''}
         </div>
       </div>
 
@@ -780,18 +779,6 @@ class Router {
           ${renderRepairOrdersList(this.adminJobStatusFilter)}
         </div>
       </div>
-
-      ${isAdmin ? `
-      <div class="section-header" style="margin-top:10px">
-        <div class="section-title">Client Estimates</div>
-      </div>
-
-      <div class="card">
-        <div class="card-body">
-          ${renderEstimateList()}
-        </div>
-      </div>
-      ` : ''}
     `;
   }
 
@@ -888,9 +875,6 @@ class Router {
       </div>
       <div class="card">
         <div class="card-body">
-          <p style="font-size: 13px; color: var(--gray-600); margin-bottom: 12px;">
-            Create a branded estimate sheet with client details, equipment selection, quantities and totals.
-          </p>
           <button class="btn btn-primary" onclick="router.createEstimate()">Open Estimate Sheet</button>
         </div>
       </div>
