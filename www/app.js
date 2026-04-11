@@ -7518,8 +7518,8 @@ function submitNewClient() {
   notificationManager.create({
     type: 'client',
     title: 'New client from Admin',
-    message: `${name} has been added and sent to ${technician}.`,
-    recipients: [technician, ...getAdminRecipients()],
+    message: `${name} has been added and assigned to ${technician}.`,
+    recipients: [...getTechnicianNames(), ...getAdminRecipients()],
     targetView: 'clients',
     targetId: clientId,
     actionLabel: 'Open Clients'
@@ -7560,20 +7560,20 @@ function saveWorkOrderForm(orderId) {
 
   workOrderManager.saveOrder(order);
 
-  if (currentUser?.username === 'admin' && order.technician && order.technician !== currentUser.name) {
+  if (currentUser?.username === 'admin' || currentUser?.username === 'admin2') {
     const assignmentChanged = !previousOrder || previousOrder.technician !== order.technician || previousStatus !== (order.status || '').toLowerCase();
     if (assignmentChanged) {
       notificationManager.create({
         type: 'chem',
         title: 'New chem sheet from Admin',
-        message: `${order.clientName || 'A chem sheet'} has been sent directly to you.`,
-        recipients: [order.technician, ...getAdminRecipients(order.technician)],
+        message: `${order.clientName || 'A chem sheet'} has been assigned to ${order.technician || 'a technician'}.`,
+        recipients: [order.technician, ...getAdminRecipients(currentUser.name)],
         targetView: 'chem',
         targetId: order.id,
         actionLabel: 'Open Chem Sheet'
       });
     }
-  } else if (currentUser && currentUser.username !== 'admin') {
+  } else if (currentUser && currentUser.username !== 'admin' && currentUser.username !== 'admin2') {
     const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
     if (shouldNotifyAdmin) {
       notificationManager.create({
@@ -7631,20 +7631,20 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   saveRepairOrders(orders);
 
-  if (currentUser?.username === 'admin' && order.assignedTo && order.assignedTo !== currentUser.name) {
+  if (currentUser?.username === 'admin' || currentUser?.username === 'admin2') {
     const assignmentChanged = !previousOrder || previousOrder.assignedTo !== order.assignedTo || previousStatus !== (order.status || '').toLowerCase();
     if (assignmentChanged) {
       notificationManager.create({
         type: 'repair',
         title: 'New repair order from Admin',
-        message: `${order.clientName || 'A repair order'} has been sent directly to you.`,
-        recipients: [order.assignedTo, ...getAdminRecipients(order.assignedTo)],
+        message: `${order.clientName || 'A repair order'} has been assigned to ${order.assignedTo || 'a technician'}.`,
+        recipients: [order.assignedTo, ...getAdminRecipients(currentUser.name)],
         targetView: 'repair',
         targetId: order.id,
         actionLabel: 'Open Repair Order'
       });
     }
-  } else if (currentUser && currentUser.username !== 'admin') {
+  } else if (currentUser && currentUser.username !== 'admin' && currentUser.username !== 'admin2') {
     const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
     if (shouldNotifyAdmin) {
       notificationManager.create({
