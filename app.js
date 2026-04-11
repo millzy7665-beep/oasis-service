@@ -604,6 +604,7 @@ class Router {
 
     const user = auth.getCurrentUser();
     const userName = user ? user.name : 'Technician';
+    const isAdmin = auth.isAdmin();
     const visibleWorkorders = this.getVisibleJobs(db.get('workorders', []), 'technician');
     const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
     const unreadNotifications = notificationManager.getUnreadForUser(user).length;
@@ -614,15 +615,27 @@ class Router {
     }
 
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+
+    // Today's route clients for this tech
+    const allClients = db.get('clients', []);
+    const myRouteClients = isAdmin
+      ? allClients.filter(c => c.serviceDays && c.serviceDays.includes(todayDay))
+      : allClients.filter(c => c.technician === userName && c.serviceDays && c.serviceDays.includes(todayDay));
 
     content.innerHTML = `
       <div class="wave-banner">
         <div class="wave-banner-eyebrow">Welcome back</div>
         <div class="wave-banner-title">${userName}</div>
-        <div class="wave-banner-sub">Ready for today's service and repair jobs • ${todayStr}</div>
+        <div class="wave-banner-sub">${todayStr} • ${myRouteClients.length} stops today</div>
       </div>
 
       <div class="stats-grid">
+        <div class="stat-card" onclick="router.navigate('routes')">
+          <div class="stat-icon">🗺️</div>
+          <div class="stat-value">${myRouteClients.length}</div>
+          <div class="stat-label">Today's Stops</div>
+        </div>
         <div class="stat-card" onclick="router.navigate('workorders')">
           <div class="stat-icon">🧪</div>
           <div class="stat-value">${visibleWorkorders.length}</div>
@@ -633,11 +646,29 @@ class Router {
           <div class="stat-value">${visibleRepairOrders.length}</div>
           <div class="stat-label">Repair Orders</div>
         </div>
-        <div class="stat-card" onclick="router.navigate('clients')">
-          <div class="stat-icon">👥</div>
-          <div class="stat-value">${db.get('clients', []).length}</div>
-          <div class="stat-label">Clients</div>
-        </div>
+      </div>
+
+      <div class="section-header">
+        <div class="section-title">Today's Route · ${todayDay}</div>
+        <button class="btn btn-secondary btn-sm" onclick="router.navigate('routes')">Full Route →</button>
+      </div>
+
+      <div id="today-route">
+        ${myRouteClients.length > 0
+          ? myRouteClients.sort((a, b) => a.name.localeCompare(b.name)).map(c => `
+            <div class="list-item" onclick="router.editClient('${escapeHtml(c.id)}')" style="cursor:pointer;">
+              <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
+              <div class="list-item-info">
+                <div class="list-item-name">${escapeHtml(c.name)}</div>
+                <div class="list-item-sub">${escapeHtml(c.address)}</div>
+              </div>
+              <div class="list-item-actions">
+                <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(c.address)}')" title="Navigate">📍</button>
+              </div>
+            </div>
+          `).join('')
+          : `<div class="card" style="margin:0 16px 12px;"><div class="card-body"><div class="empty-title">No route stops for ${todayDay}</div><div class="empty-subtitle">Import a route sheet to see your daily schedule</div></div></div>`
+        }
       </div>
 
       <div class="section-header">
@@ -649,7 +680,7 @@ class Router {
       </div>
 
       <div class="section-header">
-        <div class="section-title">Today's Schedule</div>
+        <div class="section-title">Today's Work Orders</div>
       </div>
 
       <div id="today-schedule">
@@ -713,42 +744,116 @@ class Router {
 
   renderRoutes() {
     const content = document.getElementById('main-content');
+    const user = auth.getCurrentUser();
+    const isAdmin = auth.isAdmin();
+    const allClients = db.get('clients', []);
+    const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+
+    // For techs, show only their assigned route clients
+    // For admin, show all routes or let them pick a tech
+    let techFilter = isAdmin ? (this._routeTechFilter || 'all') : (user ? user.name : '');
+    const techClients = techFilter === 'all'
+      ? allClients.filter(c => c.serviceDays && c.serviceDays.length)
+      : allClients.filter(c => c.technician === techFilter && c.serviceDays && c.serviceDays.length);
+
+    // Get unique tech names for admin dropdown
+    const techs = [...new Set(allClients.filter(c => c.technician).map(c => c.technician))].sort();
+
+    // Build day tabs - default to today
+    this._routeDayFilter = this._routeDayFilter || today;
+    const dayFilter = this._routeDayFilter;
+
+    const dayClients = dayFilter === 'all'
+      ? techClients
+      : techClients.filter(c => c.serviceDays && c.serviceDays.includes(dayFilter));
+
     content.innerHTML = `
       <div class="section-header">
-        <div class="section-title">Daily Routes</div>
-        <button class="btn btn-primary btn-sm" onclick="router.createRoute()">+ New Route</button>
+        <div class="section-title">${isAdmin ? 'Route Schedule' : (user ? user.name + "'s Route" : 'My Route')}</div>
+        ${isAdmin ? '' : `<div style="font-size:12px; color:#666;">${techClients.length} clients assigned</div>`}
+      </div>
+
+      ${isAdmin ? `
+        <div style="padding:0 16px 8px;">
+          <select class="form-control" onchange="router._routeTechFilter=this.value; router.renderRoutes();" style="font-size:14px;">
+            <option value="all" ${techFilter === 'all' ? 'selected' : ''}>All Technicians</option>
+            ${techs.map(t => `<option value="${escapeHtml(t)}" ${techFilter === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+          </select>
+        </div>
+      ` : ''}
+
+      <div style="display:flex; gap:4px; padding:0 16px 10px; overflow-x:auto;">
+        <button class="btn btn-sm ${dayFilter === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router._routeDayFilter='all'; router.renderRoutes();">All</button>
+        ${DAY_ORDER.map(day => `
+          <button class="btn btn-sm ${dayFilter === day ? 'btn-primary' : 'btn-secondary'}" style="${day === today ? 'border:2px solid #FFD700;' : ''}" onclick="router._routeDayFilter='${day}'; router.renderRoutes();">
+            ${day.substring(0, 3)}${day === today ? ' ★' : ''}
+          </button>
+        `).join('')}
+      </div>
+
+      <div style="padding:0 16px 8px; color:#666; font-size:13px;">
+        ${dayFilter === 'all' ? `${dayClients.length} total scheduled clients` : `${dayClients.length} clients for ${dayFilter}${dayFilter === today ? ' (today)' : ''}`}
       </div>
 
       <div id="routes-list">
-        ${this.renderRoutesList()}
+        ${this.renderRouteClients(dayClients, dayFilter, techFilter)}
+      </div>
+    `;
+  }
+
+  renderRouteClients(clients, dayFilter, techFilter) {
+    if (clients.length === 0) {
+      return `
+        <div class="empty-state">
+          <div class="empty-icon">🗺️</div>
+          <div class="empty-title">No clients scheduled</div>
+          <div class="empty-subtitle">${dayFilter === 'all' ? 'No route clients found for this filter' : 'No visits scheduled for ' + dayFilter}</div>
+        </div>
+      `;
+    }
+
+    const isAdmin = auth.isAdmin();
+
+    // Group by tech if admin viewing all
+    if (isAdmin && techFilter === 'all') {
+      const byTech = {};
+      clients.forEach(c => {
+        const tech = c.technician || 'Unassigned';
+        if (!byTech[tech]) byTech[tech] = [];
+        byTech[tech].push(c);
+      });
+
+      let html = '';
+      Object.keys(byTech).sort().forEach(tech => {
+        html += `<div style="background:#1a237e; color:#fff; padding:8px 16px; font-weight:600; font-size:14px; margin-top:4px;">👤 ${escapeHtml(tech)} (${byTech[tech].length})</div>`;
+        html += byTech[tech].sort((a, b) => a.name.localeCompare(b.name)).map(c => this.renderRouteCard(c)).join('');
+      });
+      return html;
+    }
+
+    return clients.sort((a, b) => a.name.localeCompare(b.name)).map(c => this.renderRouteCard(c)).join('');
+  }
+
+  renderRouteCard(client) {
+    const daysLabel = (client.serviceDays || []).map(d => d.substring(0, 3)).join(', ');
+    return `
+      <div class="list-item" onclick="router.editClient('${escapeHtml(client.id)}')" style="cursor:pointer;">
+        <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
+        <div class="list-item-info">
+          <div class="list-item-name">${escapeHtml(client.name)}</div>
+          <div class="list-item-sub">${escapeHtml(client.address)}</div>
+          <div class="list-item-sub" style="font-size:11px; color:#2196F3;">${escapeHtml(client.route || '')}${daysLabel ? ' · ' + daysLabel : ''}</div>
+        </div>
+        <div class="list-item-actions">
+          <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(client.address)}')" title="Navigate">📍</button>
+        </div>
       </div>
     `;
   }
 
   renderRoutesList() {
-    const routes = db.get('routes', []);
-    if (routes.length === 0) {
-      return `
-        <div class="empty-state">
-          <div class="empty-icon">🗺️</div>
-          <div class="empty-title">No routes planned</div>
-          <div class="empty-subtitle">Create your first daily route</div>
-        </div>
-      `;
-    }
-
-    return routes.map(route => `
-      <div class="list-item">
-        <div class="list-item-avatar">📍</div>
-        <div class="list-item-info">
-          <div class="list-item-name">${route.name}</div>
-          <div class="list-item-sub">${route.stops.length} stops • ${route.date}</div>
-        </div>
-        <div class="list-item-actions">
-          <button class="btn btn-secondary btn-sm" onclick="router.viewRoute('${route.id}')">View</button>
-        </div>
-      </div>
-    `).join('');
+    return this.renderRouteClients([], 'all', 'all');
   }
 
   renderClients() {
@@ -1861,8 +1966,8 @@ function processRouteFile(input) {
       const wb = XLSX.read(data, { type: 'array' });
 
       const techOverrides = {
-        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Stephon', 'ROUTE 3': 'Jermaine',
-        'ROUTE 4': 'Elvin', 'ROUTE 5': 'Donald', 'ROUTE 6': 'King',
+        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
+        'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
         'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
       };
 
@@ -5162,8 +5267,8 @@ function processRouteFile(input) {
       const wb = XLSX.read(data, { type: 'array' });
 
       const techOverrides = {
-        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Stephon', 'ROUTE 3': 'Jermaine',
-        'ROUTE 4': 'Elvin', 'ROUTE 5': 'Donald', 'ROUTE 6': 'King',
+        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
+        'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
         'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
       };
 
@@ -7015,8 +7120,8 @@ function processRouteFile(input) {
       const wb = XLSX.read(data, { type: 'array' });
 
       const techOverrides = {
-        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Stephon', 'ROUTE 3': 'Jermaine',
-        'ROUTE 4': 'Elvin', 'ROUTE 5': 'Donald', 'ROUTE 6': 'King',
+        'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
+        'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
         'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
       };
 
