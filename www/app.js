@@ -3,11 +3,31 @@
 // PDF generation with local save instead of email
 
 // ==========================================
-// DATA MANAGEMENT (DB)
+// FIREBASE INITIALIZATION
+// ==========================================
+const firebaseConfig = {
+  apiKey: "AIzaSyAo3vP7Myf08Q8KqoFlcgGNOZp2mX2R-38",
+  authDomain: "oasis-service-app-69def.firebaseapp.com",
+  projectId: "oasis-service-app-69def",
+  storageBucket: "oasis-service-app-69def.firebasestorage.app",
+  messagingSenderId: "156557428291",
+  appId: "1:156557428291:web:243524f03403d05c65f6f6",
+  measurementId: "G-THQ9YGZ0B5"
+};
+
+firebase.initializeApp(firebaseConfig);
+const firestore = firebase.firestore();
+
+// Collections that sync across all devices via Firestore
+const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications'];
+
+// ==========================================
+// DATA MANAGEMENT (DB) — localStorage + Firestore sync
 // ==========================================
 class DB {
   constructor() {
     this.storage = window.localStorage;
+    this._listeners = {};
   }
 
   get(key, defaultValue = null) {
@@ -22,18 +42,66 @@ class DB {
   set(key, value) {
     try {
       this.storage.setItem(key, JSON.stringify(value));
-      return true;
     } catch (e) {
-      return false;
+      // localStorage full or unavailable
     }
+
+    // Sync shared collections to Firestore
+    if (SYNCED_KEYS.includes(key)) {
+      firestore.collection('app_data').doc(key).set({ data: JSON.parse(JSON.stringify(value)), updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+        .catch(err => console.warn('Firestore write failed for', key, err));
+    }
+    return true;
   }
 
   remove(key) {
     this.storage.removeItem(key);
+    if (SYNCED_KEYS.includes(key)) {
+      firestore.collection('app_data').doc(key).delete()
+        .catch(err => console.warn('Firestore delete failed for', key, err));
+    }
   }
 
   clear() {
     this.storage.clear();
+  }
+
+  // Called once on startup — listen for Firestore changes and update localStorage + UI
+  startRealtimeSync() {
+    SYNCED_KEYS.forEach(key => {
+      firestore.collection('app_data').doc(key).onSnapshot(snapshot => {
+        if (!snapshot.exists) return;
+        const remoteData = snapshot.data().data;
+        const localRaw = this.storage.getItem(key);
+        const localData = localRaw ? JSON.parse(localRaw) : null;
+
+        // Only update if data actually changed (avoid infinite loops)
+        if (JSON.stringify(remoteData) !== JSON.stringify(localData)) {
+          this.storage.setItem(key, JSON.stringify(remoteData));
+          console.log(`[Sync] ${key} updated from Firestore`);
+
+          // Re-render current view so user sees live changes
+          if (typeof router !== 'undefined' && router.currentView) {
+            try { router.navigate(router.currentView); } catch (e) { /* ignore */ }
+          }
+        }
+      }, err => {
+        console.warn('Firestore listener error for', key, err);
+      });
+    });
+
+    // On first load, pull any existing Firestore data that localStorage doesn't have
+    SYNCED_KEYS.forEach(key => {
+      const local = this.storage.getItem(key);
+      if (!local || local === '[]' || local === 'null') {
+        firestore.collection('app_data').doc(key).get().then(doc => {
+          if (doc.exists && doc.data().data) {
+            this.storage.setItem(key, JSON.stringify(doc.data().data));
+            console.log(`[Sync] ${key} pulled from Firestore on startup`);
+          }
+        }).catch(() => {});
+      }
+    });
   }
 }
 
@@ -2171,6 +2239,9 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Start Firestore real-time sync
+  db.startRealtimeSync();
+
   // Always force login screen on startup
   auth.logout();
 
@@ -5340,6 +5411,9 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Start Firestore real-time sync
+  db.startRealtimeSync();
+
   // Always force login screen on startup
   auth.logout();
 
@@ -7061,6 +7135,9 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Start Firestore real-time sync
+  db.startRealtimeSync();
+
   // Always force login screen on startup
   auth.logout();
 
