@@ -1032,7 +1032,7 @@ class Router {
     }
 
     if (mode === 'all' || query) {
-      clients.sort((a, b) => (a.technician || 'ZZZ').localeCompare(b.technician || 'ZZZ') || a.name.localeCompare(b.name));
+      clients.sort((a, b) => a.name.localeCompare(b.name));
       return clients.map(c => this.renderClientCard(c, isAdmin)).join('');
     }
 
@@ -1295,8 +1295,8 @@ class Router {
             <div class="form-row">
               <label for="wo-client">Customer</label>
               <select id="wo-client" onchange="onChemClientChange()">
-                <option value="">— Select client —</option>
-                ${clients.map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
+                <option value="">— Search client —</option>
+                ${[...clients].sort((a, b) => a.name.localeCompare(b.name)).map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
               </select>
             </div>
 
@@ -3182,8 +3182,8 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
           <div class="form-row">
             <label for="repair-client">Client</label>
             <select id="repair-client" onchange="onRepairClientChange()">
-              <option value="">— Select client —</option>
-              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+              <option value="">— Search client —</option>
+              ${[...clients].sort((a, b) => a.name.localeCompare(b.name)).map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
             </select>
           </div>
 
@@ -3896,7 +3896,7 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
           <div class="form-group">
             <label class="form-label">Client *</label>
             <select id="est-client" class="form-control" onchange="onEstimateClientChange()">
-              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === selectedClientId ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+              ${[...clients].sort((a, b) => a.name.localeCompare(b.name)).map(client => `<option value="${escapeHtml(client.id)}" ${client.id === selectedClientId ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
             </select>
           </div>
 
@@ -6540,8 +6540,8 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
           <div class="form-row">
             <label for="repair-client">Client</label>
             <select id="repair-client" onchange="onRepairClientChange()">
-              <option value="">— Select client —</option>
-              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+              <option value="">— Search client —</option>
+              ${[...clients].sort((a, b) => a.name.localeCompare(b.name)).map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
             </select>
           </div>
 
