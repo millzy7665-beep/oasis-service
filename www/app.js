@@ -2421,7 +2421,19 @@ async function downloadCompletedWorkOrders() {
 
     const filename = `OASIS_Work_Orders_${new Date().toISOString().split('T')[0]}.xlsx`;
     XLSX.writeFile(wb, filename);
-    showToast(`Downloaded ${completed.length} completed work orders`);
+
+    // Offer to clear downloaded work orders
+    if (confirm(`Downloaded ${completed.length} work orders.\n\nRemove these completed work orders from the app?`)) {
+      const remaining = allRepair.filter(r => {
+        const isCompleted = (r.status || '').toLowerCase() === 'completed';
+        const isJetMark = r.assignedTo && (r.assignedTo === 'Jet' || r.assignedTo === 'Mark');
+        return !(isCompleted && isJetMark);
+      });
+      saveRepairOrders(remaining);
+      showToast(`Removed ${completed.length} downloaded work orders`);
+    } else {
+      showToast(`Downloaded ${completed.length} completed work orders`);
+    }
   } catch (error) {
     console.error('Download failed:', error);
     showToast('Download failed - check console');
@@ -2600,7 +2612,20 @@ async function downloadBulkChemSheets() {
 
     const filename = `OASIS_Chem_Sheets_${new Date().toISOString().split('T')[0]}.xlsx`;
     XLSX.writeFile(wb, filename);
-    showToast(`Downloaded chem sheets for ${clientNames.length} clients`);
+
+    // Offer to clear downloaded chem sheets
+    if (confirm(`Downloaded chem sheets for ${clientNames.length} clients.\n\nRemove these completed chem sheets from the app?`)) {
+      const allWO = db.get('workorders', []);
+      const remaining = allWO.filter(wo => {
+        const isCompleted = (wo.status || '').toLowerCase() === 'completed';
+        const isTech = wo.technician && fieldTechs.includes(wo.technician);
+        return !(isCompleted && isTech);
+      });
+      db.set('workorders', remaining);
+      showToast(`Removed ${completed.length} downloaded chem sheets`);
+    } else {
+      showToast(`Downloaded chem sheets for ${clientNames.length} clients`);
+    }
   } catch (error) {
     console.error('Chem sheet download failed:', error);
     showToast('Download failed - check console');
@@ -3284,11 +3309,13 @@ function saveWorkOrderForm(orderId) {
   }
 
   order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
+  if (order.status !== 'completed') {
+    showToast('Please set status to Completed before saving');
+    return;
+  }
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
-  showToast(order.status === 'completed'
-    ? 'Completed chem sheet saved for admin export'
-    : 'Chem sheet saved');
+  showToast('Completed chem sheet saved');
 }
 
 function shareReport(orderId) {
@@ -3298,6 +3325,11 @@ function shareReport(orderId) {
     return;
   }
 
+  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
+  if (order.status !== 'completed') {
+    showToast('Please set status to Completed before sharing');
+    return;
+  }
   workOrderManager.saveOrder(order);
   workOrderManager.generateReport(order);
 }
@@ -3635,6 +3667,10 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   if (!order) return;
 
   order.status = document.getElementById('repair-status')?.value || order.status || 'open';
+  if (order.status !== 'completed') {
+    showToast('Please set status to Completed before saving');
+    return;
+  }
 
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
@@ -3646,9 +3682,7 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  showToast(order.status === 'completed'
-    ? 'Completed repair order saved for admin export'
-    : 'Repair work order saved');
+  showToast('Completed work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -6681,11 +6715,13 @@ function saveWorkOrderForm(orderId) {
   }
 
   order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
+  if (order.status !== 'completed') {
+    showToast('Please set status to Completed before saving');
+    return;
+  }
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
-  showToast(order.status === 'completed'
-    ? 'Completed chem sheet saved for admin export'
-    : 'Chem sheet saved');
+  showToast('Completed chem sheet saved');
 }
 
 function shareReport(orderId) {
@@ -6695,6 +6731,11 @@ function shareReport(orderId) {
     return;
   }
 
+  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
+  if (order.status !== 'completed') {
+    showToast('Please set status to Completed before sharing');
+    return;
+  }
   workOrderManager.saveOrder(order);
   workOrderManager.generateReport(order);
 }
@@ -6994,6 +7035,10 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   if (!order) return;
 
   order.status = document.getElementById('repair-status')?.value || order.status || 'open';
+  if (order.status !== 'completed') {
+    showToast('Please set status to Completed before saving');
+    return;
+  }
 
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
@@ -7005,9 +7050,7 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  showToast(order.status === 'completed'
-    ? 'Completed repair order saved for admin export'
-    : 'Repair work order saved');
+  showToast('Completed work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -8592,11 +8635,13 @@ function saveWorkOrderForm(orderId) {
   }
 
   order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
+  if (order.status !== 'completed') {
+    showToast('Please set status to Completed before saving');
+    return;
+  }
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
-  showToast(order.status === 'completed'
-    ? 'Completed chem sheet saved for admin export'
-    : 'Chem sheet saved');
+  showToast('Completed chem sheet saved');
 }
 
 function shareReport(orderId) {
@@ -8606,6 +8651,11 @@ function shareReport(orderId) {
     return;
   }
 
+  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
+  if (order.status !== 'completed') {
+    showToast('Please set status to Completed before sharing');
+    return;
+  }
   workOrderManager.saveOrder(order);
   workOrderManager.generateReport(order);
 }
