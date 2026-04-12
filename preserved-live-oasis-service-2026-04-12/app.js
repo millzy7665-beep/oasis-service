@@ -528,35 +528,59 @@ class Router {
     const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
     const unreadNotifications = notificationManager.getUnreadForUser(user).length;
 
-    if (isOfficeUser) {
-      notificationManager.requestPermission();
-      if (unreadNotifications) {
-        setTimeout(() => notificationManager.showUnreadToast(user), 150);
-      }
-    }
-
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
-    // Today's route clients for this tech (field techs only see their own)
     const allClients = db.get('clients', []);
     const myRouteClients = isAdmin
       ? allClients.filter(c => c.serviceDays && c.serviceDays.includes(todayDay))
       : allClients.filter(c => c.technician === userName && c.serviceDays && c.serviceDays.includes(todayDay));
+    const myTotalClients = isAdmin ? allClients.length : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
 
-    // Total assigned clients for this tech
-    const myTotalClients = isAdmin
-      ? allClients.length
-      : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
+    // Open and pending work orders
+    const myRepairOrders = visibleRepairOrders.filter(r => {
+      const s = (r.status || 'open');
+      return s !== 'completed' && s !== 'pending';
+    }).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+    const myPendingOrders = visibleRepairOrders.filter(r => (r.status || 'open') === 'pending')
+      .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+    // Completion stats for Jet/Mark
+    const todayDateStr = new Date().toISOString().split('T')[0];
+    const todayCompletedOrders = visibleRepairOrders.filter(r => r.status === 'completed' && r.date === todayDateStr);
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - mondayOffset);
+    weekStart.setHours(0, 0, 0, 0);
+    const weeklyCompletedOrders = visibleRepairOrders.filter(r => {
+      if (r.status !== 'completed' || !r.date) return false;
+      const d = new Date(r.date + 'T00:00:00');
+      return d >= weekStart && d <= now;
+    });
 
     content.innerHTML = `
       <div class="wave-banner">
         <div class="wave-banner-eyebrow">Welcome back</div>
         <div class="wave-banner-title">${userName}</div>
-        <div class="wave-banner-sub">${todayStr} • ${myRouteClients.length} stops today</div>
+        <div class="wave-banner-sub">${todayStr}${isOfficeUser && !isAdmin ? '' : ` • ${myRouteClients.length} stops today`}</div>
       </div>
 
       <div class="stats-grid">
+        ${isOfficeUser && !isAdmin ? `
+        <div class="stat-card">
+          <div class="stat-icon">✅</div>
+          <div class="stat-value">${todayCompletedOrders.length}</div>
+          <div class="stat-label">Today's Completed</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">📊</div>
+          <div class="stat-value">${weeklyCompletedOrders.length}</div>
+          <div class="stat-label">Weekly Completed</div>
+        </div>
+        ` : `
         <div class="stat-card" onclick="router.navigate('routes')">
           <div class="stat-icon">🗺️</div>
           <div class="stat-value">${myRouteClients.length}</div>
@@ -567,23 +591,58 @@ class Router {
           <div class="stat-value">${myTotalClients}</div>
           <div class="stat-label">Total Visits</div>
         </div>
-        ${isOfficeUser ? `
-        <div class="stat-card" onclick="router.navigate('routes')">
+        `}
+        <div class="stat-card">
           <div class="stat-icon">🛠️</div>
-          <div class="stat-value">${visibleRepairOrders.length}</div>
-          <div class="stat-label">Work Orders</div>
+          <div class="stat-value">${myRepairOrders.length}</div>
+          <div class="stat-label">Open Work Orders</div>
         </div>
-        ` : ''}
+        <div class="stat-card">
+          <div class="stat-icon">⏳</div>
+          <div class="stat-value">${myPendingOrders.length}</div>
+          <div class="stat-label">Pending Orders</div>
+        </div>
       </div>
 
-      ${isOfficeUser ? `
+      ${myPendingOrders.length > 0 ? `
       <div class="section-header">
-        <div class="section-title">Notifications${unreadNotifications ? ` (${unreadNotifications} new)` : ''}</div>
+        <div class="section-title">${isAdmin ? 'All Pending Work Orders' : 'My Pending Work Orders'}</div>
       </div>
-      <div id="dashboard-notifications">
-        ${notificationManager.renderDashboardPanel()}
-      </div>
+      ${myPendingOrders.map(order => `
+        <div class="list-item" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')" style="cursor:pointer;">
+          <div class="list-item-avatar" style="background:#fff8e1; color:#f57f17;">⏳</div>
+          <div class="list-item-info">
+            <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
+            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
+            <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
+          </div>
+          <div class="list-item-actions">
+            <span style="font-size:11px; padding:3px 8px; border-radius:12px; background:#fff8e1; color:#f57f17;">pending</span>
+          </div>
+        </div>
+      `).join('')}
       ` : ''}
+
+      ${myRepairOrders.length > 0 ? `
+      <div class="section-header">
+        <div class="section-title">${isAdmin ? 'All Open Work Orders' : 'My Work Orders'}</div>
+      </div>
+      ${myRepairOrders.map(order => `
+        <div class="list-item" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')" style="cursor:pointer;">
+          <div class="list-item-avatar" style="background:#fff3e0; color:#e65100;">🛠️</div>
+          <div class="list-item-info">
+            <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
+            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
+            <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
+          </div>
+          <div class="list-item-actions">
+            <span style="font-size:11px; padding:3px 8px; border-radius:12px; background:${order.status === 'in-progress' ? '#fff3e0' : '#e3f2fd'}; color:${order.status === 'in-progress' ? '#e65100' : '#1565c0'};">${ escapeHtml(order.status || 'open')}</span>
+          </div>
+        </div>
+      `).join('')}
+      ` : `
+      <div class="card" style="margin:16px;"><div class="card-body"><div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">No open work orders</div></div></div></div>
+      `}
 
       ${!isOfficeUser ? `
       <div class="section-header">
