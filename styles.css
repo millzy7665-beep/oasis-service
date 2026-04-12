@@ -1208,7 +1208,7 @@ select.form-control {
   flex-direction: column;
   align-items: stretch;    /* children stretch to 300px wide */
   text-align: center;
-  animation: fadeIn 0.35s ease-out;
+  animation: loginCardIn 0.5s cubic-bezier(.22,1,.36,1) both;
 }
 
 .login-logo {
@@ -1662,29 +1662,28 @@ select.form-control {
    PAGE TRANSITIONS
    ============================================================ */
 
-/* App boot: fade in whole app shell */
-@keyframes appFadeIn {
+/* Login card: clean fade-up — NOT using the toast fadeIn keyframe */
+@keyframes loginCardIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Per-page content: pure opacity cross-dissolve — no translateY
+   so parchment background never shows through */
+@keyframes pageFadeIn {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-#app:not(.hidden) {
-  animation: appFadeIn 0.3s ease both;
-}
-
-/* Per-page content fade */
-@keyframes pageFadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
 .page-fade {
-  animation: pageFadeIn 0.25s ease both;
+  animation: pageFadeIn 0.22s ease both;
 }
 
-/* Login → App crossfade helpers */
-.fade-out {
-  animation: fadeOutScale 0.25s ease forwards;
+/* Login → App and App → Login: pure opacity fade */
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
-@keyframes fadeOutScale {
-  from { opacity: 1; transform: scale(1); }
-  to   { opacity: 0; transform: scale(0.97); }
+.fade-out {
+  animation: fadeOut 0.22s ease forwards;
+  pointer-events: none;
 }
