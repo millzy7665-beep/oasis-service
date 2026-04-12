@@ -552,7 +552,8 @@ class Router {
     const myRouteClients = isAdmin
       ? allClients.filter(c => c.serviceDays && c.serviceDays.includes(todayDay))
       : allClients.filter(c => c.technician === userName && c.serviceDays && c.serviceDays.includes(todayDay));
-    const myTotalClients = isAdmin ? allClients.length : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
+    const myTechClients = isAdmin ? allClients : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase());
+    const myTotalClients = myTechClients.reduce((sum, c) => sum + (c.serviceDays ? c.serviceDays.length : 0), 0);
 
     // Open and pending work orders
     const myRepairOrders = visibleRepairOrders.filter(r => {
@@ -606,7 +607,7 @@ class Router {
         <div class="stat-card" onclick="router.navigate('clients')">
           <div class="stat-icon">👥</div>
           <div class="stat-value">${myTotalClients}</div>
-          <div class="stat-label">Total Visits</div>
+          <div class="stat-label">Weekly Visits</div>
         </div>
         `}
         ${isOfficeUser ? `
