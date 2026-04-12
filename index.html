@@ -15,7 +15,9 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 
-  <link rel="stylesheet" href="styles.css?v=30">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <link rel="stylesheet" href="styles.css?v=180">
 
   <style>
     /* Critical overrides for luxury feel */
@@ -44,18 +46,19 @@
         <div class="login-field-group">
           <label class="login-label">Select Your Name</label>
           <select id="login-tech" required>
-            <option value="">— Select your name —</option>
-            <option value="t1">Ace</option>
-            <option value="t2">Ariel</option>
-            <option value="t3">Donald</option>
-            <option value="t4">Elvin</option>
-            <option value="t5">Jermaine</option>
-            <option value="t6">Kadeem</option>
-            <option value="t7">Kingsley</option>
-            <option value="t8">Malik</option>
-            <option value="t9">Jet</option>
-            <option value="t10">Mark</option>
+            <option value="" disabled selected>— Select your name —</option>
+            <option value="t1">Service - Ace</option>
+            <option value="t2">Service - Ariel</option>
+            <option value="t3">Service - Donald</option>
+            <option value="t4">Service - Elvin</option>
+            <option value="t5">Service - Jermaine</option>
+            <option value="t6">Service - Kadeem</option>
+            <option value="t7">Service - Kingsley</option>
+            <option value="t8">Service - Malik</option>
+            <option value="t9">Tech - Jet</option>
+            <option value="t10">Tech - Mark</option>
             <option value="admin">Chris Mills (Admin)</option>
+            <option value="admin2">James Bussey (Admin)</option>
           </select>
         </div>
         <div class="login-field-group">
@@ -88,14 +91,13 @@
         <button class="nav-item" data-view="routes" onclick="router.navigate('routes')">
           <span class="nav-icon">🗺️</span><span class="nav-label">Routes</span>
         </button>
-        <button class="nav-item" data-view="clients" onclick="router.navigate('clients')" style="display:none;">
+        <button class="nav-item" data-view="clients" onclick="router.navigate('clients')">
           <span class="nav-icon">👥</span><span class="nav-label">Clients</span>
         </button>
-        <button class="nav-item" data-view="workorders" onclick="router.navigate('workorders')" style="display:none;">
+        <button class="nav-item" data-view="workorders" onclick="router.navigate('workorders')">
           <span class="nav-icon">📋</span><span class="nav-label">Work Orders</span>
-        </button>        <button class="nav-item" data-view="quotes" onclick="router.navigate('quotes')" style="display:none;">
-          <span class="nav-icon">&#x1F4DD;</span><span class="nav-label">Quotes</span>
-        </button>        <button class="nav-item" data-view="settings" onclick="router.navigate('settings')">
+        </button>
+        <button class="nav-item" data-view="settings" onclick="router.navigate('settings')">
           <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
         </button>
       </nav>
@@ -133,7 +135,7 @@
   <script src="tech-catalog.js?v=101"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-  <script src="app.js?v=170"></script>
+  <script src="app.js?v=180"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
