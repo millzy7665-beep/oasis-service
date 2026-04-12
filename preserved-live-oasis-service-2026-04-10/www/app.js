@@ -2222,16 +2222,16 @@ function initMasterSchedule() {
     { name: "Ncb", address: "Coral Bay Village, Shamrock Rd", tech: "Service - Donald", serviceDays: ["Monday"] },
     { name: "Ncb", address: "Gypsy 1514 Rum Point Dr", tech: "Service - Donald", serviceDays: ["Wednesday"] },
     { name: "Ncb", address: "Kai Vista, Rum Point Dr", tech: "Service - Donald", serviceDays: ["Wednesday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 1, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 2, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 3, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 4, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 1, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 2, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 3, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 4, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
     { name: "Gcpsl", address: "Point Of View, Property", tech: "Service - Elvin", serviceDays: ["Tuesday"] },
     { name: "Gcpsl", address: "Point Of View, South Sound", tech: "Service - Elvin", serviceDays: ["Friday"] },
     { name: "Alice - Lom", address: "Queens Highway, Bella Rocca", tech: "Service - Donald", serviceDays: ["Wednesday"] },
     { name: "Ncb", address: "Rip Kai, Rum Point Drive", tech: "Service - Donald", serviceDays: ["Thursday"] },
     { name: "Hitchcock", address: "Sea 2 Infinity, Kiabo", tech: "Service - Donald", serviceDays: ["Wednesday"] },
-    { name: "Gcpsl", address: "Sea View, South Church Street, (Aw)", tech: "Service - Kadeem", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Ncb", address: "Sea View, South Church Street, (Aw)", tech: "Service - Kadeem", serviceDays: ["Friday", "Tuesday"] },
     { name: "Ncb", address: "Sunrays, Sand Cay Rd", tech: "Service - Donald", serviceDays: ["Thursday"] },
     { name: "Gcpsl", address: "The Sands, Boggy Sand Rd", tech: "Service - Elvin", serviceDays: ["Wednesday"] },
     { name: "Gcpsl", address: "Turtle Breeze, Conch Point Rd", tech: "Service - Elvin", serviceDays: ["Wednesday"] },
@@ -2431,10 +2431,14 @@ function initMasterSchedule() {
     const mergedClients = [...existingClients];
 
   clients.forEach(c => {
-    const exists = mergedClients.some(
-      existing => existing.name === c.name && existing.technician === c.tech
+    const existingIdx = mergedClients.findIndex(
+      e => e.address === c.address && e.technician === c.tech
     );
-    if (!exists) {
+    if (existingIdx >= 0) {
+      // Update name and serviceDays so master data corrections take effect
+      mergedClients[existingIdx].name = c.name;
+      mergedClients[existingIdx].serviceDays = c.serviceDays;
+    } else {
       mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
         name: c.name,
@@ -2442,12 +2446,6 @@ function initMasterSchedule() {
         technician: c.tech,
         serviceDays: c.serviceDays
       });
-    } else {
-      // Update serviceDays if client exists but is missing them
-      const existing = mergedClients.find(e => e.name === c.name && e.technician === c.tech);
-      if (existing && (!existing.serviceDays || existing.serviceDays.length === 0)) {
-        existing.serviceDays = c.serviceDays;
-      }
     }
   });
 
@@ -5396,16 +5394,16 @@ function initMasterSchedule() {
     { name: "Ncb", address: "Coral Bay Village, Shamrock Rd", tech: "Service - Donald", serviceDays: ["Monday"] },
     { name: "Ncb", address: "Gypsy 1514 Rum Point Dr", tech: "Service - Donald", serviceDays: ["Wednesday"] },
     { name: "Ncb", address: "Kai Vista, Rum Point Dr", tech: "Service - Donald", serviceDays: ["Wednesday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 1, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 2, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 3, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 4, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 1, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 2, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 3, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 4, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
     { name: "Gcpsl", address: "Point Of View, Property", tech: "Service - Elvin", serviceDays: ["Tuesday"] },
     { name: "Gcpsl", address: "Point Of View, South Sound", tech: "Service - Elvin", serviceDays: ["Friday"] },
     { name: "Alice - Lom", address: "Queens Highway, Bella Rocca", tech: "Service - Donald", serviceDays: ["Wednesday"] },
     { name: "Ncb", address: "Rip Kai, Rum Point Drive", tech: "Service - Donald", serviceDays: ["Thursday"] },
     { name: "Hitchcock", address: "Sea 2 Infinity, Kiabo", tech: "Service - Donald", serviceDays: ["Wednesday"] },
-    { name: "Gcpsl", address: "Sea View, South Church Street, (Aw)", tech: "Service - Kadeem", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Ncb", address: "Sea View, South Church Street, (Aw)", tech: "Service - Kadeem", serviceDays: ["Friday", "Tuesday"] },
     { name: "Ncb", address: "Sunrays, Sand Cay Rd", tech: "Service - Donald", serviceDays: ["Thursday"] },
     { name: "Gcpsl", address: "The Sands, Boggy Sand Rd", tech: "Service - Elvin", serviceDays: ["Wednesday"] },
     { name: "Gcpsl", address: "Turtle Breeze, Conch Point Rd", tech: "Service - Elvin", serviceDays: ["Wednesday"] },
@@ -5596,10 +5594,14 @@ function initMasterSchedule() {
   const mergedClients = [...existingClients];
 
   clients.forEach(c => {
-    const exists = mergedClients.some(
-      existing => existing.name === c.name && existing.technician === c.tech
+    const existingIdx = mergedClients.findIndex(
+      e => e.address === c.address && e.technician === c.tech
     );
-    if (!exists) {
+    if (existingIdx >= 0) {
+      // Update name and serviceDays so master data corrections take effect
+      mergedClients[existingIdx].name = c.name;
+      mergedClients[existingIdx].serviceDays = c.serviceDays;
+    } else {
       mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
         name: c.name,
@@ -5607,12 +5609,6 @@ function initMasterSchedule() {
         technician: c.tech,
         serviceDays: c.serviceDays
       });
-    } else {
-      // Update serviceDays if client exists but is missing them
-      const existing = mergedClients.find(e => e.name === c.name && e.technician === c.tech);
-      if (existing && (!existing.serviceDays || existing.serviceDays.length === 0)) {
-        existing.serviceDays = c.serviceDays;
-      }
     }
   });
 
@@ -7069,16 +7065,16 @@ function initMasterSchedule() {
     { name: "Ncb", address: "Coral Bay Village, Shamrock Rd", tech: "Service - Donald", serviceDays: ["Monday"] },
     { name: "Ncb", address: "Gypsy 1514 Rum Point Dr", tech: "Service - Donald", serviceDays: ["Wednesday"] },
     { name: "Ncb", address: "Kai Vista, Rum Point Dr", tech: "Service - Donald", serviceDays: ["Wednesday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 1, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 2, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 3, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
-    { name: "Gcpsl", address: "Mystic Retreat 4, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 1, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 2, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 3, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Ncb", address: "Mystic Retreat 4, John Greer Boulavard", tech: "Service - Kadeem", serviceDays: ["Monday", "Thursday"] },
     { name: "Gcpsl", address: "Point Of View, Property", tech: "Service - Elvin", serviceDays: ["Tuesday"] },
     { name: "Gcpsl", address: "Point Of View, South Sound", tech: "Service - Elvin", serviceDays: ["Friday"] },
     { name: "Alice - Lom", address: "Queens Highway, Bella Rocca", tech: "Service - Donald", serviceDays: ["Wednesday"] },
     { name: "Ncb", address: "Rip Kai, Rum Point Drive", tech: "Service - Donald", serviceDays: ["Thursday"] },
     { name: "Hitchcock", address: "Sea 2 Infinity, Kiabo", tech: "Service - Donald", serviceDays: ["Wednesday"] },
-    { name: "Gcpsl", address: "Sea View, South Church Street, (Aw)", tech: "Service - Kadeem", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Ncb", address: "Sea View, South Church Street, (Aw)", tech: "Service - Kadeem", serviceDays: ["Friday", "Tuesday"] },
     { name: "Ncb", address: "Sunrays, Sand Cay Rd", tech: "Service - Donald", serviceDays: ["Thursday"] },
     { name: "Gcpsl", address: "The Sands, Boggy Sand Rd", tech: "Service - Elvin", serviceDays: ["Wednesday"] },
     { name: "Gcpsl", address: "Turtle Breeze, Conch Point Rd", tech: "Service - Elvin", serviceDays: ["Wednesday"] },
@@ -7269,10 +7265,14 @@ function initMasterSchedule() {
   const mergedClients = [...existingClients];
 
   clients.forEach(c => {
-    const exists = mergedClients.some(
-      existing => existing.name === c.name && existing.technician === c.tech
+    const existingIdx = mergedClients.findIndex(
+      e => e.address === c.address && e.technician === c.tech
     );
-    if (!exists) {
+    if (existingIdx >= 0) {
+      // Update name and serviceDays so master data corrections take effect
+      mergedClients[existingIdx].name = c.name;
+      mergedClients[existingIdx].serviceDays = c.serviceDays;
+    } else {
       mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
         name: c.name,
@@ -7280,12 +7280,6 @@ function initMasterSchedule() {
         technician: c.tech,
         serviceDays: c.serviceDays
       });
-    } else {
-      // Update serviceDays if client exists but is missing them
-      const existing = mergedClients.find(e => e.name === c.name && e.technician === c.tech);
-      if (existing && (!existing.serviceDays || existing.serviceDays.length === 0)) {
-        existing.serviceDays = c.serviceDays;
-      }
     }
   });
 
