@@ -1,9 +1,9 @@
-// Oasis Service App — Cache-First SW v180
-const CACHE = 'oasis-v180';
+// Oasis Service App — Cache-First SW v185
+const CACHE = 'oasis-v185';
 const PRECACHE = [
   '/index.html',
-  '/app.js?v=180',
-  '/styles.css?v=180',
+  '/app.js?v=185',
+  '/styles.css?v=185',
   '/manifest.json',
   '/oasis-logo.png',
 ];
