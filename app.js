@@ -989,11 +989,10 @@ class Router {
     }
 
     if (workorders.length === 0) {
-      const emptyTitle = isAdmin && this.adminJobStatusFilter === 'completed'
-        ? 'No completed jobs found'
-        : isAdmin && this.adminJobStatusFilter === 'pending'
-          ? 'No pending or open jobs found'
-          : 'No jobs found';
+      if (isAdmin && this.adminJobStatusFilter === 'completed') return '';
+      const emptyTitle = isAdmin && this.adminJobStatusFilter === 'pending'
+        ? 'No pending or open jobs found'
+        : 'No jobs found';
 
       return `
         <div class="empty-state">
@@ -2805,11 +2804,10 @@ function renderRepairOrdersList(statusFilter = 'all') {
   }
 
   if (!orders.length) {
-    const emptyTitle = isAdmin && statusFilter === 'completed'
-      ? 'No completed work orders'
-      : isAdmin && statusFilter === 'pending'
-        ? 'No pending or open work orders'
-        : 'No repair work orders';
+    if (isAdmin && statusFilter === 'completed') return '';
+    const emptyTitle = isAdmin && statusFilter === 'pending'
+      ? 'No pending or open work orders'
+      : 'No repair work orders';
 
     return `
       <div class="empty-state">
@@ -5995,11 +5993,10 @@ function renderRepairOrdersList(statusFilter = 'all') {
   }
 
   if (!orders.length) {
-    const emptyTitle = isAdmin && statusFilter === 'completed'
-      ? 'No completed work orders'
-      : isAdmin && statusFilter === 'pending'
-        ? 'No pending or open work orders'
-        : 'No repair work orders';
+    if (isAdmin && statusFilter === 'completed') return '';
+    const emptyTitle = isAdmin && statusFilter === 'pending'
+      ? 'No pending or open work orders'
+      : 'No repair work orders';
 
     return `
       <div class="empty-state">
