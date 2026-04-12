@@ -885,12 +885,12 @@ class Router {
       ? allClients
       : allClients.filter(client => (client.technician || '') === (currentUser?.name || ''));
 
-    const clients = query
+    const clients = (query
       ? scopedClients.filter(c =>
           c.name.toLowerCase().includes(query.toLowerCase()) ||
           c.address.toLowerCase().includes(query.toLowerCase())
         )
-      : scopedClients;
+      : scopedClients).slice().sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
 
     if (clients.length === 0) {
       return `
