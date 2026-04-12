@@ -601,6 +601,7 @@ class Router {
           <div class="stat-label">Total Visits</div>
         </div>
         `}
+        ${isOfficeUser ? `
         <div class="stat-card">
           <div class="stat-icon">🛠️</div>
           <div class="stat-value">${myRepairOrders.length}</div>
@@ -611,9 +612,10 @@ class Router {
           <div class="stat-value">${myPendingOrders.length}</div>
           <div class="stat-label">Pending Orders</div>
         </div>
+        ` : ''}
       </div>
 
-      ${myPendingOrders.length > 0 ? `
+      ${isOfficeUser && myPendingOrders.length > 0 ? `
       <div class="section-header">
         <div class="section-title">${isAdmin ? 'All Pending Work Orders' : 'My Pending Work Orders'}</div>
       </div>
@@ -632,7 +634,7 @@ class Router {
       `).join('')}
       ` : ''}
 
-      ${myRepairOrders.length > 0 ? `
+      ${isOfficeUser ? (myRepairOrders.length > 0 ? `
       <div class="section-header">
         <div class="section-title">${isAdmin ? 'All Open Work Orders' : 'My Work Orders'}</div>
       </div>
@@ -651,7 +653,7 @@ class Router {
       `).join('')}
       ` : `
       <div class="card" style="margin:16px;"><div class="card-body"><div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">No open work orders</div></div></div></div>
-      `}
+      `) : ''}
 
       ${!isOfficeUser ? `
       <div class="section-header">
@@ -923,7 +925,7 @@ class Router {
         <div class="section-title">Work Orders</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
-          <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>` : ''}
         </div>
       </div>
 
