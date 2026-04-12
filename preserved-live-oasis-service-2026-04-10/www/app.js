@@ -1558,6 +1558,31 @@ class WorkOrderManager {
 
 const workOrderManager = new WorkOrderManager();
 
+function rollOverPendingJobs() {
+  const todayStr = new Date().toISOString().split('T')[0];
+  let woUpdated = false;
+  const workorders = db.get('workorders', []);
+  
+  workorders.forEach(wo => {
+    if (wo.date && wo.date < todayStr && wo.status !== 'completed' && wo.status !== 'closed') {
+      wo.date = todayStr;
+      woUpdated = true;
+    }
+  });
+  if (woUpdated) db.set('workorders', workorders);
+
+  let roUpdated = false;
+  const repairOrders = db.get('repairOrders', []);
+  
+  repairOrders.forEach(ro => {
+    if (ro.date && ro.date < todayStr && ro.status !== 'completed' && ro.status !== 'Closed') {
+      ro.date = todayStr;
+      roUpdated = true;
+    }
+  });
+  if (roUpdated) db.set('repairOrders', repairOrders);
+}
+
 function migrateLegacyRepairData() {
   const legacyClientsRaw = window.localStorage.getItem('oasis_repairs_clients');
   const legacyOrdersRaw = window.localStorage.getItem('oasis_repairs_orders');
@@ -2181,6 +2206,7 @@ document.addEventListener('DOMContentLoaded', () => {
   cleanupTestClients();
   initMasterSchedule();
   migrateLegacyRepairData();
+  rollOverPendingJobs();
   populateLoginTechOptions();
 
   // Android Back Button Handling
@@ -5350,6 +5376,7 @@ document.addEventListener('DOMContentLoaded', () => {
   cleanupTestClients();
   initMasterSchedule();
   migrateLegacyRepairData();
+  rollOverPendingJobs();
   populateLoginTechOptions();
 
   // Android Back Button Handling
@@ -7071,6 +7098,7 @@ document.addEventListener('DOMContentLoaded', () => {
   cleanupTestClients();
   initMasterSchedule();
   migrateLegacyRepairData();
+  rollOverPendingJobs();
   populateLoginTechOptions();
 
   // Android Back Button Handling

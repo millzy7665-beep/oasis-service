@@ -637,6 +637,13 @@ class Router {
 
     // Total assigned clients for this tech
     const myTotalClients = isAdmin ? allClients.length : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
+
+    // Total visits this week (sum of all service days for this user in current week)
+    const weekDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const myWeeklyVisits = isAdmin
+      ? allClients.reduce((sum, c) => sum + ((c.serviceDays||[]).length), 0)
+      : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase())
+          .reduce((sum, c) => sum + ((c.serviceDays||[]).length), 0);
     const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
 
     // Work orders for dashboard - admin sees all, techs see their own
@@ -672,19 +679,8 @@ class Router {
         <div class="wave-banner-sub">${todayStr}${isOfficeUser && !isAdmin ? '' : ` • ${myRouteClients.length} stops today`}</div>
       </div>
 
+
       <div class="stats-grid">
-        ${isOfficeUser && !isAdmin ? `
-        <div class="stat-card">
-          <div class="stat-icon">✅</div>
-          <div class="stat-value">${todayCompletedOrders.length}</div>
-          <div class="stat-label">Today's Completed</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon">📊</div>
-          <div class="stat-value">${weeklyCompletedOrders.length}</div>
-          <div class="stat-label">Weekly Completed</div>
-        </div>
-        ` : `
         <div class="stat-card" onclick="router.navigate('routes')">
           <div class="stat-icon">🗺️</div>
           <div class="stat-value">${myRouteClients.length}</div>
@@ -693,19 +689,20 @@ class Router {
         <div class="stat-card" onclick="router.navigate('clients')">
           <div class="stat-icon">👥</div>
           <div class="stat-value">${myTotalClients}</div>
-          <div class="stat-label">Total Visits</div>
+          <div class="stat-label">Total Clients</div>
         </div>
-        `}
         <div class="stat-card">
-          <div class="stat-icon">🛠️</div>
-          <div class="stat-value">${myRepairOrders.length}</div>
-          <div class="stat-label">Open Work Orders</div>
+          <div class="stat-icon">📅</div>
+          <div class="stat-value">${myWeeklyVisits}</div>
+          <div class="stat-label">Total Visits This Week</div>
         </div>
+        ${['jet','maark'].includes(userName.toLowerCase()) || isAdmin ? `
         <div class="stat-card">
           <div class="stat-icon">⏳</div>
           <div class="stat-value">${myPendingOrders.length}</div>
           <div class="stat-label">Pending Orders</div>
         </div>
+        ` : ''}
       </div>
 
       ${myPendingOrders.length > 0 ? `
@@ -744,9 +741,12 @@ class Router {
           </div>
         </div>
       `).join('')}
-      ` : `
-      <div class="card" style="margin:16px;"><div class="card-body"><div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">No open work orders</div></div></div></div>
-      `}
+      ` : (
+        (['jet','maark'].includes(userName.toLowerCase()) || isAdmin)
+        ? `<div class="card" style="margin:16px;"><div class="card-body"><div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">No open work orders</div></div></div></div>`
+        : `<div class="card" style="margin:16px;"><div class="card-body"><div class="empty-state"><div class="empty-icon">🗺️</div><div class="empty-title">Today's Visits: <b>${myRouteClients.length}</b></div></div></div></div>`
+      )
+      }
 
     `;
   }
@@ -1041,7 +1041,7 @@ class Router {
       `}
 
       <div class="search-bar" style="margin: 0 16px 12px;">
-        <input type="text" id="client-search" placeholder="Search clients..." oninput="router.filterClients(this.value)" class="form-control">
+        <input type="text" id="client-search" placeholder="Search clients..." oninput="router.filterClients(this.value)" class="form-control" ${isAdmin ? '' : 'disabled'}>
       </div>
 
       <div id="clients-list">
