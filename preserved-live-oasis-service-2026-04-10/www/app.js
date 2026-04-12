@@ -4615,26 +4615,21 @@ async function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATER
   const gold = [201, 168, 124];
   const white = [255, 255, 255];
 
-  // Load logo with dark background made transparent so navy band shows through
+  // Composite logo onto navy using 'lighten' blend: dark pixels→navy, gold pixels→gold, no transparency needed
   let logoData = null;
   try {
     logoData = await new Promise((resolve, reject) => {
       const img = new Image();
-      img.crossOrigin = 'Anonymous';
       img.onload = () => {
         const canvas = document.createElement('canvas');
         canvas.width = img.width;
         canvas.height = img.height;
         const ctx = canvas.getContext('2d');
+        ctx.fillStyle = `rgb(${navy[0]},${navy[1]},${navy[2]})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = 'lighten';
         ctx.drawImage(img, 0, 0);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const d = imageData.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const luminance = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          if (luminance < 80) d[i + 3] = 0;
-        }
-        ctx.putImageData(imageData, 0, 0);
-        resolve(canvas.toDataURL('image/png'));
+        resolve(canvas.toDataURL('image/jpeg', 1.0));
       };
       img.onerror = reject;
       img.src = 'oasis-logo.png';
@@ -4648,9 +4643,9 @@ async function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATER
   doc.setFillColor(...gold);
   doc.rect(0, 32, 210, 1, 'F');
 
-  // Logo — transparent PNG floated over navy band
+  // Logo — lighten-composited JPEG, dark bg becomes navy
   if (logoData) {
-    doc.addImage(logoData, 'PNG', 9, 3, 20, 20);
+    doc.addImage(logoData, 'JPEG', 9, 3, 20, 20);
   }
 
   // OASIS wordmark — gold, italic (not bold), spaced letters
@@ -4692,26 +4687,21 @@ async function applyOasisPdfFooter(doc) {
   const white = [255, 255, 255];
   const y = 274;
 
-  // Load logo with dark background made transparent so navy band shows through
+  // Composite logo onto navy using 'lighten' blend: dark pixels→navy, gold pixels→gold, no transparency needed
   let logoData = null;
   try {
     logoData = await new Promise((resolve, reject) => {
       const img = new Image();
-      img.crossOrigin = 'Anonymous';
       img.onload = () => {
         const canvas = document.createElement('canvas');
         canvas.width = img.width;
         canvas.height = img.height;
         const ctx = canvas.getContext('2d');
+        ctx.fillStyle = `rgb(${navy[0]},${navy[1]},${navy[2]})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = 'lighten';
         ctx.drawImage(img, 0, 0);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const d = imageData.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const luminance = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          if (luminance < 80) d[i + 3] = 0;
-        }
-        ctx.putImageData(imageData, 0, 0);
-        resolve(canvas.toDataURL('image/png'));
+        resolve(canvas.toDataURL('image/jpeg', 1.0));
       };
       img.onerror = reject;
       img.src = 'oasis-logo.png';
@@ -4725,9 +4715,9 @@ async function applyOasisPdfFooter(doc) {
   doc.setFillColor(...gold);
   doc.rect(0, y, 210, 0.8, 'F');
 
-  // Logo — transparent PNG floated over navy band
+  // Logo — lighten-composited JPEG, dark bg becomes navy
   if (logoData) {
-    doc.addImage(logoData, 'PNG', 10, y + 5, 12, 12);
+    doc.addImage(logoData, 'JPEG', 10, y + 5, 12, 12);
   }
 
   // OASIS wordmark — gold, italic (not bold)
