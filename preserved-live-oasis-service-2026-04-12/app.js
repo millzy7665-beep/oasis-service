@@ -1093,6 +1093,32 @@ class Router {
         </div>
       </div>
       ` : ''}
+
+      ${isMainAdmin ? `
+      <div class="section-header" style="margin-top: 20px;">
+        <div class="section-title">Export &amp; Billing</div>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <div style="font-weight:600; font-size:15px; margin-bottom:8px;">📋 Daily Work Orders</div>
+          <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Download completed work orders for a specific date for billing.</p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="date" id="wo-export-date" class="form-control" style="flex:1; min-width:140px;" value="${new Date().toISOString().split('T')[0]}">
+            <button class="btn btn-primary" onclick="exportDailyWorkOrders()">📥 Download Work Orders</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:10px;">
+        <div class="card-body">
+          <div style="font-weight:600; font-size:15px; margin-bottom:8px;">🧪 Monthly Chem Sheets</div>
+          <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Download all completed chem sheets for a specific month.</p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="month" id="chem-export-month" class="form-control" style="flex:1; min-width:140px;" value="${new Date().toISOString().slice(0, 7)}">
+            <button class="btn btn-secondary" onclick="exportMonthlyChemSheets()">📥 Download Bulk Chem Sheets</button>
+          </div>
+        </div>
+      </div>
+      ` : ''}
     `;
   }
 
@@ -7971,4 +7997,112 @@ function renderRepairPhotoSlot(orderId, label, photo, index) {
       <input id="repair-photo-gallery-${index}" name="repair-photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
     </div>
   `;
+}
+
+async function exportDailyWorkOrders() {
+  const dateInput = document.getElementById('wo-export-date');
+  const selectedDate = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const orders = getRepairOrders().filter(o => isCompleted(o.status) && o.date === selectedDate);
+  if (orders.length === 0) { showToast(`No completed work orders for ${selectedDate}`); return; }
+  showToast('Generating Work Orders Excel...');
+  try {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'OASIS Service App'; workbook.created = new Date();
+    const applyHeader = (sheet, count) => {
+      const row = sheet.getRow(1);
+      row.font = { bold: true, color: { argb: 'FFFFFF' } };
+      row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      row.alignment = { vertical: 'middle', horizontal: 'center' };
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: count } };
+    };
+    const columns = [
+      { header: 'Date', key: 'date', width: 12 }, { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 }, { header: 'Technician', key: 'tech', width: 18 },
+      { header: 'Job Type', key: 'jobType', width: 20 }, { header: 'Status', key: 'status', width: 12 },
+      { header: 'Time In', key: 'timeIn', width: 10 }, { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Labour Hours', key: 'labourHours', width: 12 }, { header: 'Materials', key: 'materials', width: 30 },
+      { header: 'Parts Summary', key: 'partsSummary', width: 40 }, { header: 'Work Summary', key: 'summary', width: 40 },
+      { header: 'Notes', key: 'notes', width: 40 }
+    ];
+    const sheet = workbook.addWorksheet('Work Orders');
+    sheet.columns = columns; applyHeader(sheet, columns.length);
+    orders.forEach(order => sheet.addRow({
+      date: order.date || '', client: order.clientName || '', address: order.address || '',
+      tech: order.assignedTo || '', jobType: order.jobType || '', status: order.status || '',
+      timeIn: order.timeIn || order.time || '', timeOut: order.timeOut || '',
+      labourHours: order.labourHours || '', materials: order.materials || '',
+      partsSummary: order.partsSummary || '', summary: order.summary || '', notes: order.notes || ''
+    }));
+    sheet.eachRow((row, n) => { if (n > 1) row.alignment = { vertical: 'top', wrapText: true }; });
+    const buffer = await workbook.xlsx.writeBuffer();
+    let binary = ''; const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    const base64 = btoa(binary);
+    const filename = `OASIS_Work_Orders_${selectedDate}.xlsx`;
+    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast(`${orders.length} work order${orders.length !== 1 ? 's' : ''} for ${selectedDate} ready to download`);
+  } catch (error) { console.error('Work orders export failed:', error); showToast('Work orders export failed'); }
+}
+
+async function exportMonthlyChemSheets() {
+  const monthInput = document.getElementById('chem-export-month');
+  const selectedMonth = monthInput ? monthInput.value : new Date().toISOString().slice(0, 7);
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const sorted = [...db.get('workorders', []).filter(wo => isCompleted(wo.status) && (wo.date || '').startsWith(selectedMonth))]
+    .sort((a, b) => new Date(a?.date || 0) - new Date(b?.date || 0));
+  if (sorted.length === 0) { showToast(`No completed chem sheets found for ${selectedMonth}`); return; }
+  showToast('Generating Chem Sheets Excel...');
+  try {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'OASIS Service App'; workbook.created = new Date();
+    const styleHeader = (sheet, count) => {
+      const row = sheet.getRow(1);
+      row.font = { bold: true, color: { argb: 'FFFFFF' } };
+      row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      row.alignment = { vertical: 'middle', horizontal: 'center' };
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: count } };
+    };
+    const chemKeys = [
+      { key: 'tabs', label: 'Tabs' }, { key: 'shock', label: 'Shock/Oxidizer' },
+      { key: 'muriaticAcid', label: 'Muriatic Acid' }, { key: 'sodaAsh', label: 'Soda Ash' },
+      { key: 'sodiumBicarb', label: 'Sodium Bicarb' }, { key: 'calcium', label: 'Calcium Increaser' },
+      { key: 'stabilizer', label: 'Stabilizer' }, { key: 'salt', label: 'Salt' },
+      { key: 'phosphateRemover', label: 'Phosphate Remover' }, { key: 'algaecide', label: 'Algaecide' }
+    ];
+    const columns = [
+      { header: 'Date', key: 'date', width: 12 }, { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 }, { header: 'Technician', key: 'tech', width: 15 },
+      { header: 'Time In', key: 'timeIn', width: 10 }, { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Pool Chlorine', key: 'pCl', width: 12 }, { header: 'Pool pH', key: 'pph', width: 10 },
+      { header: 'Pool Alk', key: 'palk', width: 10 }
+    ];
+    chemKeys.forEach(ck => columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 }));
+    columns.push({ header: 'Spa Chlorine', key: 'sCl', width: 12 }, { header: 'Spa pH', key: 'sph', width: 10 }, { header: 'Spa Alk', key: 'salk', width: 10 });
+    chemKeys.forEach(ck => columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 }));
+    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+    const sheet = workbook.addWorksheet('Chem Sheets');
+    sheet.columns = columns; styleHeader(sheet, columns.length);
+    sorted.forEach(wo => {
+      const rowData = {
+        date: wo.date || '', client: wo.clientName || '', address: wo.address || '',
+        tech: wo.technician || '', timeIn: wo.timeIn || wo.time || '', timeOut: wo.timeOut || '',
+        pCl: wo.readings?.pool?.chlorine || '', pph: wo.readings?.pool?.ph || '', palk: wo.readings?.pool?.alkalinity || '',
+        sCl: wo.readings?.spa?.chlorine || '', sph: wo.readings?.spa?.ph || '', salk: wo.readings?.spa?.alkalinity || '',
+        notes: `${wo.workPerformed || ''} ${wo.followUpNotes || wo.notes || ''}`.trim()
+      };
+      chemKeys.forEach(ck => { rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || ''; rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || ''; });
+      sheet.addRow(rowData);
+    });
+    sheet.eachRow((row, n) => { if (n > 1) row.alignment = { vertical: 'top', wrapText: true }; });
+    const buffer = await workbook.xlsx.writeBuffer();
+    let binary = ''; const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    const base64 = btoa(binary);
+    const filename = `OASIS_Chem_Sheets_${selectedMonth}.xlsx`;
+    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    showToast(`${sorted.length} chem sheet${sorted.length !== 1 ? 's' : ''} for ${selectedMonth} ready to download`);
+  } catch (error) { console.error('Chem sheets export failed:', error); showToast('Chem sheets export failed'); }
 }
