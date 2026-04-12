@@ -1,33 +1,13 @@
 // OASIS Service and Repair App - Unified Version
-// Features: Login, Dashboard, Clients, Chem Sheets, Repair Orders, Settings
+// Features: Login, Dashboard, Clients, Chem Sheets, Work Orders, Settings
 // PDF generation with local save instead of email
 
 // ==========================================
-// FIREBASE INITIALIZATION
-// ==========================================
-const firebaseConfig = {
-  apiKey: "AIzaSyAo3vP7Myf08Q8KqoFlcgGNOZp2mX2R-38",
-  authDomain: "oasis-service-app-69def.firebaseapp.com",
-  projectId: "oasis-service-app-69def",
-  storageBucket: "oasis-service-app-69def.firebasestorage.app",
-  messagingSenderId: "156557428291",
-  appId: "1:156557428291:web:243524f03403d05c65f6f6",
-  measurementId: "G-THQ9YGZ0B5"
-};
-
-firebase.initializeApp(firebaseConfig);
-const firestore = firebase.firestore();
-
-// Collections that sync across all devices via Firestore
-const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications'];
-
-// ==========================================
-// DATA MANAGEMENT (DB) — localStorage + Firestore sync
+// DATA MANAGEMENT (DB)
 // ==========================================
 class DB {
   constructor() {
     this.storage = window.localStorage;
-    this._listeners = {};
   }
 
   get(key, defaultValue = null) {
@@ -42,85 +22,18 @@ class DB {
   set(key, value) {
     try {
       this.storage.setItem(key, JSON.stringify(value));
+      return true;
     } catch (e) {
-      // localStorage full or unavailable
+      return false;
     }
-
-    // Sync shared collections to Firestore
-    if (SYNCED_KEYS.includes(key)) {
-      firestore.collection('app_data').doc(key).set({ data: JSON.parse(JSON.stringify(value)), updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
-        .catch(err => console.warn('Firestore write failed for', key, err));
-    }
-    return true;
   }
 
   remove(key) {
     this.storage.removeItem(key);
-    if (SYNCED_KEYS.includes(key)) {
-      firestore.collection('app_data').doc(key).delete()
-        .catch(err => console.warn('Firestore delete failed for', key, err));
-    }
   }
 
   clear() {
     this.storage.clear();
-  }
-
-  // Called once on startup — listen for Firestore changes and update localStorage + UI
-  startRealtimeSync() {
-    // Track known notification IDs so we only alert on truly new ones
-    const knownNotificationIds = new Set(
-      (JSON.parse(this.storage.getItem('oasis_notifications') || '[]')).map(n => n.id)
-    );
-
-    SYNCED_KEYS.forEach(key => {
-      firestore.collection('app_data').doc(key).onSnapshot(snapshot => {
-        if (!snapshot.exists) return;
-        const remoteData = snapshot.data().data;
-        const localRaw = this.storage.getItem(key);
-        const localData = localRaw ? JSON.parse(localRaw) : null;
-
-        // Only update if data actually changed (avoid infinite loops)
-        if (JSON.stringify(remoteData) !== JSON.stringify(localData)) {
-          this.storage.setItem(key, JSON.stringify(remoteData));
-          console.log(`[Sync] ${key} updated from Firestore`);
-
-          // Present device notifications for new incoming notifications
-          if (key === 'oasis_notifications' && typeof notificationManager !== 'undefined') {
-            const newItems = (remoteData || []).filter(n => !knownNotificationIds.has(n.id));
-            newItems.forEach(n => {
-              knownNotificationIds.add(n.id);
-              notificationManager.presentLiveNotification(n);
-            });
-          }
-
-          // Re-render current view so user sees live changes
-          if (typeof router !== 'undefined' && router.currentView) {
-            try { router.navigate(router.currentView); } catch (e) { /* ignore */ }
-          }
-        }
-      }, err => {
-        console.warn('Firestore listener error for', key, err);
-      });
-    });
-
-    // On first load, pull any existing Firestore data that localStorage doesn't have
-    SYNCED_KEYS.forEach(key => {
-      const local = this.storage.getItem(key);
-      if (!local || local === '[]' || local === 'null') {
-        firestore.collection('app_data').doc(key).get().then(doc => {
-          if (doc.exists && doc.data().data) {
-            this.storage.setItem(key, JSON.stringify(doc.data().data));
-            console.log(`[Sync] ${key} pulled from Firestore on startup`);
-          }
-        }).catch(() => {});
-      }
-    });
-
-    // Request notification permission early
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
   }
 }
 
@@ -378,7 +291,7 @@ class NotificationManager {
         <div class="card" style="margin: 0 16px 12px;">
           <div class="card-body">
             <div class="empty-title">No new notifications</div>
-            <div class="empty-subtitle">New clients, chem sheets, and repair orders from Admin will appear here offline on this device.</div>
+            <div class="empty-subtitle">New clients, chem sheets, and work orders from Admin will appear here offline on this device.</div>
           </div>
         </div>
       `;
@@ -543,23 +456,11 @@ class Router {
     document.querySelectorAll('.nav-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === this.currentView);
     });
+    // Hide Routes tab for Jet and Mark — they use Work Orders instead
     const user = auth.getCurrentUser();
-    const isOfficeUser = auth.isAdmin() || (user && (user.name === 'Jet' || user.name === 'Mark'));
-    // Hide Work Orders tab for field techs
-    const woBtn = document.querySelector('.nav-item[data-view="workorders"]');
-    if (woBtn) woBtn.style.display = isOfficeUser ? '' : 'none';
-    // Rename nav labels for office users
+    const isOfficeUser = user && (user.name === 'Jet' || user.name === 'Mark') && !auth.isAdmin();
     const routesBtn = document.querySelector('.nav-item[data-view="routes"]');
-    if (routesBtn) {
-      const label = routesBtn.querySelector('.nav-label');
-      const icon = routesBtn.querySelector('.nav-icon');
-      if (isOfficeUser) { if (label) label.textContent = 'Work Orders'; if (icon) icon.textContent = '🛠️'; }
-      else { if (label) label.textContent = 'Routes'; if (icon) icon.textContent = '🗺️'; }
-    }
-    if (woBtn) {
-      const label = woBtn.querySelector('.nav-label');
-      if (label && isOfficeUser) label.textContent = 'Create WO';
-    }
+    if (routesBtn) routesBtn.style.display = isOfficeUser ? 'none' : '';
   }
 
   setAdminJobStatusFilter(value = 'all') {
@@ -622,63 +523,38 @@ class Router {
     const user = auth.getCurrentUser();
     const userName = user ? user.name : 'Technician';
     const isAdmin = auth.isAdmin();
+    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
     const visibleWorkorders = this.getVisibleJobs(db.get('workorders', []), 'technician');
     const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
     const unreadNotifications = notificationManager.getUnreadForUser(user).length;
 
+    if (isOfficeUser) {
+      notificationManager.requestPermission();
+      if (unreadNotifications) {
+        setTimeout(() => notificationManager.showUnreadToast(user), 150);
+      }
+    }
+
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
-    // Today's route clients for this tech
+    // Today's route clients for this tech (field techs only see their own)
     const allClients = db.get('clients', []);
     const myRouteClients = isAdmin
       ? allClients.filter(c => c.serviceDays && c.serviceDays.includes(todayDay))
       : allClients.filter(c => c.technician === userName && c.serviceDays && c.serviceDays.includes(todayDay));
 
     // Total assigned clients for this tech
-    const myTotalClients = isAdmin ? allClients.length : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
-
-    // Total visits this week (sum of all service days for this user in current week)
-    const weekDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    const myWeeklyVisits = isAdmin
-      ? allClients.reduce((sum, c) => sum + ((c.serviceDays||[]).length), 0)
-      : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase())
-          .reduce((sum, c) => sum + ((c.serviceDays||[]).length), 0);
-    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
-
-    // Work orders for dashboard - admin sees all, techs see their own
-    const myRepairOrders = visibleRepairOrders.filter(r => {
-      const s = (r.status || 'open');
-      return s !== 'completed' && s !== 'pending';
-    }).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-
-    const myPendingOrders = visibleRepairOrders.filter(r => (r.status || 'open') === 'pending')
-      .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-
-    // Jet/Mark completion stats
-    const todayDateStr = new Date().toISOString().split('T')[0];
-    const todayCompletedOrders = visibleRepairOrders.filter(r => r.status === 'completed' && r.date === todayDateStr);
-
-    // Weekly completed: Monday to Sunday
-    const now = new Date();
-    const dayOfWeek = now.getDay();
-    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - mondayOffset);
-    weekStart.setHours(0, 0, 0, 0);
-    const weeklyCompletedOrders = visibleRepairOrders.filter(r => {
-      if (r.status !== 'completed' || !r.date) return false;
-      const d = new Date(r.date + 'T00:00:00');
-      return d >= weekStart && d <= now;
-    });
+    const myTotalClients = isAdmin
+      ? allClients.length
+      : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
 
     content.innerHTML = `
       <div class="wave-banner">
         <div class="wave-banner-eyebrow">Welcome back</div>
         <div class="wave-banner-title">${userName}</div>
-        <div class="wave-banner-sub">${todayStr}${isOfficeUser && !isAdmin ? '' : ` • ${myRouteClients.length} stops today`}</div>
+        <div class="wave-banner-sub">${todayStr} • ${myRouteClients.length} stops today</div>
       </div>
-
 
       <div class="stats-grid">
         <div class="stat-card" onclick="router.navigate('routes')">
@@ -689,64 +565,49 @@ class Router {
         <div class="stat-card" onclick="router.navigate('clients')">
           <div class="stat-icon">👥</div>
           <div class="stat-value">${myTotalClients}</div>
-          <div class="stat-label">Total Clients</div>
+          <div class="stat-label">Total Visits</div>
         </div>
-        <div class="stat-card">
-          <div class="stat-icon">📅</div>
-          <div class="stat-value">${myWeeklyVisits}</div>
-          <div class="stat-label">Total Visits This Week</div>
-        </div>
-        ${['jet','maark'].includes(userName.toLowerCase()) || isAdmin ? `
-        <div class="stat-card">
-          <div class="stat-icon">⏳</div>
-          <div class="stat-value">${myPendingOrders.length}</div>
-          <div class="stat-label">Pending Orders</div>
+        ${isOfficeUser ? `
+        <div class="stat-card" onclick="router.navigate('routes')">
+          <div class="stat-icon">🛠️</div>
+          <div class="stat-value">${visibleRepairOrders.length}</div>
+          <div class="stat-label">Work Orders</div>
         </div>
         ` : ''}
       </div>
 
-      ${myPendingOrders.length > 0 ? `
+      ${isOfficeUser ? `
       <div class="section-header">
-        <div class="section-title">${isAdmin ? 'All Pending Work Orders' : 'My Pending Work Orders'}</div>
+        <div class="section-title">Notifications${unreadNotifications ? ` (${unreadNotifications} new)` : ''}</div>
       </div>
-      ${myPendingOrders.map(order => `
-        <div class="list-item" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')" style="cursor:pointer;">
-          <div class="list-item-avatar" style="background:#fff8e1; color:#f57f17;">⏳</div>
-          <div class="list-item-info">
-            <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
-            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
-            <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
-          </div>
-          <div class="list-item-actions">
-            <span style="font-size:11px; padding:3px 8px; border-radius:12px; background:#fff8e1; color:#f57f17;">pending</span>
-          </div>
-        </div>
-      `).join('')}
+      <div id="dashboard-notifications">
+        ${notificationManager.renderDashboardPanel()}
+      </div>
       ` : ''}
 
-      ${myRepairOrders.length > 0 ? `
+      ${!isOfficeUser ? `
       <div class="section-header">
-        <div class="section-title">${isAdmin ? 'All Open Work Orders' : 'My Work Orders'}</div>
+        <div class="section-title">Today's Route · ${todayDay}</div>
+        <button class="btn btn-secondary btn-sm" onclick="router.navigate('routes')">Full Route →</button>
       </div>
-      ${myRepairOrders.map(order => `
-        <div class="list-item" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')" style="cursor:pointer;">
-          <div class="list-item-avatar" style="background:#fff3e0; color:#e65100;">🛠️</div>
-          <div class="list-item-info">
-            <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
-            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
-            <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
-          </div>
-          <div class="list-item-actions">
-            <span style="font-size:11px; padding:3px 8px; border-radius:12px; background:${order.status === 'in-progress' ? '#fff3e0' : '#e3f2fd'}; color:${order.status === 'in-progress' ? '#e65100' : '#1565c0'};">${escapeHtml(order.status || 'open')}</span>
-          </div>
-        </div>
-      `).join('')}
-      ` : (
-        (['jet','maark'].includes(userName.toLowerCase()) || isAdmin)
-        ? `<div class="card" style="margin:16px;"><div class="card-body"><div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">No open work orders</div></div></div></div>`
-        : `<div class="card" style="margin:16px;"><div class="card-body"><div class="empty-state"><div class="empty-icon">🗺️</div><div class="empty-title">Today's Visits: <b>${myRouteClients.length}</b></div></div></div></div>`
-      )
-      }
+      <div id="today-route">
+        ${myRouteClients.length > 0
+          ? myRouteClients.sort((a, b) => a.name.localeCompare(b.name)).map(c => `
+            <div class="list-item" onclick="router.editClient('${escapeHtml(c.id)}')" style="cursor:pointer;">
+              <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
+              <div class="list-item-info">
+                <div class="list-item-name">${escapeHtml(c.name)}</div>
+                <div class="list-item-sub">${escapeHtml(c.address)}</div>
+              </div>
+              <div class="list-item-actions">
+                <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(c.address)}')" title="Navigate">📍</button>
+              </div>
+            </div>
+          `).join('')
+          : `<div class="card" style="margin:0 16px 12px;"><div class="card-body"><div class="empty-title">No route stops for ${todayDay}</div><div class="empty-subtitle">Import a route sheet to see your daily schedule</div></div></div>`
+        }
+      </div>
+      ` : ''}
 
     `;
   }
@@ -768,11 +629,11 @@ class Router {
 
     const repairJobs = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo').map(order => ({
       id: order.id,
-      clientName: order.clientName || 'Repair Job',
+      clientName: order.clientName || 'Work Order',
       address: order.address || '',
       time: order.timeIn || order.time || 'TBD',
       status: order.status || 'open',
-      kind: order.jobType || 'Repair Order',
+      kind: order.jobType || 'Work Order',
       openAction: `renderRepairOrderForm('${order.id}')`,
       dateKey: this.getDateKey(order.date)
     }));
@@ -808,26 +669,24 @@ class Router {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
-    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
 
-    // Office users see Repair Visits instead of Routes
-    if (isOfficeUser) { return this.renderRepairVisits(); }
+    // Jet and Mark have no Routes tab — redirect to work orders
+    if (!isAdmin && user && (user.name === 'Jet' || user.name === 'Mark')) {
+      return this.renderWorkOrders();
+    }
 
     const allClients = db.get('clients', []);
     const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
-    // For techs, show only their assigned route clients
-    // For admin, show all routes or let them pick a tech
+    // Admin: can filter by any tech. Field tech: shows only their own clients.
     let techFilter = isAdmin ? (this._routeTechFilter || 'all') : (user ? user.name : '');
     const techClients = techFilter === 'all'
       ? allClients.filter(c => c.serviceDays && c.serviceDays.length)
       : allClients.filter(c => c.technician === techFilter && c.serviceDays && c.serviceDays.length);
 
-    // Get unique tech names for admin dropdown
     const techs = [...new Set(allClients.filter(c => c.technician).map(c => c.technician))].sort();
 
-    // Build day tabs - default to today
     this._routeDayFilter = this._routeDayFilter || today;
     const dayFilter = this._routeDayFilter;
 
@@ -837,18 +696,20 @@ class Router {
 
     content.innerHTML = `
       <div class="section-header">
-        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">${isAdmin ? 'Route Schedule' : (user ? user.name + "'s Route" : 'My Route')}</div></div>
-        ${isAdmin ? '' : `<div style="font-size:12px; color:#666;">${techClients.length} clients assigned</div>`}
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button>
+          <div class="section-title">${isAdmin ? 'All Routes' : (user ? user.name + "'s Route" : 'My Route')}</div>
+        </div>
+        <div style="font-size:12px; color:#666;">${dayClients.length} client${dayClients.length !== 1 ? 's' : ''} shown</div>
       </div>
 
       ${isAdmin ? `
-        <div style="padding:0 16px 8px;">
-          <select class="form-control" onchange="router._routeTechFilter=this.value; router.renderRoutes();" style="font-size:14px;">
-            <option value="all" ${techFilter === 'all' ? 'selected' : ''}>All Technicians</option>
-            ${techs.map(t => `<option value="${escapeHtml(t)}" ${techFilter === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
-          </select>
-        </div>
-      ` : ''}
+      <div style="padding:0 16px 8px;">
+        <select class="form-control" onchange="router._routeTechFilter=this.value; router._routeDayFilter=null; router.renderRoutes();" style="font-size:14px;">
+          <option value="all" ${techFilter === 'all' ? 'selected' : ''}>All Technicians</option>
+          ${techs.map(t => `<option value="${escapeHtml(t)}" ${techFilter === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+        </select>
+      </div>` : ''}
 
       <div style="display:flex; gap:4px; padding:0 16px 10px; overflow-x:auto;">
         <button class="btn btn-sm ${dayFilter === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router._routeDayFilter='all'; router.renderRoutes();">All</button>
@@ -875,42 +736,22 @@ class Router {
         <div class="empty-state">
           <div class="empty-icon">🗺️</div>
           <div class="empty-title">No clients scheduled</div>
-          <div class="empty-subtitle">${dayFilter === 'all' ? 'No route clients found for this filter' : 'No visits scheduled for ' + dayFilter}</div>
+          <div class="empty-subtitle">${dayFilter === 'all' ? 'No route clients found' : 'No visits scheduled for ' + dayFilter}</div>
         </div>
       `;
     }
-
-    const isAdmin = auth.isAdmin();
-
-    // Group by tech if admin viewing all
-    if (isAdmin && techFilter === 'all') {
-      const byTech = {};
-      clients.forEach(c => {
-        const tech = c.technician || 'Unassigned';
-        if (!byTech[tech]) byTech[tech] = [];
-        byTech[tech].push(c);
-      });
-
-      let html = '';
-      Object.keys(byTech).sort().forEach(tech => {
-        html += `<div style="background:#1a237e; color:#fff; padding:8px 16px; font-weight:600; font-size:14px; margin-top:4px;">👤 ${escapeHtml(tech)} (${byTech[tech].length})</div>`;
-        html += byTech[tech].sort((a, b) => a.name.localeCompare(b.name)).map(c => this.renderRouteCard(c)).join('');
-      });
-      return html;
-    }
-
-    return clients.sort((a, b) => a.name.localeCompare(b.name)).map(c => this.renderRouteCard(c)).join('');
+    return clients.map(c => this.renderRouteCard(c)).join('');
   }
 
   renderRouteCard(client) {
     const daysLabel = (client.serviceDays || []).map(d => d.substring(0, 3)).join(', ');
     return `
-      <div class="list-item" onclick="router.editClient('${escapeHtml(client.id)}')" style="cursor:pointer;">
+      <div class="list-item" style="cursor:pointer;">
         <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
         <div class="list-item-info">
           <div class="list-item-name">${escapeHtml(client.name)}</div>
           <div class="list-item-sub">${escapeHtml(client.address)}</div>
-          <div class="list-item-sub" style="font-size:11px; color:#2196F3;">${escapeHtml(client.route || '')}${daysLabel ? ' · ' + daysLabel : ''}</div>
+          ${daysLabel ? `<div class="list-item-sub" style="font-size:11px; color:#2196F3;">${escapeHtml(daysLabel)}</div>` : ''}
         </div>
         <div class="list-item-actions">
           <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(client.address)}')" title="Navigate">📍</button>
@@ -920,97 +761,7 @@ class Router {
   }
 
   renderRoutesList() {
-    return this.renderRouteClients([], 'all', 'all');
-  }
-
-  renderRepairVisits() {
-    const content = document.getElementById('main-content');
-    const isAdmin = auth.isAdmin();
-    const canShare = auth.canShare();
-    const allRepair = typeof getRepairOrders === 'function' ? getRepairOrders() : [];
-    const openCount = allRepair.filter(r => (r.status || 'open') !== 'completed').length;
-    const doneCount = allRepair.filter(r => (r.status || '') === 'completed').length;
-    this._repairFilter = this._repairFilter || 'all';
-
-    // Build day-based view
-    let dayViewHTML = '';
-    if (this._repairFilter === 'byday') {
-      // Group orders by date
-      const grouped = {};
-      allRepair.forEach(order => {
-        const dateKey = order.date || 'Unscheduled';
-        if (!grouped[dateKey]) grouped[dateKey] = [];
-        grouped[dateKey].push(order);
-      });
-      // Sort date keys (Unscheduled last)
-      const sortedDates = Object.keys(grouped).sort((a, b) => {
-        if (a === 'Unscheduled') return 1;
-        if (b === 'Unscheduled') return -1;
-        return new Date(a) - new Date(b);
-      });
-      if (sortedDates.length === 0) {
-        dayViewHTML = `<div class="empty-state"><div class="empty-icon">🛠️</div><div class="empty-title">No work orders</div><div class="empty-subtitle">Create a work order to get started</div></div>`;
-      } else {
-        dayViewHTML = sortedDates.map(dateKey => {
-          const orders = grouped[dateKey];
-          let label = dateKey;
-          if (dateKey !== 'Unscheduled') {
-            const d = new Date(dateKey + 'T00:00:00');
-            const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-            label = `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
-          }
-          const openInDay = orders.filter(o => (o.status || 'open') !== 'completed').length;
-          const doneInDay = orders.filter(o => (o.status || '') === 'completed').length;
-          return `
-            <div style="margin-bottom:16px;">
-              <div style="font-weight:600;font-size:15px;padding:8px 0;border-bottom:2px solid var(--primary-color, #2196F3);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
-                <span>📅 ${label}</span>
-                <span style="font-size:12px;font-weight:400;color:#666;">${openInDay} open · ${doneInDay} done</span>
-              </div>
-              ${orders.map(order => `
-                <div class="job-card" style="margin-bottom:8px;">
-                  <div class="job-card-header"><div>
-                    <div class="job-card-title">${escapeHtml(order.clientName || 'Repair Job')}</div>
-                    <div class="job-card-customer">${escapeHtml(order.jobType || 'General Repair')}</div>
-                    <div class="job-meta"><div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div></div>
-                  </div></div>
-                  <div class="job-card-body">
-                    <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
-                    <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
-                  </div>
-                  <div class="job-card-footer">
-                    <button class="btn ${order.status === 'completed' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">${order.status === 'completed' ? 'Completed' : 'Open'}</button>
-                    ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
-                    ${auth.getCurrentUser().role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          `;
-        }).join('');
-      }
-    }
-
-    content.innerHTML = `
-      <div class="section-header">
-        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">\u2190</button><div class="section-title">Repair Visits</div></div>
-        <button class="btn btn-primary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
-      </div>
-
-      <div style="display:flex;gap:8px;margin:0 16px 12px;flex-wrap:wrap;">
-        <button class="btn btn-sm ${this._repairFilter === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='all'; router.renderRepairVisits();">All (${allRepair.length})</button>
-        <button class="btn btn-sm ${this._repairFilter === 'byday' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='byday'; router.renderRepairVisits();">By Day</button>
-        <button class="btn btn-sm ${this._repairFilter === 'pending' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='pending'; router.renderRepairVisits();">Open (${openCount})</button>
-        <button class="btn btn-sm ${this._repairFilter === 'completed' ? 'btn-primary' : 'btn-secondary'}" onclick="router._repairFilter='completed'; router.renderRepairVisits();">Completed (${doneCount})</button>
-      </div>
-
-      <div class="card">
-        <div class="card-body">
-          ${this._repairFilter === 'byday' ? dayViewHTML : renderRepairOrdersList(this._repairFilter)}
-        </div>
-      </div>
-    `;
+    return this.renderRouteClients([], 'all', '');
   }
 
   renderClients() {
@@ -1018,30 +769,18 @@ class Router {
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
     const isMainAdmin = user && user.role === 'admin';
-    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
-    this._clientViewMode = this._clientViewMode || 'all';
-    if (!isAdmin && this._clientViewMode === 'byRoute') this._clientViewMode = 'all';
-    // Office users only see All view
-    if (isOfficeUser) this._clientViewMode = 'all';
 
     content.innerHTML = `
       <div class="section-header">
-        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">${isOfficeUser ? 'Clients' : (user ? user.name + "'s Clients" : 'My Clients')}</div></div>
+        <div class="section-title">Clients</div>
         <div style="display:flex; gap:8px;">
-          ${isMainAdmin ? '<button class="btn btn-secondary btn-sm" onclick="importRouteSchedule()">Import Route Sheet</button>' : ''}
+          ${isMainAdmin ? '<button class="btn btn-secondary btn-sm" onclick="bulkImportClients()">Bulk Import</button>' : ''}
           ${isAdmin ? '<button class="btn btn-primary btn-sm" onclick="quickAddClient()">+ Add Client</button>' : ''}
         </div>
       </div>
 
-      ${isOfficeUser ? '' : `
-      <div style="display:flex; gap:6px; padding:0 16px 8px; flex-wrap:wrap;">
-        <button class="btn btn-sm ${this._clientViewMode === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('all')">All</button>
-        <button class="btn btn-sm ${this._clientViewMode === 'byDay' ? 'btn-primary' : 'btn-secondary'}" onclick="router.setClientView('byDay')">By Day</button>
-      </div>
-      `}
-
       <div class="search-bar" style="margin: 0 16px 12px;">
-        <input type="text" id="client-search" placeholder="Search clients..." oninput="router.filterClients(this.value)" class="form-control" ${isAdmin ? '' : 'disabled'}>
+        <input type="text" id="client-search" placeholder="Search 280+ clients..." oninput="router.filterClients(this.value)" class="form-control">
       </div>
 
       <div id="clients-list">
@@ -1050,59 +789,26 @@ class Router {
     `;
   }
 
-  setClientView(mode) {
-    this._clientViewMode = mode;
-    this.renderClients();
-  }
-
   filterClients(query) {
     const list = document.getElementById('clients-list');
     if (!list) return;
     list.innerHTML = this.renderClientsList(query);
   }
 
-  renderClientCard(client, isAdmin) {
-    const daysLabel = (client.serviceDays && client.serviceDays.length) ? client.serviceDays.map(d => d.substring(0,3)).join(', ') : '';
-    const routeLabel = client.route || '';
-    const metaParts = [client.address, routeLabel, daysLabel].filter(Boolean);
-
-    return `
-      <div class="list-item">
-        <div class="list-item-avatar">${client.name.charAt(0).toUpperCase()}</div>
-        <div class="list-item-info">
-          <div class="list-item-name">${escapeHtml(client.name)}</div>
-          <div class="list-item-sub">${escapeHtml(client.address)}</div>
-          ${daysLabel ? `<div class="list-item-sub" style="font-size:11px; color:#2196F3;">${escapeHtml(routeLabel ? routeLabel + ' · ' + daysLabel : daysLabel)}</div>` : ''}
-        </div>
-        <div class="list-item-actions">
-          <button class="btn btn-icon" onclick="openMap('${escapeHtml(client.address)}')" title="View on Map">📍</button>
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${escapeHtml(client.id)}')">Edit</button>` : ''}
-          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteClient('${escapeHtml(client.id)}')">Delete</button>` : ''}
-        </div>
-      </div>
-    `;
-  }
-
   renderClientsList(query = '') {
     const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
-    const user = auth.getCurrentUser();
-    const mode = this._clientViewMode || 'all';
-
-    // Office users (admin, Jet, Mark) see all clients; field techs see only their own
-    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
-    let baseClients = isOfficeUser
+    const currentUser = auth.getCurrentUser();
+    const scopedClients = isAdmin
       ? allClients
-      : allClients.filter(c => c.technician && user && c.technician.toLowerCase() === user.name.toLowerCase());
+      : allClients.filter(client => (client.technician || '') === (currentUser?.name || ''));
 
-    let clients = query
-      ? baseClients.filter(c =>
+    const clients = query
+      ? scopedClients.filter(c =>
           c.name.toLowerCase().includes(query.toLowerCase()) ||
-          c.address.toLowerCase().includes(query.toLowerCase()) ||
-          (c.technician || '').toLowerCase().includes(query.toLowerCase()) ||
-          (c.route || '').toLowerCase().includes(query.toLowerCase())
+          c.address.toLowerCase().includes(query.toLowerCase())
         )
-      : baseClients;
+      : scopedClients;
 
     if (clients.length === 0) {
       return `
@@ -1114,80 +820,20 @@ class Router {
       `;
     }
 
-    if (mode === 'all' || query) {
-      clients.sort((a, b) => a.name.localeCompare(b.name));
-      return clients.map(c => this.renderClientCard(c, isAdmin)).join('');
-    }
-
-    const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-
-    if (mode === 'byRoute') {
-      const byTech = {};
-      clients.filter(c => c.serviceDays && c.serviceDays.length).forEach(c => {
-        const tech = c.technician || 'Unassigned';
-        if (!byTech[tech]) byTech[tech] = {};
-        const days = c.serviceDays;
-        days.forEach(day => {
-          if (!byTech[tech][day]) byTech[tech][day] = [];
-          byTech[tech][day].push(c);
-        });
-      });
-
-      let html = '';
-      Object.keys(byTech).sort().forEach(tech => {
-        const techDays = byTech[tech];
-        const totalClients = new Set();
-        Object.values(techDays).forEach(arr => arr.forEach(c => totalClients.add(c.id)));
-        html += `<div style="background:#1a237e; color:#fff; padding:10px 16px; font-weight:600; font-size:15px; margin-top:8px;">👤 ${escapeHtml(tech)} <span style="font-weight:400; font-size:12px; opacity:0.8;">(${totalClients.size} clients)</span></div>`;
-
-        const sortedDays = Object.keys(techDays).sort((a, b) => {
-          const ai = DAY_ORDER.indexOf(a); const bi = DAY_ORDER.indexOf(b);
-          return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-        });
-
-        sortedDays.forEach(day => {
-          const dayClients = techDays[day].sort((a, b) => a.name.localeCompare(b.name));
-          html += `<div style="background:#e3f2fd; padding:6px 16px; font-weight:600; font-size:13px; color:#1565c0;">📅 ${escapeHtml(day)} (${dayClients.length})</div>`;
-          html += dayClients.map(c => this.renderClientCard(c, isAdmin)).join('');
-        });
-      });
-      return html;
-    }
-
-    if (mode === 'byDay') {
-      const byDay = {};
-      clients.filter(c => c.serviceDays && c.serviceDays.length).forEach(c => {
-        const days = c.serviceDays;
-        days.forEach(day => {
-          if (!byDay[day]) byDay[day] = [];
-          byDay[day].push(c);
-        });
-      });
-
-      const sortedDays = Object.keys(byDay).sort((a, b) => {
-        const ai = DAY_ORDER.indexOf(a); const bi = DAY_ORDER.indexOf(b);
-        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-      });
-
-      let html = '';
-      sortedDays.forEach(day => {
-        const dayClients = byDay[day].sort((a, b) => (a.technician || 'ZZZ').localeCompare(b.technician || 'ZZZ') || a.name.localeCompare(b.name));
-        html += `<div style="background:#1a237e; color:#fff; padding:10px 16px; font-weight:600; font-size:15px; margin-top:8px;">📅 ${escapeHtml(day)} <span style="font-weight:400; font-size:12px; opacity:0.8;">(${dayClients.length} visits)</span></div>`;
-
-        let currentTech = '';
-        dayClients.forEach(c => {
-          const tech = c.technician || 'Unassigned';
-          if (tech !== currentTech) {
-            currentTech = tech;
-            html += `<div style="background:#e3f2fd; padding:6px 16px; font-weight:600; font-size:13px; color:#1565c0;">👤 ${escapeHtml(tech)}</div>`;
-          }
-          html += this.renderClientCard(c, isAdmin);
-        });
-      });
-      return html;
-    }
-
-    return clients.map(c => this.renderClientCard(c, isAdmin)).join('');
+    return clients.map(client => `
+      <div class="list-item">
+        <div class="list-item-avatar">${client.name.charAt(0).toUpperCase()}</div>
+        <div class="list-item-info">
+          <div class="list-item-name">${client.name}</div>
+          <div class="list-item-sub">${client.address}</div>
+        </div>
+        <div class="list-item-actions">
+          <button class="btn btn-icon" onclick="openMap('${client.address}')" title="View on Map">📍</button>
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${client.id}')">Delete</button>` : ''}
+        </div>
+      </div>
+    `).join('');
   }
 
   renderWorkOrders() {
@@ -1195,31 +841,57 @@ class Router {
     const isAdmin = auth.isAdmin();
     const canShare = auth.canShare();
 
-    const allChem = db.get('workorders', []);
-    const allRepair = getRepairOrders();
-    const chemOpen = allChem.filter(w => (w.status || 'pending') !== 'completed').length;
-    const chemDone = allChem.filter(w => (w.status || 'pending') === 'completed').length;
-    const repairOpen = allRepair.filter(r => (r.status || 'open') === 'open').length;
-    const repairProgress = allRepair.filter(r => (r.status || '') === 'in-progress').length;
-    const repairDone = allRepair.filter(r => (r.status || '') === 'completed').length;
+    const completedWOs = (typeof getRepairOrders === 'function' ? getRepairOrders() : []).filter(o => (o.status || '').toLowerCase() === 'completed');
 
     content.innerHTML = `
       <div class="section-header">
-        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Create Work Order</div></div>
-        <div style="display:flex;gap:8px;align-items:flex-start;">
-          ${isAdmin ? `<div style="display:flex;gap:6px;flex-wrap:wrap;"><button class="btn btn-secondary btn-sm" onclick="downloadCompletedWorkOrders()">📥 Download WO</button><button class="btn btn-secondary btn-sm" onclick="downloadBulkChemSheets()">📥 Chem Sheets</button></div>` : ''}
-          <div style="display:flex;flex-direction:column;gap:6px;">
-            <button class="btn btn-primary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
-            ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ Chem Sheet</button>` : ''}
-          </div>
+        <div class="section-title">Work Orders</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
+          <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
         </div>
       </div>
 
-      <div style="padding:16px;">
-        <div class="empty-state">
-          <div class="empty-icon">🛠️</div>
-          <div class="empty-title">Create a new work order</div>
-          <div class="empty-subtitle">Tap + Work Order or + Chem Sheet above to get started</div>
+      ${isAdmin ? `
+      <div class="card" style="margin: 0 16px 12px;">
+        <div class="card-body">
+          <div class="form-row" style="margin-bottom:0;">
+            <label for="admin-job-status-filter">Filter jobs by status</label>
+            <select id="admin-job-status-filter" onchange="router.setAdminJobStatusFilter(this.value)">
+              <option value="all" ${this.adminJobStatusFilter === 'all' ? 'selected' : ''}>All jobs</option>
+              <option value="pending" ${this.adminJobStatusFilter === 'pending' ? 'selected' : ''}>Pending / Open</option>
+              <option value="completed" ${this.adminJobStatusFilter === 'completed' ? 'selected' : ''}>Completed only</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      ` : ''}
+
+      ${isAdmin && completedWOs.length > 0 ? `
+      <div class="card" style="margin: 0 16px 12px; border-left: 4px solid #4CAF50;">
+        <div class="card-body">
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+            <div>
+              <div style="font-weight:600; font-size:15px;">✅ Completed Work Orders Ready</div>
+              <div style="font-size:13px; color:#555; margin-top:2px;">${completedWOs.length} completed work order${completedWOs.length !== 1 ? 's' : ''} from Jet &amp; Mark available for download</div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="exportCompletedToExcel()">📥 Bulk Download Excel</button>
+          </div>
+        </div>
+      </div>
+      ` : ''}
+
+      <div id="workorders-list">
+        ${this.renderWorkOrdersList()}
+      </div>
+
+      <div class="section-header" style="margin-top:10px">
+        <div class="section-title">Work Orders</div>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          ${renderRepairOrdersList(this.adminJobStatusFilter)}
         </div>
       </div>
     `;
@@ -1231,15 +903,20 @@ class Router {
     const isAdmin = auth.isAdmin();
     const canShare = auth.canShare();
 
-    let workorders = this.applyStatusFilter(allWorkorders);
+    let workorders = (currentUser && currentUser.role === 'admin')
+      ? allWorkorders
+      : allWorkorders.filter(wo => wo.technician === currentUser.name);
+
+    if (isAdmin) {
+      workorders = this.applyStatusFilter(workorders);
+    }
 
     if (workorders.length === 0) {
-      const filter = this.adminJobStatusFilter || 'all';
-      const emptyTitle = filter === 'completed'
-        ? 'No completed chem sheets'
-        : filter === 'pending'
-          ? 'No open or pending chem sheets'
-          : 'No chem sheets found';
+      const emptyTitle = isAdmin && this.adminJobStatusFilter === 'completed'
+        ? 'No completed jobs found'
+        : isAdmin && this.adminJobStatusFilter === 'pending'
+          ? 'No pending or open jobs found'
+          : 'No jobs found';
 
       return `
         <div class="empty-state">
@@ -1290,7 +967,7 @@ class Router {
 
     content.innerHTML = `
       <div class="section-header">
-        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">Settings</div></div>
+        <div class="section-title">Settings</div>
       </div>
 
       <div class="card">
@@ -1381,8 +1058,8 @@ class Router {
             <div class="form-row">
               <label for="wo-client">Customer</label>
               <select id="wo-client" onchange="onChemClientChange()">
-                <option value="">— Search client —</option>
-                ${[...clients].sort((a, b) => a.name.localeCompare(b.name)).map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
+                <option value="">— Select client —</option>
+                ${clients.map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
               </select>
             </div>
 
@@ -1422,7 +1099,6 @@ class Router {
               <label for="wo-status">Job Status</label>
               <select id="wo-status">
                 <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Pending</option>
-                <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
                 <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
               </select>
             </div>
@@ -1606,9 +1282,6 @@ class Router {
 
   renderClientDetail(client) {
     const content = document.getElementById('main-content');
-    const allDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    const clientDays = client.serviceDays || [];
-
     content.innerHTML = `
       <div class="wo-form">
         <div class="wo-bar">
@@ -1639,25 +1312,8 @@ class Router {
             </div>
 
             <div class="form-group">
-              <label class="form-label">Assigned Technician</label>
+              <label class="form-label">Preferred Technician</label>
               <input type="text" id="edit-client-tech" class="form-control" value="${escapeHtml(client.technician || '')}">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Route</label>
-              <input type="text" id="edit-client-route" class="form-control" value="${escapeHtml(client.route || '')}" placeholder="e.g. Route 1">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Service Days</label>
-              <div id="edit-client-days" style="display:flex; gap:6px; flex-wrap:wrap;">
-                ${allDays.map(day => `
-                  <label style="display:flex; align-items:center; gap:4px; padding:6px 10px; background:${clientDays.includes(day) ? '#2196F3' : '#e0e0e0'}; color:${clientDays.includes(day) ? '#fff' : '#333'}; border-radius:16px; font-size:13px; cursor:pointer;">
-                    <input type="checkbox" value="${day}" ${clientDays.includes(day) ? 'checked' : ''} style="display:none;" onchange="this.parentElement.style.background=this.checked?'#2196F3':'#e0e0e0'; this.parentElement.style.color=this.checked?'#fff':'#333';">
-                    ${day.substring(0, 3)}
-                  </label>
-                `).join('')}
-              </div>
             </div>
           </div>
         </div>
@@ -2017,6 +1673,31 @@ class WorkOrderManager {
 
 const workOrderManager = new WorkOrderManager();
 
+function rollOverPendingJobs() {
+  const todayStr = new Date().toISOString().split('T')[0];
+  let woUpdated = false;
+  const workorders = db.get('workorders', []);
+  
+  workorders.forEach(wo => {
+    if (wo.date && wo.date < todayStr && wo.status !== 'completed' && wo.status !== 'closed') {
+      wo.date = todayStr;
+      woUpdated = true;
+    }
+  });
+  if (woUpdated) db.set('workorders', workorders);
+
+  let roUpdated = false;
+  const repairOrders = db.get('repairOrders', []);
+  
+  repairOrders.forEach(ro => {
+    if (ro.date && ro.date < todayStr && ro.status !== 'completed' && ro.status !== 'Closed') {
+      ro.date = todayStr;
+      roUpdated = true;
+    }
+  });
+  if (roUpdated) db.set('repairOrders', repairOrders);
+}
+
 function migrateLegacyRepairData() {
   const legacyClientsRaw = window.localStorage.getItem('oasis_repairs_clients');
   const legacyOrdersRaw = window.localStorage.getItem('oasis_repairs_orders');
@@ -2044,7 +1725,7 @@ function migrateLegacyRepairData() {
     try {
       db.set('repairOrders', JSON.parse(legacyOrdersRaw));
     } catch (error) {
-      console.warn('Legacy repair orders migration failed', error);
+      console.warn('Legacy work orders migration failed', error);
     }
   }
 }
@@ -2084,206 +1765,6 @@ function cleanupTestClients() {
   }
 }
 
-// Route schedule import from XLSM file
-function importRouteSchedule() {
-  const content = document.getElementById('main-content');
-  content.innerHTML = `
-    <div class="wo-form">
-      <div class="wo-bar">
-        <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">\u2190 Back</button>
-        <div class="wo-bar-title">Import Route Sheet</div>
-      </div>
-      <div class="wo-sec">
-        <div class="wo-sec-hd">Upload Route Sheet (.xlsm / .xlsx)</div>
-        <div class="wo-sec-bd">
-          <p style="color:#666; font-size:13px; margin-bottom:12px;">Select your route schedule Excel file. The importer will read each ROUTE sheet tab and assign service days to matching clients.</p>
-          <p style="color:#666; font-size:13px; margin-bottom:12px;">Expected format: Each sheet named "ROUTE #" with Row 1 = tech name, Row 2 = day headers (MONDAY-SATURDAY), then alternating time/client rows.</p>
-          <div class="form-group">
-            <input type="file" id="route-file-input" accept=".xlsx,.xlsm,.xls" class="form-control" onchange="processRouteFile(this)">
-          </div>
-          <div id="route-import-status" style="margin-top:12px;"></div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function processRouteFile(input) {
-  const file = input.files[0];
-  if (!file) return;
-
-  const statusEl = document.getElementById('route-import-status');
-  statusEl.innerHTML = '<p style="color:#2196F3;">Reading file...</p>';
-
-  // Map route sheet tech names to app auth names
-  const TECH_NAME_MAP = {
-    'king': 'Kingsley',
-    'stephon': 'Elvin'
-  };
-  function normalizeTechName(name) {
-    const lower = (name || '').trim().toLowerCase();
-    return TECH_NAME_MAP[lower] || (name || '').trim();
-  }
-
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const data = new Uint8Array(e.target.result);
-      const wb = XLSX.read(data, { type: 'array' });
-      const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-      let routeEntries = [];
-
-      // Detect format: flat table (Day, Route #, Route Name, Client Name, Address) vs multi-tab
-      const firstSheet = wb.Sheets[wb.SheetNames[0]];
-      const firstRow = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' })[0] || [];
-      const headers = firstRow.map(h => String(h).toLowerCase().trim());
-      const isFlat = headers.includes('day') && headers.includes('client name');
-
-      if (isFlat) {
-        // Flat format: each row is one visit (day + tech + client + address)
-        const rows = XLSX.utils.sheet_to_json(firstSheet);
-        const clientMap = {};
-
-        rows.forEach(row => {
-          const day = (row['Day'] || '').trim();
-          const routeNum = String(row['Route #'] || '').trim();
-          const techRaw = (row['Route Name'] || '').trim();
-          const tech = normalizeTechName(techRaw);
-          const clientName = (row['Client Name'] || '').trim();
-          const address = (row['Address'] || '').trim();
-          if (!clientName || !day) return;
-
-          // Normalize day name
-          const normalDay = day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
-          const key = (tech + '|' + clientName + '|' + address).toUpperCase();
-
-          if (!clientMap[key]) {
-            clientMap[key] = {
-              tech: tech,
-              route: 'Route ' + routeNum,
-              name: clientName,
-              address: address,
-              days: []
-            };
-          }
-          if (!clientMap[key].days.includes(normalDay)) {
-            clientMap[key].days.push(normalDay);
-          }
-        });
-
-        // Sort days and build entries
-        Object.values(clientMap).forEach(entry => {
-          entry.days.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          routeEntries.push(entry);
-        });
-      } else {
-        // Multi-tab format: each sheet is a route
-        const techOverrides = {
-          'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
-          'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
-          'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
-        };
-
-        wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
-          const ws = wb.Sheets[sheetName];
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-          const routeKey = sheetName.trim();
-          const techName = techOverrides[routeKey] || normalizeTechName(routeKey.replace(/ROUTE\s*#?\d*\s*/i, ''));
-          const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
-
-          const clientMap = {};
-          for (let row = 2; row < rows.length; row++) {
-            const cells = rows[row] || [];
-            const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
-            if (!hasText) continue;
-            cells.forEach((cell, colIdx) => {
-              if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
-                const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
-                const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
-                const key = firstName.substring(0, 50).toUpperCase();
-                if (!clientMap[key]) clientMap[key] = { name: firstName, address: lines.join(' '), days: [] };
-                const day = days[colIdx];
-                if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
-              }
-            });
-          }
-
-          Object.values(clientMap).forEach(entry => {
-            entry.days.sort((a, b) => DAY_ORDER.map(d=>d.toUpperCase()).indexOf(a.toUpperCase()) - DAY_ORDER.map(d=>d.toUpperCase()).indexOf(b.toUpperCase()));
-            routeEntries.push({
-              tech: techName,
-              route: routeKey.replace('ROUTE ', 'Route ').trim(),
-              name: entry.name,
-              address: entry.address,
-              days: entry.days.map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
-            });
-          });
-        });
-      }
-
-      // Clear old serviceDays from all clients first
-      const clients = db.get('clients', []);
-      clients.forEach(c => { c.serviceDays = []; c.route = ''; });
-
-      let matched = 0, created = 0;
-
-      routeEntries.forEach(entry => {
-        // Match on name + address + tech to avoid collisions between same-name clients
-        const eName = entry.name.toLowerCase().trim();
-        const eAddr = entry.address.toLowerCase().trim();
-        const eTech = entry.tech.toLowerCase().trim();
-        let match = clients.find(c =>
-          c.name && c.name.toLowerCase().trim() === eName &&
-          c.address && c.address.toLowerCase().trim() === eAddr &&
-          c.technician && c.technician.toLowerCase().trim() === eTech
-        );
-
-        if (match) {
-          const existing = match.serviceDays || [];
-          entry.days.forEach(d => { if (!existing.includes(d)) existing.push(d); });
-          existing.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          match.serviceDays = existing;
-          match.route = entry.route;
-          matched++;
-        } else {
-          clients.push({
-            id: 'c_' + Math.random().toString(36).substr(2, 9),
-            name: entry.name,
-            address: entry.address,
-            contact: '',
-            technician: entry.tech,
-            route: entry.route,
-            serviceDays: entry.days
-          });
-          created++;
-        }
-      });
-
-      db.set('clients', clients);
-
-      // Count unique clients with schedule
-      const scheduled = clients.filter(c => c.serviceDays && c.serviceDays.length > 0).length;
-
-      statusEl.innerHTML = `
-        <div style="background:#e8f5e9; padding:12px; border-radius:8px;">
-          <p style="color:#2e7d32; font-weight:600; margin-bottom:8px;">Import Complete</p>
-          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} unique route entries processed</p>
-          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated</p>
-          <p style="color:#333; font-size:13px;">\u2795 ${created} new clients created</p>
-          <p style="color:#333; font-size:13px;">\ud83d\udcc5 ${scheduled} clients now have scheduled service days</p>
-          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.setClientView('byRoute'); router.renderClients();">View By Route</button>
-          <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="router.navigate('routes')">View Routes</button>
-        </div>
-      `;
-    } catch (err) {
-      statusEl.innerHTML = '<p style="color:#c62828;">Error reading file: ' + escapeHtml(err.message) + '</p>';
-      console.error('Route import error:', err);
-    }
-  };
-  reader.readAsArrayBuffer(file);
-}
-
 async function exportCompletedToExcel() {
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
@@ -2292,7 +1773,7 @@ async function exportCompletedToExcel() {
   const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
 
   if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
-    showToast('No completed chem sheets or repair orders to export');
+    showToast('No completed chem sheets or work orders to export');
     return;
   }
 
@@ -2413,7 +1894,7 @@ async function exportCompletedToExcel() {
       { header: 'Notes', key: 'notes', width: 40 }
     ];
 
-    const repairSheet = workbook.addWorksheet('Repair Orders');
+    const repairSheet = workbook.addWorksheet('Work Orders');
     repairSheet.columns = repairColumns;
     styleHeader(repairSheet, repairColumns.length);
 
@@ -2436,7 +1917,7 @@ async function exportCompletedToExcel() {
     });
 
     if (repairSheet.rowCount === 1) {
-      repairSheet.addRow({ client: 'No completed repair orders' });
+      repairSheet.addRow({ client: 'No completed work orders' });
     }
     formatBody(repairSheet);
 
@@ -2459,263 +1940,6 @@ async function exportCompletedToExcel() {
   }
 }
 
-
-async function downloadCompletedWorkOrders() {
-  const allRepair = getRepairOrders();
-  const completed = allRepair.filter(r =>
-    (r.status || '').toLowerCase() === 'completed' &&
-    r.assignedTo && (r.assignedTo === 'Jet' || r.assignedTo === 'Mark')
-  ).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-
-  if (completed.length === 0) {
-    showToast('No completed work orders from Jet or Mark to download');
-    return;
-  }
-
-  showToast('Generating Excel...');
-
-  try {
-    const wb = XLSX.utils.book_new();
-
-    const rows = completed.map(order => ({
-      'Date': order.date || '',
-      'Client': order.clientName || '',
-      'Address': order.address || '',
-      'Assigned To': order.assignedTo || '',
-      'Job Type': order.jobType || '',
-      'Status': order.status || '',
-      'Time In': order.timeIn || order.time || '',
-      'Time Out': order.timeOut || '',
-      'Labour Hours': order.labourHours || '',
-      'Materials': order.materials || '',
-      'Parts Summary': order.partsSummary || '',
-      'Work Summary': order.summary || '',
-      'Notes': order.notes || ''
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(rows);
-
-    ws['!cols'] = [
-      { wch: 12 }, { wch: 25 }, { wch: 35 }, { wch: 15 },
-      { wch: 20 }, { wch: 12 }, { wch: 10 }, { wch: 10 },
-      { wch: 12 }, { wch: 30 }, { wch: 40 }, { wch: 40 }, { wch: 40 }
-    ];
-
-    XLSX.utils.book_append_sheet(wb, ws, 'Completed Work Orders');
-
-    const filename = `OASIS_Work_Orders_${new Date().toISOString().split('T')[0]}.xlsx`;
-    XLSX.writeFile(wb, filename);
-
-    // Offer to clear downloaded work orders
-    if (confirm(`Downloaded ${completed.length} work orders.\n\nRemove these completed work orders from the app?`)) {
-      const remaining = allRepair.filter(r => {
-        const isCompleted = (r.status || '').toLowerCase() === 'completed';
-        const isJetMark = r.assignedTo && (r.assignedTo === 'Jet' || r.assignedTo === 'Mark');
-        return !(isCompleted && isJetMark);
-      });
-      saveRepairOrders(remaining);
-      showToast(`Removed ${completed.length} downloaded work orders`);
-    } else {
-      showToast(`Downloaded ${completed.length} completed work orders`);
-    }
-  } catch (error) {
-    console.error('Download failed:', error);
-    showToast('Download failed - check console');
-  }
-}
-
-
-async function downloadBulkChemSheets() {
-  const fieldTechs = ['Ace', 'Ariel', 'Donald', 'Elvin', 'Jermaine', 'Kadeem', 'Kingsley', 'Malik'];
-  const allChem = db.get('workorders', []);
-  const completed = allChem.filter(wo =>
-    (wo.status || '').toLowerCase() === 'completed' &&
-    wo.technician && fieldTechs.includes(wo.technician)
-  );
-
-  if (completed.length === 0) {
-    showToast('No completed chem sheets from field techs to download');
-    return;
-  }
-
-  showToast('Generating Chem Sheets Excel...');
-
-  try {
-    const wb = XLSX.utils.book_new();
-
-    // Group by client
-    const byClient = {};
-    completed.forEach(wo => {
-      const key = wo.clientName || wo.clientId || 'Unknown';
-      if (!byClient[key]) byClient[key] = { address: wo.address || '', visits: [] };
-      byClient[key].visits.push(wo);
-    });
-
-    // Sort clients alphabetically
-    const clientNames = Object.keys(byClient).sort((a, b) => a.localeCompare(b));
-
-    const readingLabels = [
-      { key: 'chlorine', label: 'Chlorine' },
-      { key: 'ph', label: 'pH' },
-      { key: 'alkalinity', label: 'Alkalinity' },
-      { key: 'calcium', label: 'Calcium' },
-      { key: 'cya', label: 'CYA' },
-      { key: 'salt', label: 'Salt' },
-      { key: 'temp', label: 'Temp' },
-      { key: 'tds', label: 'TDS' },
-      { key: 'phosphates', label: 'Phosphates' }
-    ];
-
-    const chemLabels = [
-      { key: 'tabs', label: 'Tabs' },
-      { key: 'shock', label: 'Shock' },
-      { key: 'muriaticAcid', label: 'Muriatic Acid' },
-      { key: 'sodaAsh', label: 'Soda Ash' },
-      { key: 'sodiumBicarb', label: 'Sodium Bicarb' },
-      { key: 'calcium', label: 'Calcium' },
-      { key: 'stabilizer', label: 'Stabilizer' },
-      { key: 'salt', label: 'Salt' },
-      { key: 'phosphateRemover', label: 'Phos Remover' },
-      { key: 'algaecide', label: 'Algaecide' }
-    ];
-
-    // Build a single summary sheet with all clients
-    // Each client gets a header row, then rows for readings/chemicals per visit date
-    const summaryRows = [];
-
-    clientNames.forEach(clientName => {
-      const data = byClient[clientName];
-      // Sort visits by date
-      const visits = data.visits.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
-
-      // Helper to sum numeric values from visit cells, parsing numbers from strings
-      const sumVisitValues = (values) => {
-        let total = 0;
-        let hasValue = false;
-        values.forEach(val => {
-          const num = parseFloat(String(val).replace(/[^0-9.\-]/g, ''));
-          if (!isNaN(num)) { total += num; hasValue = true; }
-        });
-        return hasValue ? total : '';
-      };
-
-      // Header row: Client | Address | Field | date columns | Total
-      const headerRow = ['Client', 'Address', 'Field'];
-      visits.forEach(v => {
-        const d = v.date || 'No Date';
-        headerRow.push(d);
-      });
-      headerRow.push('TOTAL');
-      summaryRows.push(headerRow);
-
-      // Total visits row
-      const visitsRow = [clientName, data.address, 'Total Visits'];
-      visits.forEach(() => visitsRow.push(''));
-      visitsRow.push(visits.length);
-      summaryRows.push(visitsRow);
-
-      // Technician row
-      const techRow = ['', '', 'Technician'];
-      visits.forEach(v => techRow.push(v.technician || ''));
-      techRow.push('');
-      summaryRows.push(techRow);
-
-      // Time In row
-      const timeInRow = ['', '', 'Time In'];
-      visits.forEach(v => timeInRow.push(v.timeIn || v.time || ''));
-      timeInRow.push('');
-      summaryRows.push(timeInRow);
-
-      // Time Out row
-      const timeOutRow = ['', '', 'Time Out'];
-      visits.forEach(v => timeOutRow.push(v.timeOut || ''));
-      timeOutRow.push('');
-      summaryRows.push(timeOutRow);
-
-      // Pool readings (no totals for readings - they are measurements not quantities)
-      readingLabels.forEach(rl => {
-        const row = ['', '', 'Pool ' + rl.label];
-        visits.forEach(v => row.push((v.readings && v.readings.pool && v.readings.pool[rl.key]) || ''));
-        row.push('');
-        summaryRows.push(row);
-      });
-
-      // Pool chemicals added (with totals)
-      chemLabels.forEach(cl => {
-        const row = ['', '', 'Pool ' + cl.label + ' Added'];
-        const vals = [];
-        visits.forEach(v => {
-          const val = (v.chemicalsAdded && v.chemicalsAdded.pool && v.chemicalsAdded.pool[cl.key]) || '';
-          vals.push(val);
-          row.push(val);
-        });
-        row.push(sumVisitValues(vals));
-        summaryRows.push(row);
-      });
-
-      // Spa readings (no totals)
-      readingLabels.forEach(rl => {
-        const row = ['', '', 'Spa ' + rl.label];
-        visits.forEach(v => row.push((v.readings && v.readings.spa && v.readings.spa[rl.key]) || ''));
-        row.push('');
-        summaryRows.push(row);
-      });
-
-      // Spa chemicals added (with totals)
-      chemLabels.forEach(cl => {
-        const row = ['', '', 'Spa ' + cl.label + ' Added'];
-        const vals = [];
-        visits.forEach(v => {
-          const val = (v.chemicalsAdded && v.chemicalsAdded.spa && v.chemicalsAdded.spa[cl.key]) || '';
-          vals.push(val);
-          row.push(val);
-        });
-        row.push(sumVisitValues(vals));
-        summaryRows.push(row);
-      });
-
-      // Notes row
-      const notesRow = ['', '', 'Notes'];
-      visits.forEach(v => notesRow.push(((v.workPerformed || '') + ' ' + (v.followUpNotes || v.notes || '')).trim()));
-      notesRow.push('');
-      summaryRows.push(notesRow);
-
-      // Blank separator row
-      summaryRows.push([]);
-    });
-
-    const ws = XLSX.utils.aoa_to_sheet(summaryRows);
-
-    // Set column widths
-    const maxCols = Math.max(...summaryRows.map(r => r.length));
-    const cols = [{ wch: 25 }, { wch: 35 }, { wch: 22 }];
-    for (let i = 3; i < maxCols; i++) cols.push({ wch: 14 });
-    ws['!cols'] = cols;
-
-    XLSX.utils.book_append_sheet(wb, ws, 'Chem Sheets');
-
-    const filename = `OASIS_Chem_Sheets_${new Date().toISOString().split('T')[0]}.xlsx`;
-    XLSX.writeFile(wb, filename);
-
-    // Offer to clear downloaded chem sheets
-    if (confirm(`Downloaded chem sheets for ${clientNames.length} clients.\n\nRemove these completed chem sheets from the app?`)) {
-      const allWO = db.get('workorders', []);
-      const remaining = allWO.filter(wo => {
-        const isCompleted = (wo.status || '').toLowerCase() === 'completed';
-        const isTech = wo.technician && fieldTechs.includes(wo.technician);
-        return !(isCompleted && isTech);
-      });
-      db.set('workorders', remaining);
-      showToast(`Removed ${completed.length} downloaded chem sheets`);
-    } else {
-      showToast(`Downloaded chem sheets for ${clientNames.length} clients`);
-    }
-  } catch (error) {
-    console.error('Chem sheet download failed:', error);
-    showToast('Download failed - check console');
-  }
-}
-
 function openMap(address) {
   if (!address) return;
   let query = address;
@@ -2732,9 +1956,6 @@ function saveClientDetails(clientId) {
   const address = document.getElementById('edit-client-address').value;
   const contact = document.getElementById('edit-client-contact').value;
   const tech = document.getElementById('edit-client-tech').value;
-  const route = document.getElementById('edit-client-route') ? document.getElementById('edit-client-route').value : '';
-  const dayCheckboxes = document.querySelectorAll('#edit-client-days input[type=checkbox]');
-  const serviceDays = Array.from(dayCheckboxes).filter(cb => cb.checked).map(cb => cb.value);
 
   if (!name) {
     alert('Name is required');
@@ -2744,7 +1965,7 @@ function saveClientDetails(clientId) {
   const clients = db.get('clients', []);
   const index = clients.findIndex(c => c.id === clientId);
   if (index >= 0) {
-    clients[index] = { ...clients[index], name, address, contact, technician: tech, route, serviceDays };
+    clients[index] = { ...clients[index], name, address, contact, technician: tech };
     db.set('clients', clients);
 
     // Also update any matching workorders
@@ -2791,288 +2012,320 @@ function initMasterSchedule() {
   if (db.get('masterScheduleLoaded')) return;
 
   const clients = [
-    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem" },
-    { name: "Jeey Bomford", address: "49 Mary Read Crescent", tech: "Kadeem" },
-    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem" },
-    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem" },
-    { name: "Gcpsl Sea View", address: "South Church Street", tech: "Kadeem" },
-    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem" },
-    { name: "Sunrise Phase 3", address: "Old Crewe Rd", tech: "Kadeem" },
-    { name: "Vivi Townhomes", address: "275 Fairbanks Rd", tech: "Kadeem" },
-    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin" },
-    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin" },
-    { name: "Caribbean Courts", address: "Bcqs, South Sound", tech: "Elvin" },
-    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin" },
-    { name: "Fin South Church Street", address: "Fin Strata", tech: "Elvin" },
-    { name: "Lakeland Villas #1", address: "Old Crewe Rd", tech: "Elvin" },
-    { name: "Point Of View", address: "South Sound", tech: "Elvin" },
-    { name: "South Palms #1", address: "Glen Eden Rd", tech: "Elvin" },
-    { name: "Southern Skies", address: "South Sound", tech: "Elvin" },
-    { name: "Correy Williams", address: "16 Cypress Point", tech: "Jermaine" },
-    { name: "Andy Albray", address: "17 The Deck House", tech: "Jermaine" },
-    { name: "Joanne Akdeniz", address: "42 Hoya Quay", tech: "Jermaine" },
-    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine" },
-    { name: "Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine" },
-    { name: "Mike Stroh", address: "64 Waterford Quay", tech: "Jermaine" },
-    { name: "Tim Bradley", address: "66 Baquarat Quay", tech: "Jermaine" },
-    { name: "Plum Mandalay", address: "Seven Mile", tech: "Jermaine" },
-    { name: "Ocean Pointe Villas", address: "West Bay", tech: "Jermaine" },
-    { name: "Snug Harbour Villas", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace" },
-    { name: "John Ferarri", address: "30 Orchid Drive", tech: "Ace" },
-    { name: "Gary Gibbs", address: "306 Yacht Club dr", tech: "Ace" },
-    { name: "Andrew Muir", address: "318 Yacht Drive", tech: "Ace" },
-    { name: "Scott Somerville", address: "40 Orchid Drive", tech: "Ace" },
-    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace" },
-    { name: "Vlad Aldea", address: "474 Yacht Club Dr", tech: "Ace" },
-    { name: "Abraham Burak", address: "Salt Creek", tech: "Ace" },
-    { name: "Sunset Point Condos", address: "North West Point Rd", tech: "Ace" },
-    { name: "Villa Mare", address: "Vista Del Mar", tech: "Ace" },
-    { name: "Jenny Frizzle", address: "302 Windswept Drive", tech: "Donald" },
-    { name: "Anthoney Reid", address: "88 Mallard Drive", tech: "Donald" },
-    { name: "Coral Bay Village", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Harbor Walk", address: "Grand Harbour", tech: "Donald" },
-    { name: "Indigo Bay", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Periwinkle", address: "Edgewater Way", tech: "Donald" },
-    { name: "Savannah Grand", address: "Savannah", tech: "Donald" },
-    { name: "South Shore", address: "Shamrock Rd", tech: "Donald" },
-    { name: "The Palms At Patricks", address: "Patricks Island", tech: "Donald" },
-    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley" },
-    { name: "One Canal Point", address: "Canal Point", tech: "Kingsley" },
-    { name: "Poinsettia", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "The Beachcomber", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel" },
-    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel" },
-    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel" },
-    { name: "Plymouth", address: "Canal Point Dr", tech: "Ariel" },
-    { name: "Glen Kennedy", address: "Salt Creek", tech: "Ariel" },
-    { name: "Mark Vandevelde", address: "Salt Creek", tech: "Ariel" },
-    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel" },
-    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik" },
-    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik" },
-    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik" },
-    { name: "Jason Butcher", address: "44 Grand Estates", tech: "Malik" },
-    { name: "Julie O'Hara", address: "56 Grand Estates", tech: "Malik" },
-    { name: "Mike Gibbs", address: "78 Grand Estates", tech: "Malik" },
-    { name: "Grapetree Condos", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "The Colonial Club", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem" },
-    { name: "Caribbean Paradise", address: "South Sound", tech: "Kadeem" },
-    { name: "L'Ambience", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Mystic Retreat", address: "John Greer Boulavard", tech: "Kadeem" },
-    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin" },
-    { name: "South Bay Estates", address: "Bel Air Dr", tech: "Elvin" },
-    { name: "Andy Marcher", address: "234 Drake Quay", tech: "Jermaine" },
-    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine" },
-    { name: "Dolce Vita", address: "Govenors Harbour", tech: "Jermaine" },
-    { name: "Amber Stewart", address: "Dolce Vita 4", tech: "Jermaine" },
-    { name: "Pleasant View", address: "West Bay", tech: "Jermaine" },
-    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace" },
-    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace" },
-    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace" },
-    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace" },
-    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace" },
-    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace" },
-    { name: "Charles Ebanks", address: "Bonnieview Av", tech: "Donald" },
-    { name: "One Canal Point Gym", address: "Canal Point", tech: "Kingsley" },
-    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik" },
-    { name: "Moon Bay", address: "Shamrock Rd", tech: "Malik" },
-    { name: "Cayman Coves", address: "South Church Street", tech: "Kadeem" },
-    { name: "Venetia", address: "South Sound", tech: "Kadeem" },
-    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin" },
-    { name: "Tim Dailyey", address: "North Webster Dr", tech: "Elvin" },
-    { name: "Nicholas Lynn", address: "Sandlewood Crescent", tech: "Elvin" },
-    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin" },
-    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin" },
-    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin" },
-    { name: "Riyaz Norrudin", address: "63 Langton Way", tech: "Elvin" },
-    { name: "Mangrove", address: "Bcqs", tech: "Elvin" },
-    { name: "Quentin Creegan", address: "Villa Aramone", tech: "Elvin" },
-    { name: "Jodie O'Mahony", address: "12 El Nathan", tech: "Jermaine" },
-    { name: "Charles Motsinger", address: "124 Hillard", tech: "Jermaine" },
-    { name: "Steve Daker", address: "33 Spurgeon Cr", tech: "Jermaine" },
-    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine" },
-    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine" },
-    { name: "Albert Schimdberger", address: "55 Elnathan Rd", tech: "Jermaine" },
-    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine" },
-    { name: "Blair Ebanks", address: "71 Spurgeon Crescent", tech: "Jermaine" },
-    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine" },
-    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine" },
-    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace" },
-    { name: "Mitchell Demeter", address: "19 Whirlaway Close", tech: "Ace" },
-    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace" },
-    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace" },
-    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace" },
-    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace" },
-    { name: "Coastal Escape", address: "Omega Bay", tech: "Ace" },
-    { name: "Inity Ridge", address: "Prospect Point Rd", tech: "Ace" },
-    { name: "Ocean Reach", address: "Old Crewe Rd", tech: "Ace" },
-    { name: "Scott Somerville", address: "Rum Point Rd", tech: "Donald" },
-    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald" },
-    { name: "67 On The Bay", address: "Queens Highway", tech: "Donald" },
-    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald" },
-    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald" },
-    { name: "Paradise Sur Mar", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Rip Kai", address: "Rum Point Drive", tech: "Donald" },
-    { name: "Sunrays", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley" },
-    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley" },
-    { name: "Regant Court", address: "Brittania", tech: "Kingsley" },
-    { name: "Solara Main", address: "Crystal Harbour", tech: "Kingsley" },
-    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel" },
-    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel" },
-    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel" },
-    { name: "Chad Horwitz", address: "49 Calico Quay", tech: "Ariel" },
-    { name: "Malcom Swift", address: "Miramar", tech: "Ariel" },
-    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Strata #70", address: "Boggy Sands rd", tech: "Ariel" },
-    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik" },
-    { name: "Debbie Ebanks", address: "Fischers Reef", tech: "Malik" },
-    { name: "John Corallo", address: "3A Seahven", tech: "Malik" },
-    { name: "Encompass", address: "3B Seahven", tech: "Malik" },
-    { name: "Joseph Hurlston", address: "42 Monumnet Rd", tech: "Malik" },
-    { name: "George McKenzie", address: "534 Rum Point Dr", tech: "Malik" },
-    { name: "Twin Palms", address: "Rum Point Dr", tech: "Malik" },
-    { name: "Bernie Bako", address: "#4 Venetia", tech: "Kadeem" },
-    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem" },
-    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem" },
-    { name: "Park View Courts", address: "Spruce Lane", tech: "Kadeem" },
-    { name: "The Bentley", address: "Crewe rd", tech: "Kadeem" },
-    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin" },
-    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin" },
-    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin" },
-    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin" },
-    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin" },
-    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin" },
-    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin" },
-    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin" },
-    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin" },
-    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine" },
-    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine" },
-    { name: "Nigel Daily", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine" },
-    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine" },
-    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine" },
-    { name: "Shoreway Townhomes", address: "Adonis Dr", tech: "Jermaine" },
-    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine" },
-    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine" },
-    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace" },
-    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace" },
-    { name: "Clive Harris", address: "516 Crighton Drive", tech: "Ace" },
-    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace" },
-    { name: "Ross Fortune", address: "90 Prince Charles", tech: "Ace" },
-    { name: "Simon Palmer", address: "Olivias Cove", tech: "Ace" },
-    { name: "Caroline Moran", address: "197 Bimini Dr", tech: "Donald" },
-    { name: "James Reeve", address: "215 Bimini Dr", tech: "Donald" },
-    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald" },
-    { name: "Sina Mirzale", address: "353 Bimini Dr", tech: "Donald" },
-    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald" },
-    { name: "Marlon Bispath", address: "519 Bimini Dr", tech: "Donald" },
-    { name: "Margaret Fantasia", address: "526 Bimini Dr", tech: "Donald" },
-    { name: "Kenny Rankin", address: "Grand Harbour", tech: "Donald" },
-    { name: "James Mendes", address: "106 Olea", tech: "Ariel" },
-    { name: "James O'Brien", address: "102 Olea", tech: "Ariel" },
-    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel" },
-    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel" },
-    { name: "Mr Holland", address: "107 Olea", tech: "Ariel" },
-    { name: "Nikki Harris", address: "213 olea", tech: "Ariel" },
-    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel" },
-    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel" },
-    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik" },
-    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik" },
-    { name: "Iman Shafiei", address: "53 Baquarat Quay", tech: "Malik" },
-    { name: "Enrique Tasende", address: "65 Baccarat Quay", tech: "Malik" },
-    { name: "David Wilson", address: "Boggy Sands", tech: "Malik" },
-    { name: "Nina Irani", address: "Casa Oasis", tech: "Malik" },
-    { name: "Sandy Lane Townhomes", address: "Boggy Sands Rd", tech: "Malik" },
-    { name: "Valencia Heights", address: "Strata #536", tech: "Kadeem" },
-    { name: "Jaime-Lee Eccles", address: "176 Conch Dr", tech: "Kadeem" },
-    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem" },
-    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem" },
-    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem" },
-    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem" },
-    { name: "Hilton Estates", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin" },
-    { name: "Britni Strong", address: "150 Parkway Dr", tech: "Elvin" },
-    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin" },
-    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd", tech: "Elvin" },
-    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin" },
-    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin" },
-    { name: "Saphire", address: "Jec, Nwp Rd", tech: "Elvin" },
-    { name: "The Sands", address: "Boggy Sand Rd", tech: "Elvin" },
-    { name: "Turtle Breeze", address: "Conch Point Rd", tech: "Elvin" },
-    { name: "Francois Du Toit", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine" },
-    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine" },
-    { name: "Johann Prinslo", address: "270 Jennifer Dr", tech: "Jermaine" },
-    { name: "Andre Slabbert", address: "7 Victoria Dr", tech: "Jermaine" },
-    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine" },
-    { name: "Palm Heights Residence", address: "Seven Mile Beach", tech: "Jermaine" },
-    { name: "Jean Mean", address: "211 Sea Spray Dr", tech: "Ace" },
-    { name: "Paul Rowan", address: "265 Sea Spray Dr", tech: "Ace" },
-    { name: "Charmaine Richter", address: "40 Natures Circle", tech: "Ace" },
-    { name: "Rory Andrews", address: "44 Country Road", tech: "Ace" },
-    { name: "Walker Romanica", address: "79 Riley Circle", tech: "Ace" },
-    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace" },
-    { name: "Grand Palmyra", address: "Seven Mile Beach", tech: "Ace" },
-    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace" },
-    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald" },
-    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald" },
-    { name: "Reg Williams", address: "Cliff House", tech: "Donald" },
-    { name: "Gypsy", address: "1514 Rum Point Dr", tech: "Donald" },
-    { name: "Kai Vista", address: "Rum Point Dr", tech: "Donald" },
-    { name: "Ocean Vista", address: "Rum Point", tech: "Donald" },
-    { name: "Stefan Marenzi", address: "Water Cay Rd", tech: "Donald" },
-    { name: "Bella Rocca", address: "Queens Highway", tech: "Donald" },
-    { name: "Sea 2 Inity", address: "Kiabo", tech: "Donald" },
-    { name: "Guy Manning", address: "Diamonds Edge", tech: "Kingsley" },
-    { name: "Kent Nickerson", address: "Salt Creek", tech: "Kingsley" },
-    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel" },
-    { name: "Suzanne Correy", address: "394 Canal Point Rd", tech: "Ariel" },
-    { name: "November Capitol", address: "One Canal Point", tech: "Ariel" },
-    { name: "Safe Harbor", address: "West Bay", tech: "Ariel" },
-    { name: "Bert Thacker", address: "West Bay", tech: "Ariel" },
-    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik" },
-    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik" },
-    { name: "Philip Smyres", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Brandon Caruana", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik" },
-    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik" },
-    { name: "Phillip Cadien", address: "312 Cypres Point", tech: "Malik" }
+    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Rem", address: "49 Mary Read Crescent, Jeey Bomford", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Gcpsl", address: "Sea View, South Church Street, (Aw)", tech: "Kadeem", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Rem", address: "Sunrise Phase 3, Old Crewe Rd", tech: "Kadeem", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Jec", address: "Vivi Townhomes, 275 Fairbanks Rd", tech: "Kadeem", serviceDays: ["Friday", "Monday"] },
+    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin", serviceDays: ["Friday"] },
+    { name: "Bcqs", address: "Caribbean Courts, (Th)", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin", serviceDays: ["Friday"] },
+    { name: "Fin Strata", address: "Fin South Church Street", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Lakeland Villas #1, Old Crewe Rd, (Rw)", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Gcpsl", address: "Point Of View, South Sound", tech: "Elvin", serviceDays: ["Friday"] },
+    { name: "Fin Strata", address: "South Church Street, Gear, #25/35 Hot tub service", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Avata", address: "South Palms #1, Glen Eden Rd", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Southern Skies, South Sound, (Rw)", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Correy Williams", address: "16 Cypress Point, Crystal Harbour", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Andy Albray", address: "17 The Deck House, Ritz Carlton Dr", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Joanne Akdeniz", address: "42 Hoya Quay, Crystal Harbor", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "236 Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Mike Stroh", address: "64 Waterford Quay, Safe Haven", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Tim Bradley", address: "66 Baquarat Quay, Safe Haven", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Plum", address: "Mandalay, Seven Mile", tech: "Jermaine", serviceDays: ["Friday", "Monday"] },
+    { name: "Jec", address: "Ocean Pointe Villas", tech: "Jermaine", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Snug Harbour Villas, Sung Harbour, (Rw)", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "John Ferarri", address: "30 Orchid Drive, Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Gary Gibbs", address: "306 Yacht Club dr., Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Andrew Muir", address: "318 Yacht Drive, Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Scott Somerville", address: "40 Orchid Drive, Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Vlad Aldea", address: "474 Yacht Club Dr., Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Abraham Burak", address: "Salt Creek, Yacht Drive", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Jec", address: "Sunset Point Condos, North West Point Rd", tech: "Ace", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Cph Limited", address: "Villa Mare, Vista Del Mar", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Jenny Frizzle", address: "302 Windswept Drive, Patricks Island", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Anthoney Reid", address: "88 Mallard Drive, Patricks Island", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Gcpsl", address: "Coral Bay Village", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Harbor walk Strata", address: "Harbor Walk", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Bcqs", address: "Indigo Bay, Shamrock Rd", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Kuavo", address: "Periwinkle: Pool/Spa, Edgewater Way Full Service", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Savannah Grand", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Kuavo", address: "South Shore, Shamrock Rd", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "The Palms At, Patricks Island, (Rw)", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley", serviceDays: ["Friday"] },
+    { name: "Kuavo", address: "One Canal Point, Gym Pool", tech: "Kingsley", serviceDays: ["Friday"] },
+    { name: "Kuavo", address: "One Canal Point, Main Pool And Spa", tech: "Kingsley", serviceDays: ["Friday", "Monday"] },
+    { name: "Kuavo", address: "Poinsettia", tech: "Kingsley", serviceDays: ["Friday", "Monday", "Wednesday"] },
+    { name: "Emily Evans", address: "The Beachcomber", tech: "Kingsley", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel", serviceDays: ["Friday", "Monday", "Saturday", "Thursday", "Tuesday", "Wednesday"] },
+    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Bcqs", address: "Plymouth, Canal Point Dr", tech: "Ariel", serviceDays: ["Friday", "Monday"] },
+    { name: "Glen Kennedy", address: "Salt Creek, Yatch Club", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Mark Vandevelde", address: "Salt Creek, Yatch Club", tech: "Ariel", serviceDays: ["Friday", "Wednesday"] },
+    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel", serviceDays: ["Friday", "Monday", "Wednesday"] },
+    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Jason Butcher", address: "44 Grand Estates, Grand Harbour", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Julie O'Hara", address: "56 Grand Estates Grand Harbour", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Mike Gibbs", address: "78 Grand Estates- Grand Harbour", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Kuavo", address: "Grapetree Condos", tech: "Malik", serviceDays: ["Friday", "Monday"] },
+    { name: "The Colonial Club", address: "The Colonial Club", tech: "Malik", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem", serviceDays: ["Monday"] },
+    { name: "Bcqs", address: "Caribbean Paradise - South Sound, (Rw)", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Bcqs", address: "L'Ambience #1, Fairbanks Rd, (Rw)", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Bcqs", address: "L'Ambience #2, Fairbanks Rd, (Rw)", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 1, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 2, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 3, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 4, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "South Bay Estates, Bel Air Dr", tech: "Elvin", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "South Bay Residence, Bel Air Dr", tech: "Elvin", serviceDays: ["Monday"] },
+    { name: "Andy Marcher", address: "234 Drake Quay, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Csh Design Studios", address: "Dolce Vita 1, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Csh Design Studios", address: "Dolce Vita 2, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Csh Design Studios", address: "Dolce Vita 3, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Amber Stewart", address: "Dolce Vita 4, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "Pleasant View Appartments", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Charles Ebanks", address: "65 Bonnieview Av, Patricks Island", tech: "Donald", serviceDays: ["Monday"] },
+    { name: "Gcpsl", address: "Coral Bay Village, Shamrock Rd", tech: "Donald", serviceDays: ["Monday"] },
+    { name: "Bcqs", address: "Olea , Minerva way", tech: "Kingsley", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "One Canal Point, Gym Pool Chem Check", tech: "Kingsley", serviceDays: ["Monday"] },
+    { name: "Kuavo - Vernon Flynn", address: "15 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Manuale Lupu", address: "9 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Denise Hooks", address: "12 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Barry Yetton", address: "13 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Jozef Vogel", address: "10 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Sam Shalaby", address: "11 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - James Kattan", address: "5 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Stacey Ottenbreit", address: "7 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Wesley Cullum", address: "8 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Gcpsl", address: "1124 Rum Point Dr, North Pointe", tech: "Malik", serviceDays: ["Monday"] },
+    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "Moon Bay, Shamrock Rd", tech: "Malik", serviceDays: ["Monday", "Thursday"] },
+    { name: "Olea Main Pool", address: "Minerva way", tech: "Kingsley", serviceDays: ["Saturday", "Thursday", "Tuesday", "Wednesday"] },
+    { name: "Jec", address: "Cayman Coves, South Church Street", tech: "Kadeem", serviceDays: ["Thursday", "Tuesday"] },
+    { name: "Bcqs", address: "Venetia, South Sound", tech: "Kadeem", serviceDays: ["Thursday"] },
+    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Tim Dailyey", address: "177/179 North Webster Dr", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Nicholas Lynn", address: "28 Sandlewood Crescent", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Riyaz Norrudin", address: "63 Langton Way, The Lakes", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Bcqs", address: "Mangrove #1, (Rw)", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Bcqs", address: "Mangrove #2, (Rw)", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Quentin Creegan", address: "Villa Aramone 472 South Sound Rd", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Jodie O'Mahony", address: "12 El Nathan - Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Charles Motsinger", address: "124 Hillard, High Lands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Steve Daker", address: "33 Spurgeon Cr., Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Albert Schimdberger", address: "55 Elnathan Rd - Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Blair Ebanks", address: "71 Spurgeon Crescent - Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Mitchell Demeter", address: "19 Whirlaway Close, Patricks Island", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Avata", address: "Coastal Escape - Omega Bay Estates", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Fin Strata", address: "Inity Ridge - Prospect Point Rd, Angus Davison", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Kuavo", address: "Ocean Reach., Old Crewe Rd", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Scott Somerville", address: "2078 Rum Point Rd.", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Bcqs", address: "67 On The Bay, Queens Highway, Michael Baulk", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Cph Limited", address: "Paradise Sur Mar, Sand Cay Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Gcpsl", address: "Rip Kai, Rum Point Drive", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Gcpsl", address: "Sunrays, Sand Cay Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley", serviceDays: ["Thursday"] },
+    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley", serviceDays: ["Thursday"] },
+    { name: "Jec", address: "Regant Court, Brittania", tech: "Kingsley", serviceDays: ["Thursday", "Tuesday"] },
+    { name: "Jec", address: "Solara Main Pool / Spa", tech: "Kingsley", serviceDays: ["Thursday", "Tuesday"] },
+    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Chad Horwitz", address: "49 Calico Quay, Canal Point", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Rick Gorter", address: "70 Shoreview Point", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Malcom Swift", address: "Miramar Vista Del Mar - Yatch Club", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Strata #70", address: "171 Boggy Sands rd", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Debbie Ebanks", address: "Fischers Reef 1482 Rum Point Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "John Corallo", address: "3A Seahven, Roxborough Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Encompass", address: "3B Seahven, Roxborough Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Joseph Hurlston", address: "42 Monumnet Rd.", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "George McKenzie", address: "534 Rum Point Dr.", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Gcpsl", address: "Twin Palms, Rum Point Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Bernie Bako", address: "#4 Venetia.", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Park View Courts, Phase 2, Spruce Lane", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "The Bentley Crewe rd", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Venetia - South Sound", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Gcpsl", address: "Point Of View, Property", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Nigel Daily", address: "183 Andrew Drive", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Shoreway Townhomes, Adonis Dr, (Mb)", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Snug Harbour Villas - Sung Harbour, (Rw)", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Clive Harris", address: "516 Crighton Drive, Crystal Harbour", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Gcpsl", address: "54 Crighton Dr, Crystal Harbor, Mala Malde", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Ross Fortune", address: "90 Prince Charles-Govenors Harbour.", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Marcia Milgate", address: "95 Prince Charles Quay", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Simon Palmer", address: "Olivias Cove, Govenors Harbour", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Caroline Moran", address: "197 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "James Reeve", address: "215 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Sina Mirzale", address: "353 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Marlon Bispath", address: "519 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Margaret Fantasia", address: "526 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Kenny Rankin", address: "Cascade Drive", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "James Mendes", address: "106 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "James O'Brien", address: "102 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Mr Holland", address: "107 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Nikki Harris", address: "213 olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Scott Somerville", address: "40 Dunlop Dr", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Iman Shafiei", address: "53 Baquarat Quay, Safe Haven", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Enrique Tasende", address: "65 Baccarat Quay, Safe", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "David Wilson", address: "Boggy Sands", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Nina Irani", address: "Casa Oasis, Boggy Sands", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Boggy Sands Rd", address: "Sandy Lane Townhomes", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Strata #536", address: "Valencia Heights", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "172 Vienna Circle", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Jaime-Lee Eccles", address: "176 Conch Dr, The Boulevard", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "Hilton Estates #1 - Fairbanks Rd", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "Hilton Estates #2 - Fairbanks Rd", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Britni Strong", address: "150 Parkway Dr.", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd.", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "Saphire, Nwp Rd", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "The Sands, Boggy Sand Rd", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Turtle Breeze, Conch Point Rd", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Francois Du Toit", address: "115 Jennifer Drive, Snug Harbour", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Jim Owen", address: "229 Andrew Dr, Sung Harbour", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Johann Prinslo", address: "270 Jennifer Dr.", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Andre Slabbert", address: "7 Victoria Dr., Snug Harbour.", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Peter Goddard", address: "Brittania Kings Court", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "Palm Heights Residence, (Rw)", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Jean Mean", address: "211 Sea Spray Dr.", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Paul Rowan", address: "265 Sea Spray Dr.", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Charmaine Richter", address: "40 Natures Circle, Beach Bay", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Rory Andrews", address: "44 Country Road, Savannah", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Walker Romanica", address: "79 Riley Circle, Newlands", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Kuavo", address: "Grand Palmyra", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Reg Williams", address: "Cliff House", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Gypsy 1514 Rum Point Dr", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Kai Vista, Rum Point Dr", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Ocean Vista Strata", address: "Ocean Vista", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Stefan Marenzi", address: "Old Danube, 316 Water Cay Rd", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Queens Highway, Bella Rocca", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Sea 2 Inity, Kiabo,", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Guy Manning", address: "Diamonds Edge, Safe Haven", tech: "Kingsley", serviceDays: ["Wednesday"] },
+    { name: "Kuavo", address: "One Canal Point, Main Pool And Spa - Chem Check", tech: "Kingsley", serviceDays: ["Wednesday"] },
+    { name: "Kent Nickerson", address: "Yatch Club., Salt Creek", tech: "Kingsley", serviceDays: ["Wednesday"] },
+    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Suzanne Correy", address: "394 Canal Point Rd.", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Kuavo - November Capitol", address: "16 One Canal Point", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Safe Harbor strata #48", address: "Safe Harbor Condos", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Bert Thacker", address: "West Bay", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "107 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "109 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "123 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Philip Smyres", address: "#7 Conch Point Villas", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Brandon Caruana", address: "#9 Conch Point Villas", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl Phillip Cadien", address: "312 Cypres Point", tech: "Malik", serviceDays: ["Wednesday"] },
   ];
+  const existingClients = db.get('clients', []);
+  const mergedClients = [...existingClients];
 
-  // Map to store unique clients by name
-  const uniqueClients = {};
   clients.forEach(c => {
-    if (!uniqueClients[c.name]) {
-      uniqueClients[c.name] = {
+    const exists = mergedClients.some(
+      existing => existing.name === c.name && existing.technician === c.tech
+    );
+    if (!exists) {
+      mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
         name: c.name,
         address: c.address,
-        technician: c.tech
-      };
+        technician: c.tech,
+        serviceDays: c.serviceDays
+      });
+    } else {
+      // Update serviceDays if client exists but is missing them
+      const existing = mergedClients.find(e => e.name === c.name && e.technician === c.tech);
+      if (existing && (!existing.serviceDays || existing.serviceDays.length === 0)) {
+        existing.serviceDays = c.serviceDays;
+      }
     }
   });
 
-  const clientArray = Object.values(uniqueClients);
-  db.set('clients', clientArray);
-
-  // Generate pending workorders for each client assigned to their tech
-  const workorders = clientArray.map(c => ({
-    id: `wo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-    clientId: c.id,
-    clientName: c.name,
-    address: c.address,
-    technician: c.technician,
-    date: new Date().toISOString().split('T')[0],
-    status: 'pending',
-    readings: { pool: defaultChemReadings(), spa: defaultChemReadings() },
-    chemicalsAdded: { pool: defaultChemicalAdditions(), spa: defaultChemicalAdditions() },
-    photos: []
-  }));
-
-  db.set('workorders', workorders);
+  db.set('clients', mergedClients);
   db.set('masterScheduleLoaded', true);
 }
 
@@ -3092,15 +2345,14 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Start Firestore real-time sync
-  db.startRealtimeSync();
-
   // Always force login screen on startup
   auth.logout();
 
   cleanupTestClients();
+  db.set('masterScheduleLoaded', false); // Force reload with updated route data
   initMasterSchedule();
   migrateLegacyRepairData();
+  rollOverPendingJobs();
   populateLoginTechOptions();
 
   // Android Back Button Handling
@@ -3393,13 +2645,11 @@ function saveWorkOrderForm(orderId) {
   }
 
   order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
-  if (order.status !== 'completed') {
-    showToast('Please set status to Completed before saving');
-    return;
-  }
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
-  showToast('Completed chem sheet saved');
+  showToast(order.status === 'completed'
+    ? 'Completed chem sheet saved for admin export'
+    : 'Chem sheet saved');
 }
 
 function shareReport(orderId) {
@@ -3409,11 +2659,6 @@ function shareReport(orderId) {
     return;
   }
 
-  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
-  if (order.status !== 'completed') {
-    showToast('Please set status to Completed before sharing');
-    return;
-  }
   workOrderManager.saveOrder(order);
   workOrderManager.generateReport(order);
 }
@@ -3436,26 +2681,30 @@ function renderRepairOrdersList(statusFilter = 'all') {
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  let orders = allOrders;
+  let orders = (currentUser && currentUser.role === 'admin')
+    ? allOrders
+    : allOrders.filter(o => o.assignedTo === currentUser.name);
 
-  if (statusFilter === 'completed') {
-    orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
-  } else if (statusFilter === 'pending') {
-    orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
+  if (isAdmin) {
+    if (statusFilter === 'completed') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+    } else if (statusFilter === 'pending') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
+    }
   }
 
   if (!orders.length) {
-    const emptyTitle = statusFilter === 'completed'
-      ? 'No completed repair orders'
-      : statusFilter === 'pending'
-        ? 'No open or pending repair orders'
+    const emptyTitle = isAdmin && statusFilter === 'completed'
+      ? 'No completed work orders'
+      : isAdmin && statusFilter === 'pending'
+        ? 'No pending or open work orders'
         : 'No repair work orders';
 
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
         <div class="empty-title">${emptyTitle}</div>
-        <div class="empty-subtitle">Try a different filter or create a repair order</div>
+        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a work order' : 'Create one to manage service jobs in the same app'}</div>
       </div>
     `;
   }
@@ -3464,8 +2713,8 @@ function renderRepairOrdersList(statusFilter = 'all') {
     <div class="job-card" style="margin-bottom:12px;">
       <div class="job-card-header">
         <div>
-          <div class="job-card-title">${escapeHtml(order.clientName || 'Repair Job')}</div>
-          <div class="job-card-customer">${escapeHtml(order.jobType || 'General Repair')}</div>
+          <div class="job-card-title">${escapeHtml(order.clientName || 'Work Order')}</div>
+          <div class="job-card-customer">${escapeHtml(order.jobType || 'Work Order')}</div>
           <div class="job-meta">
             <div class="job-meta-item">📅 ${escapeHtml(order.date || '')}</div>
             <div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div>
@@ -3498,7 +2747,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     time: '',
     timeIn: '',
     timeOut: '',
-    assignedTo: '',
+    assignedTo: auth.getCurrentUser()?.name || '',
     status: 'open',
     jobType: '',
     summary: '',
@@ -3519,7 +2768,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     <div class="wo-form">
       <div class="wo-bar">
         <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
-        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Repair Order'}</div>
+        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Work Order'}</div>
         <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
       </div>
 
@@ -3529,31 +2778,12 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
           <span class="wo-chev">▼</span>
         </div>
         <div class="wo-sec-bd" data-active-repair-id="${activeOrderId}">
-          <div class="form-row" style="position:relative;">
-            <label for="repair-client-search">Client</label>
-            <input type="hidden" id="repair-client" value="${escapeHtml(order.clientId || presetClientId || '')}">
-            <input type="text" id="repair-client-search" class="form-control" placeholder="Type to search clients..." value="${escapeHtml(order.clientName || '')}" autocomplete="off" oninput="filterRepairClientDropdown(this.value)" onfocus="filterRepairClientDropdown(this.value)">
-            <div id="repair-client-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:100; max-height:200px; overflow-y:auto; background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
-          </div>
-
-          <div style="margin-bottom:10px;">
-            <button type="button" class="btn btn-secondary btn-sm" onclick="toggleNewClientForm()">+ New Client</button>
-          </div>
-          <div id="new-client-form" style="display:none; background:#f5f5f5; padding:12px; border-radius:8px; margin-bottom:12px; border:1px solid #e0e0e0;">
-            <div style="font-weight:600; font-size:14px; margin-bottom:8px;">Add New Client</div>
-            <div class="form-row">
-              <label for="new-client-name">Client Name *</label>
-              <input type="text" id="new-client-name" class="form-control" placeholder="Client name">
-            </div>
-            <div class="form-row">
-              <label for="new-client-address">Address *</label>
-              <input type="text" id="new-client-address" class="form-control" placeholder="Service address">
-            </div>
-            <div class="form-row">
-              <label for="new-client-contact">Contact / Email</label>
-              <input type="text" id="new-client-contact" class="form-control" placeholder="Optional">
-            </div>
-            <button type="button" class="btn btn-primary btn-sm" onclick="saveNewClientFromWO()" style="width:100%; margin-top:4px;">Save & Use This Client</button>
+          <div class="form-row">
+            <label for="repair-client">Client</label>
+            <select id="repair-client" onchange="onRepairClientChange()">
+              <option value="">— Select client —</option>
+              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+            </select>
           </div>
 
           <div class="form-row">
@@ -3569,7 +2799,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <div class="wo-fld">
               <div class="wo-fld-lbl">Assigned Tech</div>
               <select id="repair-tech" class="wo-fld-inp">
-                <option value="" ${!order.assignedTo ? 'selected' : ''}>Unassigned</option>
                 ${Object.entries(auth.users)
                   .sort((a, b) => a[1].name.localeCompare(b[1].name))
                   .map(([id, user]) => `<option value="${user.name}" ${user.name === (order.assignedTo || '') ? 'selected' : ''}>${user.name}</option>`).join('')}
@@ -3592,13 +2821,11 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
           </div>
 
-
           <div class="form-row">
             <label for="repair-status">Status</label>
             <select id="repair-status">
               <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
               <option value="in-progress" ${order.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
-              <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Pending</option>
               <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
             </select>
           </div>
@@ -3654,112 +2881,16 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 }
 
 function onRepairClientChange() {
-  const hiddenInput = document.getElementById('repair-client');
-  const searchInput = document.getElementById('repair-client-search');
+  const select = document.getElementById('repair-client');
   const address = document.getElementById('repair-address');
   const title = document.getElementById('repair-bar-title');
-  if (!hiddenInput || !address) return;
+  if (!select || !address) return;
 
-  const client = db.get('clients', []).find(item => item.id === hiddenInput.value);
+  const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     address.value = client.address || '';
-    if (searchInput) searchInput.value = client.name || '';
-    if (title) title.textContent = client.name || 'Repair Order';
+    if (title) title.textContent = client.name || 'Work Order';
   }
-}
-
-
-
-function toggleNewClientForm() {
-  const form = document.getElementById('new-client-form');
-  if (!form) return;
-  form.style.display = form.style.display === 'none' ? 'block' : 'none';
-}
-
-function saveNewClientFromWO() {
-  const name = (document.getElementById('new-client-name')?.value || '').trim();
-  const address = (document.getElementById('new-client-address')?.value || '').trim();
-  const contact = (document.getElementById('new-client-contact')?.value || '').trim();
-
-  if (!name) {
-    showToast('Client name is required');
-    return;
-  }
-  if (!address) {
-    showToast('Address is required');
-    return;
-  }
-
-  const clients = db.get('clients', []);
-  const newClient = {
-    id: 'c' + Date.now(),
-    name: name,
-    address: address,
-    contact: contact,
-    technician: '',
-    route: '',
-    serviceDays: []
-  };
-
-  clients.push(newClient);
-  db.set('clients', clients);
-
-  // Auto-select the new client in the work order form
-  const hiddenInput = document.getElementById('repair-client');
-  const searchInput = document.getElementById('repair-client-search');
-  const addressField = document.getElementById('repair-address');
-  const title = document.getElementById('repair-bar-title');
-
-  if (hiddenInput) hiddenInput.value = newClient.id;
-  if (searchInput) searchInput.value = newClient.name;
-  if (addressField) addressField.value = newClient.address;
-  if (title) title.textContent = newClient.name;
-
-  // Hide the new client form and clear fields
-  const form = document.getElementById('new-client-form');
-  if (form) form.style.display = 'none';
-  if (document.getElementById('new-client-name')) document.getElementById('new-client-name').value = '';
-  if (document.getElementById('new-client-address')) document.getElementById('new-client-address').value = '';
-  if (document.getElementById('new-client-contact')) document.getElementById('new-client-contact').value = '';
-
-  showToast(`Client "${newClient.name}" added and selected`);
-}
-
-function filterRepairClientDropdown(query) {
-  const dropdown = document.getElementById('repair-client-dropdown');
-  if (!dropdown) return;
-  const clients = [...db.get('clients', [])].sort((a, b) => a.name.localeCompare(b.name));
-  const q = (query || '').toLowerCase();
-  const filtered = q ? clients.filter(c => c.name.toLowerCase().includes(q) || (c.address || '').toLowerCase().includes(q)) : clients;
-
-  if (filtered.length === 0) {
-    dropdown.innerHTML = '<div style="padding:10px 14px;color:#999;font-size:13px;">No clients found</div>';
-  } else {
-    dropdown.innerHTML = filtered.map(c => `
-      <div style="padding:10px 14px;cursor:pointer;font-size:14px;border-bottom:1px solid #f0f0f0;" onmousedown="selectRepairClient('${escapeHtml(c.id)}','${escapeHtml(c.name)}')">${escapeHtml(c.name)}<span style="display:block;font-size:11px;color:#888;">${escapeHtml(c.address || '')}</span></div>
-    `).join('');
-  }
-  dropdown.style.display = 'block';
-
-  setTimeout(() => {
-    const searchInput = document.getElementById('repair-client-search');
-    if (searchInput && !searchInput._blurBound) {
-      searchInput._blurBound = true;
-      searchInput.addEventListener('blur', () => {
-        setTimeout(() => { if (dropdown) dropdown.style.display = 'none'; }, 200);
-      });
-    }
-  }, 0);
-}
-
-function selectRepairClient(clientId, clientName) {
-  const hiddenInput = document.getElementById('repair-client');
-  const searchInput = document.getElementById('repair-client-search');
-  const dropdown = document.getElementById('repair-client-dropdown');
-  if (hiddenInput) hiddenInput.value = clientId;
-  if (searchInput) searchInput.value = clientName;
-  if (dropdown) dropdown.style.display = 'none';
-  onRepairClientChange();
 }
 
 function collectRepairOrderFromForm(orderId = '') {
@@ -3840,8 +2971,9 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  const statusLabels = { completed: 'Completed', pending: 'Pending', 'in-progress': 'In Progress', open: 'Open' };
-  showToast((statusLabels[order.status] || 'Work') + ' order saved');
+  showToast(order.status === 'completed'
+    ? 'Completed work order saved for admin export'
+    : 'Work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -4078,7 +3210,7 @@ function deleteRepairOrder(orderId) {
   }
   if (!confirm('Delete this repair work order?')) return;
   saveRepairOrders(getRepairOrders().filter(order => order.id !== orderId));
-  showToast('Repair work order deleted');
+  showToast('Work order deleted');
   router.renderWorkOrders();
 }
 
@@ -4362,7 +3494,7 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
           <div class="form-group">
             <label class="form-label">Client *</label>
             <select id="est-client" class="form-control" onchange="onEstimateClientChange()">
-              ${[...clients].sort((a, b) => a.name.localeCompare(b.name)).map(client => `<option value="${escapeHtml(client.id)}" ${client.id === selectedClientId ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === selectedClientId ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
             </select>
           </div>
 
@@ -5370,7 +4502,7 @@ async function shareFileByEmail(base64Data, filename, contentType = 'application
 async function exportRepairToExcel(orderId) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) {
-    showToast('Repair work order not found');
+    showToast('Work order not found');
     return;
   }
 
@@ -5704,7 +4836,7 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
   try {
     const order = collectRepairOrderFromForm(orderId);
     if (!order) {
-      showToast('Repair work order not found');
+      showToast('Work order not found');
       return;
     }
 
@@ -5753,7 +4885,7 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
 function removeRepairPhoto(orderId, slotIndex) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) {
-    showToast('Repair work order not found');
+    showToast('Work order not found');
     return;
   }
 
@@ -5822,206 +4954,6 @@ function cleanupTestClients() {
   }
 }
 
-// Route schedule import from XLSM file
-function importRouteSchedule() {
-  const content = document.getElementById('main-content');
-  content.innerHTML = `
-    <div class="wo-form">
-      <div class="wo-bar">
-        <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">\u2190 Back</button>
-        <div class="wo-bar-title">Import Route Sheet</div>
-      </div>
-      <div class="wo-sec">
-        <div class="wo-sec-hd">Upload Route Sheet (.xlsm / .xlsx)</div>
-        <div class="wo-sec-bd">
-          <p style="color:#666; font-size:13px; margin-bottom:12px;">Select your route schedule Excel file. The importer will read each ROUTE sheet tab and assign service days to matching clients.</p>
-          <p style="color:#666; font-size:13px; margin-bottom:12px;">Expected format: Each sheet named "ROUTE #" with Row 1 = tech name, Row 2 = day headers (MONDAY-SATURDAY), then alternating time/client rows.</p>
-          <div class="form-group">
-            <input type="file" id="route-file-input" accept=".xlsx,.xlsm,.xls" class="form-control" onchange="processRouteFile(this)">
-          </div>
-          <div id="route-import-status" style="margin-top:12px;"></div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function processRouteFile(input) {
-  const file = input.files[0];
-  if (!file) return;
-
-  const statusEl = document.getElementById('route-import-status');
-  statusEl.innerHTML = '<p style="color:#2196F3;">Reading file...</p>';
-
-  // Map route sheet tech names to app auth names
-  const TECH_NAME_MAP = {
-    'king': 'Kingsley',
-    'stephon': 'Elvin'
-  };
-  function normalizeTechName(name) {
-    const lower = (name || '').trim().toLowerCase();
-    return TECH_NAME_MAP[lower] || (name || '').trim();
-  }
-
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const data = new Uint8Array(e.target.result);
-      const wb = XLSX.read(data, { type: 'array' });
-      const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-      let routeEntries = [];
-
-      // Detect format: flat table (Day, Route #, Route Name, Client Name, Address) vs multi-tab
-      const firstSheet = wb.Sheets[wb.SheetNames[0]];
-      const firstRow = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' })[0] || [];
-      const headers = firstRow.map(h => String(h).toLowerCase().trim());
-      const isFlat = headers.includes('day') && headers.includes('client name');
-
-      if (isFlat) {
-        // Flat format: each row is one visit (day + tech + client + address)
-        const rows = XLSX.utils.sheet_to_json(firstSheet);
-        const clientMap = {};
-
-        rows.forEach(row => {
-          const day = (row['Day'] || '').trim();
-          const routeNum = String(row['Route #'] || '').trim();
-          const techRaw = (row['Route Name'] || '').trim();
-          const tech = normalizeTechName(techRaw);
-          const clientName = (row['Client Name'] || '').trim();
-          const address = (row['Address'] || '').trim();
-          if (!clientName || !day) return;
-
-          // Normalize day name
-          const normalDay = day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
-          const key = (tech + '|' + clientName + '|' + address).toUpperCase();
-
-          if (!clientMap[key]) {
-            clientMap[key] = {
-              tech: tech,
-              route: 'Route ' + routeNum,
-              name: clientName,
-              address: address,
-              days: []
-            };
-          }
-          if (!clientMap[key].days.includes(normalDay)) {
-            clientMap[key].days.push(normalDay);
-          }
-        });
-
-        // Sort days and build entries
-        Object.values(clientMap).forEach(entry => {
-          entry.days.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          routeEntries.push(entry);
-        });
-      } else {
-        // Multi-tab format: each sheet is a route
-        const techOverrides = {
-          'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
-          'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
-          'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
-        };
-
-        wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
-          const ws = wb.Sheets[sheetName];
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-          const routeKey = sheetName.trim();
-          const techName = techOverrides[routeKey] || normalizeTechName(routeKey.replace(/ROUTE\s*#?\d*\s*/i, ''));
-          const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
-
-          const clientMap = {};
-          for (let row = 2; row < rows.length; row++) {
-            const cells = rows[row] || [];
-            const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
-            if (!hasText) continue;
-            cells.forEach((cell, colIdx) => {
-              if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
-                const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
-                const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
-                const key = firstName.substring(0, 50).toUpperCase();
-                if (!clientMap[key]) clientMap[key] = { name: firstName, address: lines.join(' '), days: [] };
-                const day = days[colIdx];
-                if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
-              }
-            });
-          }
-
-          Object.values(clientMap).forEach(entry => {
-            entry.days.sort((a, b) => DAY_ORDER.map(d=>d.toUpperCase()).indexOf(a.toUpperCase()) - DAY_ORDER.map(d=>d.toUpperCase()).indexOf(b.toUpperCase()));
-            routeEntries.push({
-              tech: techName,
-              route: routeKey.replace('ROUTE ', 'Route ').trim(),
-              name: entry.name,
-              address: entry.address,
-              days: entry.days.map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
-            });
-          });
-        });
-      }
-
-      // Clear old serviceDays from all clients first
-      const clients = db.get('clients', []);
-      clients.forEach(c => { c.serviceDays = []; c.route = ''; });
-
-      let matched = 0, created = 0;
-
-      routeEntries.forEach(entry => {
-        // Match on name + address + tech to avoid collisions between same-name clients
-        const eName = entry.name.toLowerCase().trim();
-        const eAddr = entry.address.toLowerCase().trim();
-        const eTech = entry.tech.toLowerCase().trim();
-        let match = clients.find(c =>
-          c.name && c.name.toLowerCase().trim() === eName &&
-          c.address && c.address.toLowerCase().trim() === eAddr &&
-          c.technician && c.technician.toLowerCase().trim() === eTech
-        );
-
-        if (match) {
-          const existing = match.serviceDays || [];
-          entry.days.forEach(d => { if (!existing.includes(d)) existing.push(d); });
-          existing.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          match.serviceDays = existing;
-          match.route = entry.route;
-          matched++;
-        } else {
-          clients.push({
-            id: 'c_' + Math.random().toString(36).substr(2, 9),
-            name: entry.name,
-            address: entry.address,
-            contact: '',
-            technician: entry.tech,
-            route: entry.route,
-            serviceDays: entry.days
-          });
-          created++;
-        }
-      });
-
-      db.set('clients', clients);
-
-      // Count unique clients with schedule
-      const scheduled = clients.filter(c => c.serviceDays && c.serviceDays.length > 0).length;
-
-      statusEl.innerHTML = `
-        <div style="background:#e8f5e9; padding:12px; border-radius:8px;">
-          <p style="color:#2e7d32; font-weight:600; margin-bottom:8px;">Import Complete</p>
-          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} unique route entries processed</p>
-          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated</p>
-          <p style="color:#333; font-size:13px;">\u2795 ${created} new clients created</p>
-          <p style="color:#333; font-size:13px;">\ud83d\udcc5 ${scheduled} clients now have scheduled service days</p>
-          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.setClientView('byRoute'); router.renderClients();">View By Route</button>
-          <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="router.navigate('routes')">View Routes</button>
-        </div>
-      `;
-    } catch (err) {
-      statusEl.innerHTML = '<p style="color:#c62828;">Error reading file: ' + escapeHtml(err.message) + '</p>';
-      console.error('Route import error:', err);
-    }
-  };
-  reader.readAsArrayBuffer(file);
-}
-
 async function exportCompletedToExcel() {
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
@@ -6030,7 +4962,7 @@ async function exportCompletedToExcel() {
   const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
 
   if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
-    showToast('No completed chem sheets or repair orders to export');
+    showToast('No completed chem sheets or work orders to export');
     return;
   }
 
@@ -6151,7 +5083,7 @@ async function exportCompletedToExcel() {
       { header: 'Notes', key: 'notes', width: 40 }
     ];
 
-    const repairSheet = workbook.addWorksheet('Repair Orders');
+    const repairSheet = workbook.addWorksheet('Work Orders');
     repairSheet.columns = repairColumns;
     styleHeader(repairSheet, repairColumns.length);
 
@@ -6174,7 +5106,7 @@ async function exportCompletedToExcel() {
     });
 
     if (repairSheet.rowCount === 1) {
-      repairSheet.addRow({ client: 'No completed repair orders' });
+      repairSheet.addRow({ client: 'No completed work orders' });
     }
     formatBody(repairSheet);
 
@@ -6213,9 +5145,6 @@ function saveClientDetails(clientId) {
   const address = document.getElementById('edit-client-address').value;
   const contact = document.getElementById('edit-client-contact').value;
   const tech = document.getElementById('edit-client-tech').value;
-  const route = document.getElementById('edit-client-route') ? document.getElementById('edit-client-route').value : '';
-  const dayCheckboxes = document.querySelectorAll('#edit-client-days input[type=checkbox]');
-  const serviceDays = Array.from(dayCheckboxes).filter(cb => cb.checked).map(cb => cb.value);
 
   if (!name) {
     alert('Name is required');
@@ -6225,7 +5154,7 @@ function saveClientDetails(clientId) {
   const clients = db.get('clients', []);
   const index = clients.findIndex(c => c.id === clientId);
   if (index >= 0) {
-    clients[index] = { ...clients[index], name, address, contact, technician: tech, route, serviceDays };
+    clients[index] = { ...clients[index], name, address, contact, technician: tech };
     db.set('clients', clients);
 
     // Also update any matching workorders
@@ -6272,288 +5201,320 @@ function initMasterSchedule() {
   if (db.get('masterScheduleLoaded')) return;
 
   const clients = [
-    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem" },
-    { name: "Jeey Bomford", address: "49 Mary Read Crescent", tech: "Kadeem" },
-    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem" },
-    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem" },
-    { name: "Gcpsl Sea View", address: "South Church Street", tech: "Kadeem" },
-    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem" },
-    { name: "Sunrise Phase 3", address: "Old Crewe Rd", tech: "Kadeem" },
-    { name: "Vivi Townhomes", address: "275 Fairbanks Rd", tech: "Kadeem" },
-    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin" },
-    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin" },
-    { name: "Caribbean Courts", address: "Bcqs, South Sound", tech: "Elvin" },
-    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin" },
-    { name: "Fin South Church Street", address: "Fin Strata", tech: "Elvin" },
-    { name: "Lakeland Villas #1", address: "Old Crewe Rd", tech: "Elvin" },
-    { name: "Point Of View", address: "South Sound", tech: "Elvin" },
-    { name: "South Palms #1", address: "Glen Eden Rd", tech: "Elvin" },
-    { name: "Southern Skies", address: "South Sound", tech: "Elvin" },
-    { name: "Correy Williams", address: "16 Cypress Point", tech: "Jermaine" },
-    { name: "Andy Albray", address: "17 The Deck House", tech: "Jermaine" },
-    { name: "Joanne Akdeniz", address: "42 Hoya Quay", tech: "Jermaine" },
-    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine" },
-    { name: "Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine" },
-    { name: "Mike Stroh", address: "64 Waterford Quay", tech: "Jermaine" },
-    { name: "Tim Bradley", address: "66 Baquarat Quay", tech: "Jermaine" },
-    { name: "Plum Mandalay", address: "Seven Mile", tech: "Jermaine" },
-    { name: "Ocean Pointe Villas", address: "West Bay", tech: "Jermaine" },
-    { name: "Snug Harbour Villas", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace" },
-    { name: "John Ferarri", address: "30 Orchid Drive", tech: "Ace" },
-    { name: "Gary Gibbs", address: "306 Yacht Club dr", tech: "Ace" },
-    { name: "Andrew Muir", address: "318 Yacht Drive", tech: "Ace" },
-    { name: "Scott Somerville", address: "40 Orchid Drive", tech: "Ace" },
-    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace" },
-    { name: "Vlad Aldea", address: "474 Yacht Club Dr", tech: "Ace" },
-    { name: "Abraham Burak", address: "Salt Creek", tech: "Ace" },
-    { name: "Sunset Point Condos", address: "North West Point Rd", tech: "Ace" },
-    { name: "Villa Mare", address: "Vista Del Mar", tech: "Ace" },
-    { name: "Jenny Frizzle", address: "302 Windswept Drive", tech: "Donald" },
-    { name: "Anthoney Reid", address: "88 Mallard Drive", tech: "Donald" },
-    { name: "Coral Bay Village", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Harbor Walk", address: "Grand Harbour", tech: "Donald" },
-    { name: "Indigo Bay", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Periwinkle", address: "Edgewater Way", tech: "Donald" },
-    { name: "Savannah Grand", address: "Savannah", tech: "Donald" },
-    { name: "South Shore", address: "Shamrock Rd", tech: "Donald" },
-    { name: "The Palms At Patricks", address: "Patricks Island", tech: "Donald" },
-    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley" },
-    { name: "One Canal Point", address: "Canal Point", tech: "Kingsley" },
-    { name: "Poinsettia", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "The Beachcomber", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel" },
-    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel" },
-    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel" },
-    { name: "Plymouth", address: "Canal Point Dr", tech: "Ariel" },
-    { name: "Glen Kennedy", address: "Salt Creek", tech: "Ariel" },
-    { name: "Mark Vandevelde", address: "Salt Creek", tech: "Ariel" },
-    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel" },
-    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik" },
-    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik" },
-    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik" },
-    { name: "Jason Butcher", address: "44 Grand Estates", tech: "Malik" },
-    { name: "Julie O'Hara", address: "56 Grand Estates", tech: "Malik" },
-    { name: "Mike Gibbs", address: "78 Grand Estates", tech: "Malik" },
-    { name: "Grapetree Condos", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "The Colonial Club", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem" },
-    { name: "Caribbean Paradise", address: "South Sound", tech: "Kadeem" },
-    { name: "L'Ambience", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Mystic Retreat", address: "John Greer Boulavard", tech: "Kadeem" },
-    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin" },
-    { name: "South Bay Estates", address: "Bel Air Dr", tech: "Elvin" },
-    { name: "Andy Marcher", address: "234 Drake Quay", tech: "Jermaine" },
-    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine" },
-    { name: "Dolce Vita", address: "Govenors Harbour", tech: "Jermaine" },
-    { name: "Amber Stewart", address: "Dolce Vita 4", tech: "Jermaine" },
-    { name: "Pleasant View", address: "West Bay", tech: "Jermaine" },
-    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace" },
-    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace" },
-    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace" },
-    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace" },
-    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace" },
-    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace" },
-    { name: "Charles Ebanks", address: "Bonnieview Av", tech: "Donald" },
-    { name: "One Canal Point Gym", address: "Canal Point", tech: "Kingsley" },
-    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik" },
-    { name: "Moon Bay", address: "Shamrock Rd", tech: "Malik" },
-    { name: "Cayman Coves", address: "South Church Street", tech: "Kadeem" },
-    { name: "Venetia", address: "South Sound", tech: "Kadeem" },
-    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin" },
-    { name: "Tim Dailyey", address: "North Webster Dr", tech: "Elvin" },
-    { name: "Nicholas Lynn", address: "Sandlewood Crescent", tech: "Elvin" },
-    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin" },
-    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin" },
-    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin" },
-    { name: "Riyaz Norrudin", address: "63 Langton Way", tech: "Elvin" },
-    { name: "Mangrove", address: "Bcqs", tech: "Elvin" },
-    { name: "Quentin Creegan", address: "Villa Aramone", tech: "Elvin" },
-    { name: "Jodie O'Mahony", address: "12 El Nathan", tech: "Jermaine" },
-    { name: "Charles Motsinger", address: "124 Hillard", tech: "Jermaine" },
-    { name: "Steve Daker", address: "33 Spurgeon Cr", tech: "Jermaine" },
-    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine" },
-    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine" },
-    { name: "Albert Schimdberger", address: "55 Elnathan Rd", tech: "Jermaine" },
-    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine" },
-    { name: "Blair Ebanks", address: "71 Spurgeon Crescent", tech: "Jermaine" },
-    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine" },
-    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine" },
-    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace" },
-    { name: "Mitchell Demeter", address: "19 Whirlaway Close", tech: "Ace" },
-    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace" },
-    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace" },
-    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace" },
-    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace" },
-    { name: "Coastal Escape", address: "Omega Bay", tech: "Ace" },
-    { name: "Inity Ridge", address: "Prospect Point Rd", tech: "Ace" },
-    { name: "Ocean Reach", address: "Old Crewe Rd", tech: "Ace" },
-    { name: "Scott Somerville", address: "Rum Point Rd", tech: "Donald" },
-    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald" },
-    { name: "67 On The Bay", address: "Queens Highway", tech: "Donald" },
-    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald" },
-    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald" },
-    { name: "Paradise Sur Mar", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Rip Kai", address: "Rum Point Drive", tech: "Donald" },
-    { name: "Sunrays", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley" },
-    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley" },
-    { name: "Regant Court", address: "Brittania", tech: "Kingsley" },
-    { name: "Solara Main", address: "Crystal Harbour", tech: "Kingsley" },
-    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel" },
-    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel" },
-    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel" },
-    { name: "Chad Horwitz", address: "49 Calico Quay", tech: "Ariel" },
-    { name: "Malcom Swift", address: "Miramar", tech: "Ariel" },
-    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Strata #70", address: "Boggy Sands rd", tech: "Ariel" },
-    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik" },
-    { name: "Debbie Ebanks", address: "Fischers Reef", tech: "Malik" },
-    { name: "John Corallo", address: "3A Seahven", tech: "Malik" },
-    { name: "Encompass", address: "3B Seahven", tech: "Malik" },
-    { name: "Joseph Hurlston", address: "42 Monumnet Rd", tech: "Malik" },
-    { name: "George McKenzie", address: "534 Rum Point Dr", tech: "Malik" },
-    { name: "Twin Palms", address: "Rum Point Dr", tech: "Malik" },
-    { name: "Bernie Bako", address: "#4 Venetia", tech: "Kadeem" },
-    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem" },
-    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem" },
-    { name: "Park View Courts", address: "Spruce Lane", tech: "Kadeem" },
-    { name: "The Bentley", address: "Crewe rd", tech: "Kadeem" },
-    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin" },
-    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin" },
-    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin" },
-    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin" },
-    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin" },
-    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin" },
-    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin" },
-    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin" },
-    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin" },
-    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine" },
-    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine" },
-    { name: "Nigel Daily", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine" },
-    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine" },
-    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine" },
-    { name: "Shoreway Townhomes", address: "Adonis Dr", tech: "Jermaine" },
-    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine" },
-    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine" },
-    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace" },
-    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace" },
-    { name: "Clive Harris", address: "516 Crighton Drive", tech: "Ace" },
-    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace" },
-    { name: "Ross Fortune", address: "90 Prince Charles", tech: "Ace" },
-    { name: "Simon Palmer", address: "Olivias Cove", tech: "Ace" },
-    { name: "Caroline Moran", address: "197 Bimini Dr", tech: "Donald" },
-    { name: "James Reeve", address: "215 Bimini Dr", tech: "Donald" },
-    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald" },
-    { name: "Sina Mirzale", address: "353 Bimini Dr", tech: "Donald" },
-    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald" },
-    { name: "Marlon Bispath", address: "519 Bimini Dr", tech: "Donald" },
-    { name: "Margaret Fantasia", address: "526 Bimini Dr", tech: "Donald" },
-    { name: "Kenny Rankin", address: "Grand Harbour", tech: "Donald" },
-    { name: "James Mendes", address: "106 Olea", tech: "Ariel" },
-    { name: "James O'Brien", address: "102 Olea", tech: "Ariel" },
-    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel" },
-    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel" },
-    { name: "Mr Holland", address: "107 Olea", tech: "Ariel" },
-    { name: "Nikki Harris", address: "213 olea", tech: "Ariel" },
-    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel" },
-    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel" },
-    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik" },
-    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik" },
-    { name: "Iman Shafiei", address: "53 Baquarat Quay", tech: "Malik" },
-    { name: "Enrique Tasende", address: "65 Baccarat Quay", tech: "Malik" },
-    { name: "David Wilson", address: "Boggy Sands", tech: "Malik" },
-    { name: "Nina Irani", address: "Casa Oasis", tech: "Malik" },
-    { name: "Sandy Lane Townhomes", address: "Boggy Sands Rd", tech: "Malik" },
-    { name: "Valencia Heights", address: "Strata #536", tech: "Kadeem" },
-    { name: "Jaime-Lee Eccles", address: "176 Conch Dr", tech: "Kadeem" },
-    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem" },
-    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem" },
-    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem" },
-    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem" },
-    { name: "Hilton Estates", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin" },
-    { name: "Britni Strong", address: "150 Parkway Dr", tech: "Elvin" },
-    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin" },
-    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd", tech: "Elvin" },
-    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin" },
-    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin" },
-    { name: "Saphire", address: "Jec, Nwp Rd", tech: "Elvin" },
-    { name: "The Sands", address: "Boggy Sand Rd", tech: "Elvin" },
-    { name: "Turtle Breeze", address: "Conch Point Rd", tech: "Elvin" },
-    { name: "Francois Du Toit", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine" },
-    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine" },
-    { name: "Johann Prinslo", address: "270 Jennifer Dr", tech: "Jermaine" },
-    { name: "Andre Slabbert", address: "7 Victoria Dr", tech: "Jermaine" },
-    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine" },
-    { name: "Palm Heights Residence", address: "Seven Mile Beach", tech: "Jermaine" },
-    { name: "Jean Mean", address: "211 Sea Spray Dr", tech: "Ace" },
-    { name: "Paul Rowan", address: "265 Sea Spray Dr", tech: "Ace" },
-    { name: "Charmaine Richter", address: "40 Natures Circle", tech: "Ace" },
-    { name: "Rory Andrews", address: "44 Country Road", tech: "Ace" },
-    { name: "Walker Romanica", address: "79 Riley Circle", tech: "Ace" },
-    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace" },
-    { name: "Grand Palmyra", address: "Seven Mile Beach", tech: "Ace" },
-    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace" },
-    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald" },
-    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald" },
-    { name: "Reg Williams", address: "Cliff House", tech: "Donald" },
-    { name: "Gypsy", address: "1514 Rum Point Dr", tech: "Donald" },
-    { name: "Kai Vista", address: "Rum Point Dr", tech: "Donald" },
-    { name: "Ocean Vista", address: "Rum Point", tech: "Donald" },
-    { name: "Stefan Marenzi", address: "Water Cay Rd", tech: "Donald" },
-    { name: "Bella Rocca", address: "Queens Highway", tech: "Donald" },
-    { name: "Sea 2 Inity", address: "Kiabo", tech: "Donald" },
-    { name: "Guy Manning", address: "Diamonds Edge", tech: "Kingsley" },
-    { name: "Kent Nickerson", address: "Salt Creek", tech: "Kingsley" },
-    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel" },
-    { name: "Suzanne Correy", address: "394 Canal Point Rd", tech: "Ariel" },
-    { name: "November Capitol", address: "One Canal Point", tech: "Ariel" },
-    { name: "Safe Harbor", address: "West Bay", tech: "Ariel" },
-    { name: "Bert Thacker", address: "West Bay", tech: "Ariel" },
-    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik" },
-    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik" },
-    { name: "Philip Smyres", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Brandon Caruana", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik" },
-    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik" },
-    { name: "Phillip Cadien", address: "312 Cypres Point", tech: "Malik" }
+    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Rem", address: "49 Mary Read Crescent, Jeey Bomford", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Gcpsl", address: "Sea View, South Church Street, (Aw)", tech: "Kadeem", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Rem", address: "Sunrise Phase 3, Old Crewe Rd", tech: "Kadeem", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Jec", address: "Vivi Townhomes, 275 Fairbanks Rd", tech: "Kadeem", serviceDays: ["Friday", "Monday"] },
+    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin", serviceDays: ["Friday"] },
+    { name: "Bcqs", address: "Caribbean Courts, (Th)", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin", serviceDays: ["Friday"] },
+    { name: "Fin Strata", address: "Fin South Church Street", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Lakeland Villas #1, Old Crewe Rd, (Rw)", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Gcpsl", address: "Point Of View, South Sound", tech: "Elvin", serviceDays: ["Friday"] },
+    { name: "Fin Strata", address: "South Church Street, Gear, #25/35 Hot tub service", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Avata", address: "South Palms #1, Glen Eden Rd", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Southern Skies, South Sound, (Rw)", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Correy Williams", address: "16 Cypress Point, Crystal Harbour", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Andy Albray", address: "17 The Deck House, Ritz Carlton Dr", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Joanne Akdeniz", address: "42 Hoya Quay, Crystal Harbor", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "236 Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Mike Stroh", address: "64 Waterford Quay, Safe Haven", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Tim Bradley", address: "66 Baquarat Quay, Safe Haven", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Plum", address: "Mandalay, Seven Mile", tech: "Jermaine", serviceDays: ["Friday", "Monday"] },
+    { name: "Jec", address: "Ocean Pointe Villas", tech: "Jermaine", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Snug Harbour Villas, Sung Harbour, (Rw)", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "John Ferarri", address: "30 Orchid Drive, Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Gary Gibbs", address: "306 Yacht Club dr., Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Andrew Muir", address: "318 Yacht Drive, Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Scott Somerville", address: "40 Orchid Drive, Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Vlad Aldea", address: "474 Yacht Club Dr., Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Abraham Burak", address: "Salt Creek, Yacht Drive", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Jec", address: "Sunset Point Condos, North West Point Rd", tech: "Ace", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Cph Limited", address: "Villa Mare, Vista Del Mar", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Jenny Frizzle", address: "302 Windswept Drive, Patricks Island", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Anthoney Reid", address: "88 Mallard Drive, Patricks Island", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Gcpsl", address: "Coral Bay Village", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Harbor walk Strata", address: "Harbor Walk", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Bcqs", address: "Indigo Bay, Shamrock Rd", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Kuavo", address: "Periwinkle: Pool/Spa, Edgewater Way Full Service", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Savannah Grand", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Kuavo", address: "South Shore, Shamrock Rd", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "The Palms At, Patricks Island, (Rw)", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley", serviceDays: ["Friday"] },
+    { name: "Kuavo", address: "One Canal Point, Gym Pool", tech: "Kingsley", serviceDays: ["Friday"] },
+    { name: "Kuavo", address: "One Canal Point, Main Pool And Spa", tech: "Kingsley", serviceDays: ["Friday", "Monday"] },
+    { name: "Kuavo", address: "Poinsettia", tech: "Kingsley", serviceDays: ["Friday", "Monday", "Wednesday"] },
+    { name: "Emily Evans", address: "The Beachcomber", tech: "Kingsley", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel", serviceDays: ["Friday", "Monday", "Saturday", "Thursday", "Tuesday", "Wednesday"] },
+    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Bcqs", address: "Plymouth, Canal Point Dr", tech: "Ariel", serviceDays: ["Friday", "Monday"] },
+    { name: "Glen Kennedy", address: "Salt Creek, Yatch Club", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Mark Vandevelde", address: "Salt Creek, Yatch Club", tech: "Ariel", serviceDays: ["Friday", "Wednesday"] },
+    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel", serviceDays: ["Friday", "Monday", "Wednesday"] },
+    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Jason Butcher", address: "44 Grand Estates, Grand Harbour", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Julie O'Hara", address: "56 Grand Estates Grand Harbour", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Mike Gibbs", address: "78 Grand Estates- Grand Harbour", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Kuavo", address: "Grapetree Condos", tech: "Malik", serviceDays: ["Friday", "Monday"] },
+    { name: "The Colonial Club", address: "The Colonial Club", tech: "Malik", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem", serviceDays: ["Monday"] },
+    { name: "Bcqs", address: "Caribbean Paradise - South Sound, (Rw)", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Bcqs", address: "L'Ambience #1, Fairbanks Rd, (Rw)", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Bcqs", address: "L'Ambience #2, Fairbanks Rd, (Rw)", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 1, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 2, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 3, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 4, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "South Bay Estates, Bel Air Dr", tech: "Elvin", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "South Bay Residence, Bel Air Dr", tech: "Elvin", serviceDays: ["Monday"] },
+    { name: "Andy Marcher", address: "234 Drake Quay, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Csh Design Studios", address: "Dolce Vita 1, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Csh Design Studios", address: "Dolce Vita 2, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Csh Design Studios", address: "Dolce Vita 3, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Amber Stewart", address: "Dolce Vita 4, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "Pleasant View Appartments", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Charles Ebanks", address: "65 Bonnieview Av, Patricks Island", tech: "Donald", serviceDays: ["Monday"] },
+    { name: "Gcpsl", address: "Coral Bay Village, Shamrock Rd", tech: "Donald", serviceDays: ["Monday"] },
+    { name: "Bcqs", address: "Olea , Minerva way", tech: "Kingsley", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "One Canal Point, Gym Pool Chem Check", tech: "Kingsley", serviceDays: ["Monday"] },
+    { name: "Kuavo - Vernon Flynn", address: "15 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Manuale Lupu", address: "9 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Denise Hooks", address: "12 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Barry Yetton", address: "13 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Jozef Vogel", address: "10 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Sam Shalaby", address: "11 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - James Kattan", address: "5 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Stacey Ottenbreit", address: "7 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Wesley Cullum", address: "8 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Gcpsl", address: "1124 Rum Point Dr, North Pointe", tech: "Malik", serviceDays: ["Monday"] },
+    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "Moon Bay, Shamrock Rd", tech: "Malik", serviceDays: ["Monday", "Thursday"] },
+    { name: "Olea Main Pool", address: "Minerva way", tech: "Kingsley", serviceDays: ["Saturday", "Thursday", "Tuesday", "Wednesday"] },
+    { name: "Jec", address: "Cayman Coves, South Church Street", tech: "Kadeem", serviceDays: ["Thursday", "Tuesday"] },
+    { name: "Bcqs", address: "Venetia, South Sound", tech: "Kadeem", serviceDays: ["Thursday"] },
+    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Tim Dailyey", address: "177/179 North Webster Dr", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Nicholas Lynn", address: "28 Sandlewood Crescent", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Riyaz Norrudin", address: "63 Langton Way, The Lakes", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Bcqs", address: "Mangrove #1, (Rw)", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Bcqs", address: "Mangrove #2, (Rw)", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Quentin Creegan", address: "Villa Aramone 472 South Sound Rd", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Jodie O'Mahony", address: "12 El Nathan - Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Charles Motsinger", address: "124 Hillard, High Lands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Steve Daker", address: "33 Spurgeon Cr., Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Albert Schimdberger", address: "55 Elnathan Rd - Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Blair Ebanks", address: "71 Spurgeon Crescent - Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Mitchell Demeter", address: "19 Whirlaway Close, Patricks Island", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Avata", address: "Coastal Escape - Omega Bay Estates", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Fin Strata", address: "Inity Ridge - Prospect Point Rd, Angus Davison", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Kuavo", address: "Ocean Reach., Old Crewe Rd", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Scott Somerville", address: "2078 Rum Point Rd.", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Bcqs", address: "67 On The Bay, Queens Highway, Michael Baulk", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Cph Limited", address: "Paradise Sur Mar, Sand Cay Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Gcpsl", address: "Rip Kai, Rum Point Drive", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Gcpsl", address: "Sunrays, Sand Cay Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley", serviceDays: ["Thursday"] },
+    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley", serviceDays: ["Thursday"] },
+    { name: "Jec", address: "Regant Court, Brittania", tech: "Kingsley", serviceDays: ["Thursday", "Tuesday"] },
+    { name: "Jec", address: "Solara Main Pool / Spa", tech: "Kingsley", serviceDays: ["Thursday", "Tuesday"] },
+    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Chad Horwitz", address: "49 Calico Quay, Canal Point", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Rick Gorter", address: "70 Shoreview Point", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Malcom Swift", address: "Miramar Vista Del Mar - Yatch Club", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Strata #70", address: "171 Boggy Sands rd", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Debbie Ebanks", address: "Fischers Reef 1482 Rum Point Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "John Corallo", address: "3A Seahven, Roxborough Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Encompass", address: "3B Seahven, Roxborough Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Joseph Hurlston", address: "42 Monumnet Rd.", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "George McKenzie", address: "534 Rum Point Dr.", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Gcpsl", address: "Twin Palms, Rum Point Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Bernie Bako", address: "#4 Venetia.", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Park View Courts, Phase 2, Spruce Lane", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "The Bentley Crewe rd", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Venetia - South Sound", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Gcpsl", address: "Point Of View, Property", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Nigel Daily", address: "183 Andrew Drive", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Shoreway Townhomes, Adonis Dr, (Mb)", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Snug Harbour Villas - Sung Harbour, (Rw)", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Clive Harris", address: "516 Crighton Drive, Crystal Harbour", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Gcpsl", address: "54 Crighton Dr, Crystal Harbor, Mala Malde", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Ross Fortune", address: "90 Prince Charles-Govenors Harbour.", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Marcia Milgate", address: "95 Prince Charles Quay", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Simon Palmer", address: "Olivias Cove, Govenors Harbour", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Caroline Moran", address: "197 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "James Reeve", address: "215 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Sina Mirzale", address: "353 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Marlon Bispath", address: "519 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Margaret Fantasia", address: "526 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Kenny Rankin", address: "Cascade Drive", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "James Mendes", address: "106 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "James O'Brien", address: "102 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Mr Holland", address: "107 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Nikki Harris", address: "213 olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Scott Somerville", address: "40 Dunlop Dr", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Iman Shafiei", address: "53 Baquarat Quay, Safe Haven", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Enrique Tasende", address: "65 Baccarat Quay, Safe", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "David Wilson", address: "Boggy Sands", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Nina Irani", address: "Casa Oasis, Boggy Sands", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Boggy Sands Rd", address: "Sandy Lane Townhomes", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Strata #536", address: "Valencia Heights", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "172 Vienna Circle", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Jaime-Lee Eccles", address: "176 Conch Dr, The Boulevard", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "Hilton Estates #1 - Fairbanks Rd", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "Hilton Estates #2 - Fairbanks Rd", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Britni Strong", address: "150 Parkway Dr.", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd.", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "Saphire, Nwp Rd", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "The Sands, Boggy Sand Rd", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Turtle Breeze, Conch Point Rd", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Francois Du Toit", address: "115 Jennifer Drive, Snug Harbour", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Jim Owen", address: "229 Andrew Dr, Sung Harbour", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Johann Prinslo", address: "270 Jennifer Dr.", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Andre Slabbert", address: "7 Victoria Dr., Snug Harbour.", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Peter Goddard", address: "Brittania Kings Court", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "Palm Heights Residence, (Rw)", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Jean Mean", address: "211 Sea Spray Dr.", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Paul Rowan", address: "265 Sea Spray Dr.", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Charmaine Richter", address: "40 Natures Circle, Beach Bay", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Rory Andrews", address: "44 Country Road, Savannah", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Walker Romanica", address: "79 Riley Circle, Newlands", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Kuavo", address: "Grand Palmyra", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Reg Williams", address: "Cliff House", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Gypsy 1514 Rum Point Dr", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Kai Vista, Rum Point Dr", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Ocean Vista Strata", address: "Ocean Vista", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Stefan Marenzi", address: "Old Danube, 316 Water Cay Rd", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Queens Highway, Bella Rocca", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Sea 2 Inity, Kiabo,", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Guy Manning", address: "Diamonds Edge, Safe Haven", tech: "Kingsley", serviceDays: ["Wednesday"] },
+    { name: "Kuavo", address: "One Canal Point, Main Pool And Spa - Chem Check", tech: "Kingsley", serviceDays: ["Wednesday"] },
+    { name: "Kent Nickerson", address: "Yatch Club., Salt Creek", tech: "Kingsley", serviceDays: ["Wednesday"] },
+    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Suzanne Correy", address: "394 Canal Point Rd.", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Kuavo - November Capitol", address: "16 One Canal Point", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Safe Harbor strata #48", address: "Safe Harbor Condos", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Bert Thacker", address: "West Bay", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "107 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "109 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "123 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Philip Smyres", address: "#7 Conch Point Villas", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Brandon Caruana", address: "#9 Conch Point Villas", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl Phillip Cadien", address: "312 Cypres Point", tech: "Malik", serviceDays: ["Wednesday"] },
   ];
+  const existingClients = db.get('clients', []);
+  const mergedClients = [...existingClients];
 
-  // Map to store unique clients by name
-  const uniqueClients = {};
   clients.forEach(c => {
-    if (!uniqueClients[c.name]) {
-      uniqueClients[c.name] = {
+    const exists = mergedClients.some(
+      existing => existing.name === c.name && existing.technician === c.tech
+    );
+    if (!exists) {
+      mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
         name: c.name,
         address: c.address,
-        technician: c.tech
-      };
+        technician: c.tech,
+        serviceDays: c.serviceDays
+      });
+    } else {
+      // Update serviceDays if client exists but is missing them
+      const existing = mergedClients.find(e => e.name === c.name && e.technician === c.tech);
+      if (existing && (!existing.serviceDays || existing.serviceDays.length === 0)) {
+        existing.serviceDays = c.serviceDays;
+      }
     }
   });
 
-  const clientArray = Object.values(uniqueClients);
-  db.set('clients', clientArray);
-
-  // Generate pending workorders for each client assigned to their tech
-  const workorders = clientArray.map(c => ({
-    id: `wo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-    clientId: c.id,
-    clientName: c.name,
-    address: c.address,
-    technician: c.technician,
-    date: new Date().toISOString().split('T')[0],
-    status: 'pending',
-    readings: { pool: defaultChemReadings(), spa: defaultChemReadings() },
-    chemicalsAdded: { pool: defaultChemicalAdditions(), spa: defaultChemicalAdditions() },
-    photos: []
-  }));
-
-  db.set('workorders', workorders);
+  db.set('clients', mergedClients);
   db.set('masterScheduleLoaded', true);
 }
 
@@ -6573,15 +5534,14 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Start Firestore real-time sync
-  db.startRealtimeSync();
-
   // Always force login screen on startup
   auth.logout();
 
   cleanupTestClients();
+  db.set('masterScheduleLoaded', false); // Force reload with updated route data
   initMasterSchedule();
   migrateLegacyRepairData();
+  rollOverPendingJobs();
   populateLoginTechOptions();
 
   // Android Back Button Handling
@@ -6874,13 +5834,11 @@ function saveWorkOrderForm(orderId) {
   }
 
   order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
-  if (order.status !== 'completed') {
-    showToast('Please set status to Completed before saving');
-    return;
-  }
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
-  showToast('Completed chem sheet saved');
+  showToast(order.status === 'completed'
+    ? 'Completed chem sheet saved for admin export'
+    : 'Chem sheet saved');
 }
 
 function shareReport(orderId) {
@@ -6890,11 +5848,6 @@ function shareReport(orderId) {
     return;
   }
 
-  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
-  if (order.status !== 'completed') {
-    showToast('Please set status to Completed before sharing');
-    return;
-  }
   workOrderManager.saveOrder(order);
   workOrderManager.generateReport(order);
 }
@@ -6917,26 +5870,30 @@ function renderRepairOrdersList(statusFilter = 'all') {
   const isAdmin = auth.isAdmin();
   const canShare = auth.canShare();
 
-  let orders = allOrders;
+  let orders = (currentUser && currentUser.role === 'admin')
+    ? allOrders
+    : allOrders.filter(o => o.assignedTo === currentUser.name);
 
-  if (statusFilter === 'completed') {
-    orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
-  } else if (statusFilter === 'pending') {
-    orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
+  if (isAdmin) {
+    if (statusFilter === 'completed') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+    } else if (statusFilter === 'pending') {
+      orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
+    }
   }
 
   if (!orders.length) {
-    const emptyTitle = statusFilter === 'completed'
-      ? 'No completed repair orders'
-      : statusFilter === 'pending'
-        ? 'No open or pending repair orders'
+    const emptyTitle = isAdmin && statusFilter === 'completed'
+      ? 'No completed work orders'
+      : isAdmin && statusFilter === 'pending'
+        ? 'No pending or open work orders'
         : 'No repair work orders';
 
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
         <div class="empty-title">${emptyTitle}</div>
-        <div class="empty-subtitle">Try a different filter or create a repair order</div>
+        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a work order' : 'Create one to manage service jobs in the same app'}</div>
       </div>
     `;
   }
@@ -6945,8 +5902,8 @@ function renderRepairOrdersList(statusFilter = 'all') {
     <div class="job-card" style="margin-bottom:12px;">
       <div class="job-card-header">
         <div>
-          <div class="job-card-title">${escapeHtml(order.clientName || 'Repair Job')}</div>
-          <div class="job-card-customer">${escapeHtml(order.jobType || 'General Repair')}</div>
+          <div class="job-card-title">${escapeHtml(order.clientName || 'Work Order')}</div>
+          <div class="job-card-customer">${escapeHtml(order.jobType || 'Work Order')}</div>
           <div class="job-meta">
             <div class="job-meta-item">📅 ${escapeHtml(order.date || '')}</div>
             <div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div>
@@ -6979,7 +5936,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     time: '',
     timeIn: '',
     timeOut: '',
-    assignedTo: '',
+    assignedTo: auth.getCurrentUser()?.name || '',
     status: 'open',
     jobType: '',
     summary: '',
@@ -7000,7 +5957,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     <div class="wo-form">
       <div class="wo-bar">
         <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
-        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Repair Order'}</div>
+        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Work Order'}</div>
         <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
       </div>
 
@@ -7010,31 +5967,12 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
           <span class="wo-chev">▼</span>
         </div>
         <div class="wo-sec-bd" data-active-repair-id="${activeOrderId}">
-          <div class="form-row" style="position:relative;">
-            <label for="repair-client-search">Client</label>
-            <input type="hidden" id="repair-client" value="${escapeHtml(order.clientId || presetClientId || '')}">
-            <input type="text" id="repair-client-search" class="form-control" placeholder="Type to search clients..." value="${escapeHtml(order.clientName || '')}" autocomplete="off" oninput="filterRepairClientDropdown(this.value)" onfocus="filterRepairClientDropdown(this.value)">
-            <div id="repair-client-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:100; max-height:200px; overflow-y:auto; background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
-          </div>
-
-          <div style="margin-bottom:10px;">
-            <button type="button" class="btn btn-secondary btn-sm" onclick="toggleNewClientForm()">+ New Client</button>
-          </div>
-          <div id="new-client-form" style="display:none; background:#f5f5f5; padding:12px; border-radius:8px; margin-bottom:12px; border:1px solid #e0e0e0;">
-            <div style="font-weight:600; font-size:14px; margin-bottom:8px;">Add New Client</div>
-            <div class="form-row">
-              <label for="new-client-name">Client Name *</label>
-              <input type="text" id="new-client-name" class="form-control" placeholder="Client name">
-            </div>
-            <div class="form-row">
-              <label for="new-client-address">Address *</label>
-              <input type="text" id="new-client-address" class="form-control" placeholder="Service address">
-            </div>
-            <div class="form-row">
-              <label for="new-client-contact">Contact / Email</label>
-              <input type="text" id="new-client-contact" class="form-control" placeholder="Optional">
-            </div>
-            <button type="button" class="btn btn-primary btn-sm" onclick="saveNewClientFromWO()" style="width:100%; margin-top:4px;">Save & Use This Client</button>
+          <div class="form-row">
+            <label for="repair-client">Client</label>
+            <select id="repair-client" onchange="onRepairClientChange()">
+              <option value="">— Select client —</option>
+              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+            </select>
           </div>
 
           <div class="form-row">
@@ -7050,7 +5988,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <div class="wo-fld">
               <div class="wo-fld-lbl">Assigned Tech</div>
               <select id="repair-tech" class="wo-fld-inp">
-                <option value="" ${!order.assignedTo ? 'selected' : ''}>Unassigned</option>
                 ${Object.entries(auth.users)
                   .sort((a, b) => a[1].name.localeCompare(b[1].name))
                   .map(([id, user]) => `<option value="${user.name}" ${user.name === (order.assignedTo || '') ? 'selected' : ''}>${user.name}</option>`).join('')}
@@ -7073,13 +6010,11 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
           </div>
 
-
           <div class="form-row">
             <label for="repair-status">Status</label>
             <select id="repair-status">
               <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
               <option value="in-progress" ${order.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
-              <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Pending</option>
               <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
             </select>
           </div>
@@ -7135,17 +6070,15 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 }
 
 function onRepairClientChange() {
-  const hiddenInput = document.getElementById('repair-client');
-  const searchInput = document.getElementById('repair-client-search');
+  const select = document.getElementById('repair-client');
   const address = document.getElementById('repair-address');
   const title = document.getElementById('repair-bar-title');
-  if (!hiddenInput || !address) return;
+  if (!select || !address) return;
 
-  const client = db.get('clients', []).find(item => item.id === hiddenInput.value);
+  const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     address.value = client.address || '';
-    if (searchInput) searchInput.value = client.name || '';
-    if (title) title.textContent = client.name || 'Repair Order';
+    if (title) title.textContent = client.name || 'Work Order';
   }
 }
 
@@ -7227,8 +6160,9 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   }
 
   saveRepairOrders(orders);
-  const statusLabels = { completed: 'Completed', pending: 'Pending', 'in-progress': 'In Progress', open: 'Open' };
-  showToast((statusLabels[order.status] || 'Work') + ' order saved');
+  showToast(order.status === 'completed'
+    ? 'Completed work order saved for admin export'
+    : 'Work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -7643,7 +6577,7 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
   try {
     const order = collectRepairOrderFromForm(orderId);
     if (!order) {
-      showToast('Repair work order not found');
+      showToast('Work order not found');
       return;
     }
 
@@ -7692,7 +6626,7 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
 function removeRepairPhoto(orderId, slotIndex) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) {
-    showToast('Repair work order not found');
+    showToast('Work order not found');
     return;
   }
 
@@ -7761,206 +6695,6 @@ function cleanupTestClients() {
   }
 }
 
-// Route schedule import from XLSM file
-function importRouteSchedule() {
-  const content = document.getElementById('main-content');
-  content.innerHTML = `
-    <div class="wo-form">
-      <div class="wo-bar">
-        <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">\u2190 Back</button>
-        <div class="wo-bar-title">Import Route Sheet</div>
-      </div>
-      <div class="wo-sec">
-        <div class="wo-sec-hd">Upload Route Sheet (.xlsm / .xlsx)</div>
-        <div class="wo-sec-bd">
-          <p style="color:#666; font-size:13px; margin-bottom:12px;">Select your route schedule Excel file. The importer will read each ROUTE sheet tab and assign service days to matching clients.</p>
-          <p style="color:#666; font-size:13px; margin-bottom:12px;">Expected format: Each sheet named "ROUTE #" with Row 1 = tech name, Row 2 = day headers (MONDAY-SATURDAY), then alternating time/client rows.</p>
-          <div class="form-group">
-            <input type="file" id="route-file-input" accept=".xlsx,.xlsm,.xls" class="form-control" onchange="processRouteFile(this)">
-          </div>
-          <div id="route-import-status" style="margin-top:12px;"></div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function processRouteFile(input) {
-  const file = input.files[0];
-  if (!file) return;
-
-  const statusEl = document.getElementById('route-import-status');
-  statusEl.innerHTML = '<p style="color:#2196F3;">Reading file...</p>';
-
-  // Map route sheet tech names to app auth names
-  const TECH_NAME_MAP = {
-    'king': 'Kingsley',
-    'stephon': 'Elvin'
-  };
-  function normalizeTechName(name) {
-    const lower = (name || '').trim().toLowerCase();
-    return TECH_NAME_MAP[lower] || (name || '').trim();
-  }
-
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const data = new Uint8Array(e.target.result);
-      const wb = XLSX.read(data, { type: 'array' });
-      const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-      let routeEntries = [];
-
-      // Detect format: flat table (Day, Route #, Route Name, Client Name, Address) vs multi-tab
-      const firstSheet = wb.Sheets[wb.SheetNames[0]];
-      const firstRow = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' })[0] || [];
-      const headers = firstRow.map(h => String(h).toLowerCase().trim());
-      const isFlat = headers.includes('day') && headers.includes('client name');
-
-      if (isFlat) {
-        // Flat format: each row is one visit (day + tech + client + address)
-        const rows = XLSX.utils.sheet_to_json(firstSheet);
-        const clientMap = {};
-
-        rows.forEach(row => {
-          const day = (row['Day'] || '').trim();
-          const routeNum = String(row['Route #'] || '').trim();
-          const techRaw = (row['Route Name'] || '').trim();
-          const tech = normalizeTechName(techRaw);
-          const clientName = (row['Client Name'] || '').trim();
-          const address = (row['Address'] || '').trim();
-          if (!clientName || !day) return;
-
-          // Normalize day name
-          const normalDay = day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
-          const key = (tech + '|' + clientName + '|' + address).toUpperCase();
-
-          if (!clientMap[key]) {
-            clientMap[key] = {
-              tech: tech,
-              route: 'Route ' + routeNum,
-              name: clientName,
-              address: address,
-              days: []
-            };
-          }
-          if (!clientMap[key].days.includes(normalDay)) {
-            clientMap[key].days.push(normalDay);
-          }
-        });
-
-        // Sort days and build entries
-        Object.values(clientMap).forEach(entry => {
-          entry.days.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          routeEntries.push(entry);
-        });
-      } else {
-        // Multi-tab format: each sheet is a route
-        const techOverrides = {
-          'ROUTE 1': 'Kadeem', 'ROUTE 2': 'Elvin', 'ROUTE 3': 'Jermaine',
-          'ROUTE 4': 'Ace', 'ROUTE 5': 'Donald', 'ROUTE 6': 'Kingsley',
-          'ROUTE 7': 'Ariel', 'ROUTE 8': 'Malik'
-        };
-
-        wb.SheetNames.filter(n => n.trim().toUpperCase().startsWith('ROUTE')).forEach(sheetName => {
-          const ws = wb.Sheets[sheetName];
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-          const routeKey = sheetName.trim();
-          const techName = techOverrides[routeKey] || normalizeTechName(routeKey.replace(/ROUTE\s*#?\d*\s*/i, ''));
-          const days = (rows[1] || []).filter(d => typeof d === 'string' && d.trim());
-
-          const clientMap = {};
-          for (let row = 2; row < rows.length; row++) {
-            const cells = rows[row] || [];
-            const hasText = cells.some(c => typeof c === 'string' && c.trim().length > 0);
-            if (!hasText) continue;
-            cells.forEach((cell, colIdx) => {
-              if (typeof cell === 'string' && cell.trim() && colIdx < days.length) {
-                const lines = cell.trim().split(/\r?\n/).map(l => l.trim()).filter(l => l);
-                const firstName = lines[0].replace(/\s*-\s*$/, '').trim();
-                const key = firstName.substring(0, 50).toUpperCase();
-                if (!clientMap[key]) clientMap[key] = { name: firstName, address: lines.join(' '), days: [] };
-                const day = days[colIdx];
-                if (!clientMap[key].days.includes(day)) clientMap[key].days.push(day);
-              }
-            });
-          }
-
-          Object.values(clientMap).forEach(entry => {
-            entry.days.sort((a, b) => DAY_ORDER.map(d=>d.toUpperCase()).indexOf(a.toUpperCase()) - DAY_ORDER.map(d=>d.toUpperCase()).indexOf(b.toUpperCase()));
-            routeEntries.push({
-              tech: techName,
-              route: routeKey.replace('ROUTE ', 'Route ').trim(),
-              name: entry.name,
-              address: entry.address,
-              days: entry.days.map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
-            });
-          });
-        });
-      }
-
-      // Clear old serviceDays from all clients first
-      const clients = db.get('clients', []);
-      clients.forEach(c => { c.serviceDays = []; c.route = ''; });
-
-      let matched = 0, created = 0;
-
-      routeEntries.forEach(entry => {
-        // Match on name + address + tech to avoid collisions between same-name clients
-        const eName = entry.name.toLowerCase().trim();
-        const eAddr = entry.address.toLowerCase().trim();
-        const eTech = entry.tech.toLowerCase().trim();
-        let match = clients.find(c =>
-          c.name && c.name.toLowerCase().trim() === eName &&
-          c.address && c.address.toLowerCase().trim() === eAddr &&
-          c.technician && c.technician.toLowerCase().trim() === eTech
-        );
-
-        if (match) {
-          const existing = match.serviceDays || [];
-          entry.days.forEach(d => { if (!existing.includes(d)) existing.push(d); });
-          existing.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
-          match.serviceDays = existing;
-          match.route = entry.route;
-          matched++;
-        } else {
-          clients.push({
-            id: 'c_' + Math.random().toString(36).substr(2, 9),
-            name: entry.name,
-            address: entry.address,
-            contact: '',
-            technician: entry.tech,
-            route: entry.route,
-            serviceDays: entry.days
-          });
-          created++;
-        }
-      });
-
-      db.set('clients', clients);
-
-      // Count unique clients with schedule
-      const scheduled = clients.filter(c => c.serviceDays && c.serviceDays.length > 0).length;
-
-      statusEl.innerHTML = `
-        <div style="background:#e8f5e9; padding:12px; border-radius:8px;">
-          <p style="color:#2e7d32; font-weight:600; margin-bottom:8px;">Import Complete</p>
-          <p style="color:#333; font-size:13px;">\ud83d\udcca ${routeEntries.length} unique route entries processed</p>
-          <p style="color:#333; font-size:13px;">\u2705 ${matched} existing clients updated</p>
-          <p style="color:#333; font-size:13px;">\u2795 ${created} new clients created</p>
-          <p style="color:#333; font-size:13px;">\ud83d\udcc5 ${scheduled} clients now have scheduled service days</p>
-          <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="router.setClientView('byRoute'); router.renderClients();">View By Route</button>
-          <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="router.navigate('routes')">View Routes</button>
-        </div>
-      `;
-    } catch (err) {
-      statusEl.innerHTML = '<p style="color:#c62828;">Error reading file: ' + escapeHtml(err.message) + '</p>';
-      console.error('Route import error:', err);
-    }
-  };
-  reader.readAsArrayBuffer(file);
-}
-
 async function exportCompletedToExcel() {
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const sortByNewest = (items = []) => [...items].sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0));
@@ -7969,7 +6703,7 @@ async function exportCompletedToExcel() {
   const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
 
   if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
-    showToast('No completed chem sheets or repair orders to export');
+    showToast('No completed chem sheets or work orders to export');
     return;
   }
 
@@ -8090,7 +6824,7 @@ async function exportCompletedToExcel() {
       { header: 'Notes', key: 'notes', width: 40 }
     ];
 
-    const repairSheet = workbook.addWorksheet('Repair Orders');
+    const repairSheet = workbook.addWorksheet('Work Orders');
     repairSheet.columns = repairColumns;
     styleHeader(repairSheet, repairColumns.length);
 
@@ -8113,7 +6847,7 @@ async function exportCompletedToExcel() {
     });
 
     if (repairSheet.rowCount === 1) {
-      repairSheet.addRow({ client: 'No completed repair orders' });
+      repairSheet.addRow({ client: 'No completed work orders' });
     }
     formatBody(repairSheet);
 
@@ -8152,9 +6886,6 @@ function saveClientDetails(clientId) {
   const address = document.getElementById('edit-client-address').value;
   const contact = document.getElementById('edit-client-contact').value;
   const tech = document.getElementById('edit-client-tech').value;
-  const route = document.getElementById('edit-client-route') ? document.getElementById('edit-client-route').value : '';
-  const dayCheckboxes = document.querySelectorAll('#edit-client-days input[type=checkbox]');
-  const serviceDays = Array.from(dayCheckboxes).filter(cb => cb.checked).map(cb => cb.value);
 
   if (!name) {
     alert('Name is required');
@@ -8164,7 +6895,7 @@ function saveClientDetails(clientId) {
   const clients = db.get('clients', []);
   const index = clients.findIndex(c => c.id === clientId);
   if (index >= 0) {
-    clients[index] = { ...clients[index], name, address, contact, technician: tech, route, serviceDays };
+    clients[index] = { ...clients[index], name, address, contact, technician: tech };
     db.set('clients', clients);
 
     // Also update any matching workorders
@@ -8211,288 +6942,320 @@ function initMasterSchedule() {
   if (db.get('masterScheduleLoaded')) return;
 
   const clients = [
-    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem" },
-    { name: "Jeey Bomford", address: "49 Mary Read Crescent", tech: "Kadeem" },
-    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem" },
-    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem" },
-    { name: "Gcpsl Sea View", address: "South Church Street", tech: "Kadeem" },
-    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem" },
-    { name: "Sunrise Phase 3", address: "Old Crewe Rd", tech: "Kadeem" },
-    { name: "Vivi Townhomes", address: "275 Fairbanks Rd", tech: "Kadeem" },
-    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin" },
-    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin" },
-    { name: "Caribbean Courts", address: "Bcqs, South Sound", tech: "Elvin" },
-    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin" },
-    { name: "Fin South Church Street", address: "Fin Strata", tech: "Elvin" },
-    { name: "Lakeland Villas #1", address: "Old Crewe Rd", tech: "Elvin" },
-    { name: "Point Of View", address: "South Sound", tech: "Elvin" },
-    { name: "South Palms #1", address: "Glen Eden Rd", tech: "Elvin" },
-    { name: "Southern Skies", address: "South Sound", tech: "Elvin" },
-    { name: "Correy Williams", address: "16 Cypress Point", tech: "Jermaine" },
-    { name: "Andy Albray", address: "17 The Deck House", tech: "Jermaine" },
-    { name: "Joanne Akdeniz", address: "42 Hoya Quay", tech: "Jermaine" },
-    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine" },
-    { name: "Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine" },
-    { name: "Mike Stroh", address: "64 Waterford Quay", tech: "Jermaine" },
-    { name: "Tim Bradley", address: "66 Baquarat Quay", tech: "Jermaine" },
-    { name: "Plum Mandalay", address: "Seven Mile", tech: "Jermaine" },
-    { name: "Ocean Pointe Villas", address: "West Bay", tech: "Jermaine" },
-    { name: "Snug Harbour Villas", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace" },
-    { name: "John Ferarri", address: "30 Orchid Drive", tech: "Ace" },
-    { name: "Gary Gibbs", address: "306 Yacht Club dr", tech: "Ace" },
-    { name: "Andrew Muir", address: "318 Yacht Drive", tech: "Ace" },
-    { name: "Scott Somerville", address: "40 Orchid Drive", tech: "Ace" },
-    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace" },
-    { name: "Vlad Aldea", address: "474 Yacht Club Dr", tech: "Ace" },
-    { name: "Abraham Burak", address: "Salt Creek", tech: "Ace" },
-    { name: "Sunset Point Condos", address: "North West Point Rd", tech: "Ace" },
-    { name: "Villa Mare", address: "Vista Del Mar", tech: "Ace" },
-    { name: "Jenny Frizzle", address: "302 Windswept Drive", tech: "Donald" },
-    { name: "Anthoney Reid", address: "88 Mallard Drive", tech: "Donald" },
-    { name: "Coral Bay Village", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Harbor Walk", address: "Grand Harbour", tech: "Donald" },
-    { name: "Indigo Bay", address: "Shamrock Rd", tech: "Donald" },
-    { name: "Periwinkle", address: "Edgewater Way", tech: "Donald" },
-    { name: "Savannah Grand", address: "Savannah", tech: "Donald" },
-    { name: "South Shore", address: "Shamrock Rd", tech: "Donald" },
-    { name: "The Palms At Patricks", address: "Patricks Island", tech: "Donald" },
-    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley" },
-    { name: "One Canal Point", address: "Canal Point", tech: "Kingsley" },
-    { name: "Poinsettia", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "The Beachcomber", address: "Seven Mile Beach", tech: "Kingsley" },
-    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel" },
-    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel" },
-    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel" },
-    { name: "Plymouth", address: "Canal Point Dr", tech: "Ariel" },
-    { name: "Glen Kennedy", address: "Salt Creek", tech: "Ariel" },
-    { name: "Mark Vandevelde", address: "Salt Creek", tech: "Ariel" },
-    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel" },
-    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik" },
-    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik" },
-    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik" },
-    { name: "Jason Butcher", address: "44 Grand Estates", tech: "Malik" },
-    { name: "Julie O'Hara", address: "56 Grand Estates", tech: "Malik" },
-    { name: "Mike Gibbs", address: "78 Grand Estates", tech: "Malik" },
-    { name: "Grapetree Condos", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "The Colonial Club", address: "Seven Mile Beach", tech: "Malik" },
-    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem" },
-    { name: "Caribbean Paradise", address: "South Sound", tech: "Kadeem" },
-    { name: "L'Ambience", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Mystic Retreat", address: "John Greer Boulavard", tech: "Kadeem" },
-    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin" },
-    { name: "South Bay Estates", address: "Bel Air Dr", tech: "Elvin" },
-    { name: "Andy Marcher", address: "234 Drake Quay", tech: "Jermaine" },
-    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine" },
-    { name: "Dolce Vita", address: "Govenors Harbour", tech: "Jermaine" },
-    { name: "Amber Stewart", address: "Dolce Vita 4", tech: "Jermaine" },
-    { name: "Pleasant View", address: "West Bay", tech: "Jermaine" },
-    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace" },
-    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace" },
-    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace" },
-    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace" },
-    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace" },
-    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace" },
-    { name: "Charles Ebanks", address: "Bonnieview Av", tech: "Donald" },
-    { name: "One Canal Point Gym", address: "Canal Point", tech: "Kingsley" },
-    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik" },
-    { name: "Moon Bay", address: "Shamrock Rd", tech: "Malik" },
-    { name: "Cayman Coves", address: "South Church Street", tech: "Kadeem" },
-    { name: "Venetia", address: "South Sound", tech: "Kadeem" },
-    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin" },
-    { name: "Tim Dailyey", address: "North Webster Dr", tech: "Elvin" },
-    { name: "Nicholas Lynn", address: "Sandlewood Crescent", tech: "Elvin" },
-    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin" },
-    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin" },
-    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin" },
-    { name: "Riyaz Norrudin", address: "63 Langton Way", tech: "Elvin" },
-    { name: "Mangrove", address: "Bcqs", tech: "Elvin" },
-    { name: "Quentin Creegan", address: "Villa Aramone", tech: "Elvin" },
-    { name: "Jodie O'Mahony", address: "12 El Nathan", tech: "Jermaine" },
-    { name: "Charles Motsinger", address: "124 Hillard", tech: "Jermaine" },
-    { name: "Steve Daker", address: "33 Spurgeon Cr", tech: "Jermaine" },
-    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine" },
-    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine" },
-    { name: "Albert Schimdberger", address: "55 Elnathan Rd", tech: "Jermaine" },
-    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine" },
-    { name: "Blair Ebanks", address: "71 Spurgeon Crescent", tech: "Jermaine" },
-    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine" },
-    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine" },
-    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace" },
-    { name: "Mitchell Demeter", address: "19 Whirlaway Close", tech: "Ace" },
-    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace" },
-    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace" },
-    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace" },
-    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace" },
-    { name: "Coastal Escape", address: "Omega Bay", tech: "Ace" },
-    { name: "Inity Ridge", address: "Prospect Point Rd", tech: "Ace" },
-    { name: "Ocean Reach", address: "Old Crewe Rd", tech: "Ace" },
-    { name: "Scott Somerville", address: "Rum Point Rd", tech: "Donald" },
-    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald" },
-    { name: "67 On The Bay", address: "Queens Highway", tech: "Donald" },
-    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald" },
-    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald" },
-    { name: "Paradise Sur Mar", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Rip Kai", address: "Rum Point Drive", tech: "Donald" },
-    { name: "Sunrays", address: "Sand Cay Rd", tech: "Donald" },
-    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley" },
-    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley" },
-    { name: "Regant Court", address: "Brittania", tech: "Kingsley" },
-    { name: "Solara Main", address: "Crystal Harbour", tech: "Kingsley" },
-    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel" },
-    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel" },
-    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel" },
-    { name: "Chad Horwitz", address: "49 Calico Quay", tech: "Ariel" },
-    { name: "Malcom Swift", address: "Miramar", tech: "Ariel" },
-    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel" },
-    { name: "Strata #70", address: "Boggy Sands rd", tech: "Ariel" },
-    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik" },
-    { name: "Debbie Ebanks", address: "Fischers Reef", tech: "Malik" },
-    { name: "John Corallo", address: "3A Seahven", tech: "Malik" },
-    { name: "Encompass", address: "3B Seahven", tech: "Malik" },
-    { name: "Joseph Hurlston", address: "42 Monumnet Rd", tech: "Malik" },
-    { name: "George McKenzie", address: "534 Rum Point Dr", tech: "Malik" },
-    { name: "Twin Palms", address: "Rum Point Dr", tech: "Malik" },
-    { name: "Bernie Bako", address: "#4 Venetia", tech: "Kadeem" },
-    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem" },
-    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem" },
-    { name: "Park View Courts", address: "Spruce Lane", tech: "Kadeem" },
-    { name: "The Bentley", address: "Crewe rd", tech: "Kadeem" },
-    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin" },
-    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin" },
-    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin" },
-    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin" },
-    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin" },
-    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin" },
-    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin" },
-    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin" },
-    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin" },
-    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine" },
-    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine" },
-    { name: "Nigel Daily", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine" },
-    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine" },
-    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine" },
-    { name: "Shoreway Townhomes", address: "Adonis Dr", tech: "Jermaine" },
-    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine" },
-    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine" },
-    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace" },
-    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace" },
-    { name: "Clive Harris", address: "516 Crighton Drive", tech: "Ace" },
-    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace" },
-    { name: "Ross Fortune", address: "90 Prince Charles", tech: "Ace" },
-    { name: "Simon Palmer", address: "Olivias Cove", tech: "Ace" },
-    { name: "Caroline Moran", address: "197 Bimini Dr", tech: "Donald" },
-    { name: "James Reeve", address: "215 Bimini Dr", tech: "Donald" },
-    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald" },
-    { name: "Sina Mirzale", address: "353 Bimini Dr", tech: "Donald" },
-    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald" },
-    { name: "Marlon Bispath", address: "519 Bimini Dr", tech: "Donald" },
-    { name: "Margaret Fantasia", address: "526 Bimini Dr", tech: "Donald" },
-    { name: "Kenny Rankin", address: "Grand Harbour", tech: "Donald" },
-    { name: "James Mendes", address: "106 Olea", tech: "Ariel" },
-    { name: "James O'Brien", address: "102 Olea", tech: "Ariel" },
-    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel" },
-    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel" },
-    { name: "Mr Holland", address: "107 Olea", tech: "Ariel" },
-    { name: "Nikki Harris", address: "213 olea", tech: "Ariel" },
-    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel" },
-    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel" },
-    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik" },
-    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik" },
-    { name: "Iman Shafiei", address: "53 Baquarat Quay", tech: "Malik" },
-    { name: "Enrique Tasende", address: "65 Baccarat Quay", tech: "Malik" },
-    { name: "David Wilson", address: "Boggy Sands", tech: "Malik" },
-    { name: "Nina Irani", address: "Casa Oasis", tech: "Malik" },
-    { name: "Sandy Lane Townhomes", address: "Boggy Sands Rd", tech: "Malik" },
-    { name: "Valencia Heights", address: "Strata #536", tech: "Kadeem" },
-    { name: "Jaime-Lee Eccles", address: "176 Conch Dr", tech: "Kadeem" },
-    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem" },
-    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem" },
-    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem" },
-    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem" },
-    { name: "Hilton Estates", address: "Fairbanks Rd", tech: "Kadeem" },
-    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin" },
-    { name: "Britni Strong", address: "150 Parkway Dr", tech: "Elvin" },
-    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin" },
-    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd", tech: "Elvin" },
-    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin" },
-    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin" },
-    { name: "Saphire", address: "Jec, Nwp Rd", tech: "Elvin" },
-    { name: "The Sands", address: "Boggy Sand Rd", tech: "Elvin" },
-    { name: "Turtle Breeze", address: "Conch Point Rd", tech: "Elvin" },
-    { name: "Francois Du Toit", address: "Snug Harbour", tech: "Jermaine" },
-    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine" },
-    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine" },
-    { name: "Johann Prinslo", address: "270 Jennifer Dr", tech: "Jermaine" },
-    { name: "Andre Slabbert", address: "7 Victoria Dr", tech: "Jermaine" },
-    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine" },
-    { name: "Palm Heights Residence", address: "Seven Mile Beach", tech: "Jermaine" },
-    { name: "Jean Mean", address: "211 Sea Spray Dr", tech: "Ace" },
-    { name: "Paul Rowan", address: "265 Sea Spray Dr", tech: "Ace" },
-    { name: "Charmaine Richter", address: "40 Natures Circle", tech: "Ace" },
-    { name: "Rory Andrews", address: "44 Country Road", tech: "Ace" },
-    { name: "Walker Romanica", address: "79 Riley Circle", tech: "Ace" },
-    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace" },
-    { name: "Grand Palmyra", address: "Seven Mile Beach", tech: "Ace" },
-    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace" },
-    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald" },
-    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald" },
-    { name: "Reg Williams", address: "Cliff House", tech: "Donald" },
-    { name: "Gypsy", address: "1514 Rum Point Dr", tech: "Donald" },
-    { name: "Kai Vista", address: "Rum Point Dr", tech: "Donald" },
-    { name: "Ocean Vista", address: "Rum Point", tech: "Donald" },
-    { name: "Stefan Marenzi", address: "Water Cay Rd", tech: "Donald" },
-    { name: "Bella Rocca", address: "Queens Highway", tech: "Donald" },
-    { name: "Sea 2 Inity", address: "Kiabo", tech: "Donald" },
-    { name: "Guy Manning", address: "Diamonds Edge", tech: "Kingsley" },
-    { name: "Kent Nickerson", address: "Salt Creek", tech: "Kingsley" },
-    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel" },
-    { name: "Suzanne Correy", address: "394 Canal Point Rd", tech: "Ariel" },
-    { name: "November Capitol", address: "One Canal Point", tech: "Ariel" },
-    { name: "Safe Harbor", address: "West Bay", tech: "Ariel" },
-    { name: "Bert Thacker", address: "West Bay", tech: "Ariel" },
-    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik" },
-    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik" },
-    { name: "Philip Smyres", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Brandon Caruana", address: "Conch Point Villas", tech: "Malik" },
-    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik" },
-    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik" },
-    { name: "Phillip Cadien", address: "312 Cypres Point", tech: "Malik" }
+    { name: "Coleen Martin", address: "122 Belaire Drive", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Rem", address: "49 Mary Read Crescent, Jeey Bomford", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Emile VanderBol", address: "694 South Sound", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Tom Wye", address: "800 South Sound", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Gcpsl", address: "Sea View, South Church Street, (Aw)", tech: "Kadeem", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Kirsten Buttenhoff", address: "Seas the day, South Sound", tech: "Kadeem", serviceDays: ["Friday"] },
+    { name: "Rem", address: "Sunrise Phase 3, Old Crewe Rd", tech: "Kadeem", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Jec", address: "Vivi Townhomes, 275 Fairbanks Rd", tech: "Kadeem", serviceDays: ["Friday", "Monday"] },
+    { name: "Zoe Foster", address: "47 Latana Way", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Claudia Subiotto", address: "531 South Church Street", tech: "Elvin", serviceDays: ["Friday"] },
+    { name: "Bcqs", address: "Caribbean Courts, (Th)", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Max Jones", address: "Cocoloba Condos", tech: "Elvin", serviceDays: ["Friday"] },
+    { name: "Fin Strata", address: "Fin South Church Street", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Lakeland Villas #1, Old Crewe Rd, (Rw)", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Gcpsl", address: "Point Of View, South Sound", tech: "Elvin", serviceDays: ["Friday"] },
+    { name: "Fin Strata", address: "South Church Street, Gear, #25/35 Hot tub service", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Avata", address: "South Palms #1, Glen Eden Rd", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Southern Skies, South Sound, (Rw)", tech: "Elvin", serviceDays: ["Friday", "Monday"] },
+    { name: "Correy Williams", address: "16 Cypress Point, Crystal Harbour", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Andy Albray", address: "17 The Deck House, Ritz Carlton Dr", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Joanne Akdeniz", address: "42 Hoya Quay, Crystal Harbor", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Paul Skinner", address: "50 Orchid Drive", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "236 Sunshine Properties", address: "54 Galway Quay", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Mike Stroh", address: "64 Waterford Quay, Safe Haven", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Tim Bradley", address: "66 Baquarat Quay, Safe Haven", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Plum", address: "Mandalay, Seven Mile", tech: "Jermaine", serviceDays: ["Friday", "Monday"] },
+    { name: "Jec", address: "Ocean Pointe Villas", tech: "Jermaine", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Snug Harbour Villas, Sung Harbour, (Rw)", tech: "Jermaine", serviceDays: ["Friday"] },
+    { name: "Rich Merlo", address: "276 Yacht Club Drive", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "John Ferarri", address: "30 Orchid Drive, Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Gary Gibbs", address: "306 Yacht Club dr., Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Andrew Muir", address: "318 Yacht Drive, Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Scott Somerville", address: "40 Orchid Drive, Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Ash Lavine", address: "404 Orchid Drive", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Vlad Aldea", address: "474 Yacht Club Dr., Yacht Club", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Abraham Burak", address: "Salt Creek, Yacht Drive", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Jec", address: "Sunset Point Condos, North West Point Rd", tech: "Ace", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Cph Limited", address: "Villa Mare, Vista Del Mar", tech: "Ace", serviceDays: ["Friday"] },
+    { name: "Jenny Frizzle", address: "302 Windswept Drive, Patricks Island", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Anthoney Reid", address: "88 Mallard Drive, Patricks Island", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Gcpsl", address: "Coral Bay Village", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Harbor walk Strata", address: "Harbor Walk", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Bcqs", address: "Indigo Bay, Shamrock Rd", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Kuavo", address: "Periwinkle: Pool/Spa, Edgewater Way Full Service", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "Savannah Grand", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Kuavo", address: "South Shore, Shamrock Rd", tech: "Donald", serviceDays: ["Friday", "Monday"] },
+    { name: "Bcqs", address: "The Palms At, Patricks Island, (Rw)", tech: "Donald", serviceDays: ["Friday"] },
+    { name: "Olea Main Pool", address: "Minerva Way", tech: "Kingsley", serviceDays: ["Friday"] },
+    { name: "Kuavo", address: "One Canal Point, Gym Pool", tech: "Kingsley", serviceDays: ["Friday"] },
+    { name: "Kuavo", address: "One Canal Point, Main Pool And Spa", tech: "Kingsley", serviceDays: ["Friday", "Monday"] },
+    { name: "Kuavo", address: "Poinsettia", tech: "Kingsley", serviceDays: ["Friday", "Monday", "Wednesday"] },
+    { name: "Emily Evans", address: "The Beachcomber", tech: "Kingsley", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Kimpton Splash Pad", address: "Kimpton Seafire", tech: "Ariel", serviceDays: ["Friday", "Monday", "Saturday", "Thursday", "Tuesday", "Wednesday"] },
+    { name: "Alison Nolan", address: "129 Nelson Quay", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Merryl Jackson", address: "535 Canal Point Dr", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Jenna Wong", address: "59 Shorecrest Circle", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Bcqs", address: "Plymouth, Canal Point Dr", tech: "Ariel", serviceDays: ["Friday", "Monday"] },
+    { name: "Glen Kennedy", address: "Salt Creek, Yatch Club", tech: "Ariel", serviceDays: ["Friday"] },
+    { name: "Mark Vandevelde", address: "Salt Creek, Yatch Club", tech: "Ariel", serviceDays: ["Friday", "Wednesday"] },
+    { name: "Gwenda Ebanks", address: "Silver Sands", tech: "Ariel", serviceDays: ["Friday", "Monday", "Wednesday"] },
+    { name: "Juliett Austin", address: "134 Abbey Way", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Haroon Pandhoie", address: "24 Chariot Dr", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Joanna Robson", address: "27 Teal Island", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Jason Butcher", address: "44 Grand Estates, Grand Harbour", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Julie O'Hara", address: "56 Grand Estates Grand Harbour", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Mike Gibbs", address: "78 Grand Estates- Grand Harbour", tech: "Malik", serviceDays: ["Friday"] },
+    { name: "Kuavo", address: "Grapetree Condos", tech: "Malik", serviceDays: ["Friday", "Monday"] },
+    { name: "The Colonial Club", address: "The Colonial Club", tech: "Malik", serviceDays: ["Friday", "Tuesday"] },
+    { name: "Suzanne Bothwell", address: "227 Smith Road", tech: "Kadeem", serviceDays: ["Monday"] },
+    { name: "Bcqs", address: "Caribbean Paradise - South Sound, (Rw)", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Bcqs", address: "L'Ambience #1, Fairbanks Rd, (Rw)", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Bcqs", address: "L'Ambience #2, Fairbanks Rd, (Rw)", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 1, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 2, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 3, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Gcpsl", address: "Mystic Retreat 4, John Greer Boulavard", tech: "Kadeem", serviceDays: ["Monday", "Thursday"] },
+    { name: "Brian Lonergan", address: "18 Paradise Close", tech: "Elvin", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "South Bay Estates, Bel Air Dr", tech: "Elvin", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "South Bay Residence, Bel Air Dr", tech: "Elvin", serviceDays: ["Monday"] },
+    { name: "Andy Marcher", address: "234 Drake Quay, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Andreas Haug", address: "359 North West Point Rd", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Csh Design Studios", address: "Dolce Vita 1, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Csh Design Studios", address: "Dolce Vita 2, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Csh Design Studios", address: "Dolce Vita 3, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Amber Stewart", address: "Dolce Vita 4, Govenors Harbour", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "Pleasant View Appartments", tech: "Jermaine", serviceDays: ["Monday"] },
+    { name: "Jack Leeland", address: "120 Oleander Dr", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Greg Swart", address: "182 Prospect Point Rd", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Kahlill Strachan", address: "27 Jump Link", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Loreen Stewart", address: "29 Galaxy Way", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Francia Lloyd", address: "30 Soto Lane", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Tom Balon", address: "37 Teal Island", tech: "Ace", serviceDays: ["Monday"] },
+    { name: "Charles Ebanks", address: "65 Bonnieview Av, Patricks Island", tech: "Donald", serviceDays: ["Monday"] },
+    { name: "Gcpsl", address: "Coral Bay Village, Shamrock Rd", tech: "Donald", serviceDays: ["Monday"] },
+    { name: "Bcqs", address: "Olea , Minerva way", tech: "Kingsley", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "One Canal Point, Gym Pool Chem Check", tech: "Kingsley", serviceDays: ["Monday"] },
+    { name: "Kuavo - Vernon Flynn", address: "15 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Manuale Lupu", address: "9 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Denise Hooks", address: "12 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Barry Yetton", address: "13 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Jozef Vogel", address: "10 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Sam Shalaby", address: "11 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - James Kattan", address: "5 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Stacey Ottenbreit", address: "7 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Kuavo - Wesley Cullum", address: "8 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
+    { name: "Gcpsl", address: "1124 Rum Point Dr, North Pointe", tech: "Malik", serviceDays: ["Monday"] },
+    { name: "Colin Robinson", address: "130 Halkieth Rd", tech: "Malik", serviceDays: ["Monday"] },
+    { name: "Kuavo", address: "Moon Bay, Shamrock Rd", tech: "Malik", serviceDays: ["Monday", "Thursday"] },
+    { name: "Olea Main Pool", address: "Minerva way", tech: "Kingsley", serviceDays: ["Saturday", "Thursday", "Tuesday", "Wednesday"] },
+    { name: "Jec", address: "Cayman Coves, South Church Street", tech: "Kadeem", serviceDays: ["Thursday", "Tuesday"] },
+    { name: "Bcqs", address: "Venetia, South Sound", tech: "Kadeem", serviceDays: ["Thursday"] },
+    { name: "Stephen Leontsinis", address: "1340 South Sound", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Tim Dailyey", address: "177/179 North Webster Dr", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Nicholas Lynn", address: "28 Sandlewood Crescent", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Tom Newton", address: "304 South Sound", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Joyce Follows", address: "35 Jacaranda Ct", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Declean Magennis", address: "62 Ithmar Circle", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Riyaz Norrudin", address: "63 Langton Way, The Lakes", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Bcqs", address: "Mangrove #1, (Rw)", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Bcqs", address: "Mangrove #2, (Rw)", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Quentin Creegan", address: "Villa Aramone 472 South Sound Rd", tech: "Elvin", serviceDays: ["Thursday"] },
+    { name: "Jodie O'Mahony", address: "12 El Nathan - Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Charles Motsinger", address: "124 Hillard, High Lands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Steve Daker", address: "33 Spurgeon Cr., Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Laura Redman", address: "45 Yates Drive", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "David Collins", address: "512 Yacht Dr", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Albert Schimdberger", address: "55 Elnathan Rd - Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Jordan Constable", address: "60 Philip Crescent", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Blair Ebanks", address: "71 Spurgeon Crescent - Highlands", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Bertrand Bagley", address: "91 El Nathan Drive", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Laura Egglishaw", address: "94 Park Side Close", tech: "Jermaine", serviceDays: ["Thursday"] },
+    { name: "Hugo Munoz", address: "171 Leeward Dr", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Mitchell Demeter", address: "19 Whirlaway Close, Patricks Island", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Habte Skale", address: "32 Trevor Close", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Paul Reynolds", address: "424 Prospect Point Rd", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Thomas Ponessa", address: "450 Prospect Point Rd", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Jim Brannon", address: "87 Royal Palms Drive", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Avata", address: "Coastal Escape - Omega Bay Estates", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Fin Strata", address: "Inity Ridge - Prospect Point Rd, Angus Davison", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Kuavo", address: "Ocean Reach., Old Crewe Rd", tech: "Ace", serviceDays: ["Thursday"] },
+    { name: "Scott Somerville", address: "2078 Rum Point Rd.", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Alexander McGarry", address: "2628 Bodden Town Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Bcqs", address: "67 On The Bay, Queens Highway, Michael Baulk", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Hesham Sida", address: "824 Seaview Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Peter Watler", address: "952 Seaview Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Cph Limited", address: "Paradise Sur Mar, Sand Cay Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Gcpsl", address: "Rip Kai, Rum Point Drive", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Gcpsl", address: "Sunrays, Sand Cay Rd", tech: "Donald", serviceDays: ["Thursday"] },
+    { name: "Greg Melehov", address: "16 Galway Quay", tech: "Kingsley", serviceDays: ["Thursday"] },
+    { name: "William Jackman", address: "221 Crystal Dr", tech: "Kingsley", serviceDays: ["Thursday"] },
+    { name: "Jec", address: "Regant Court, Brittania", tech: "Kingsley", serviceDays: ["Thursday", "Tuesday"] },
+    { name: "Jec", address: "Solara Main Pool / Spa", tech: "Kingsley", serviceDays: ["Thursday", "Tuesday"] },
+    { name: "Steven Joyce", address: "199 Crystal Drive", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Rick Gorter", address: "33 Shoreview Point", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Marcia Milgate", address: "34 Newhaven", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Chad Horwitz", address: "49 Calico Quay, Canal Point", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Rick Gorter", address: "70 Shoreview Point", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Malcom Swift", address: "Miramar Vista Del Mar - Yatch Club", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Roland Stewart", address: "Kimpton Seafire", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Strata #70", address: "171 Boggy Sands rd", tech: "Ariel", serviceDays: ["Thursday"] },
+    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Debbie Ebanks", address: "Fischers Reef 1482 Rum Point Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "John Corallo", address: "3A Seahven, Roxborough Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Encompass", address: "3B Seahven, Roxborough Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Joseph Hurlston", address: "42 Monumnet Rd.", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "George McKenzie", address: "534 Rum Point Dr.", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Gcpsl", address: "Twin Palms, Rum Point Dr", tech: "Malik", serviceDays: ["Thursday"] },
+    { name: "Bernie Bako", address: "#4 Venetia.", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Cindy Conway", address: "#7 The Chimes", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Patricia Conroy", address: "58 Anne Bonney Crescent", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Park View Courts, Phase 2, Spruce Lane", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "The Bentley Crewe rd", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Venetia - South Sound", tech: "Kadeem", serviceDays: ["Tuesday"] },
+    { name: "Jackie Murphy", address: "110 The lakes", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Chris Turell", address: "127 Denham Thompson Way", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Guy Locke", address: "1326 South Sound", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Rena Streker", address: "1354 South Sound", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Jennifer Bodden", address: "25 Ryan Road", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Nicholas Gargaro", address: "538 South Sound Rd", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Jessica Wright", address: "55 Edgmere Circle", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Stewart Donald", address: "72 Conch Drive", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Andre Ogle", address: "87 The Avenue", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Gcpsl", address: "Point Of View, Property", tech: "Elvin", serviceDays: ["Tuesday"] },
+    { name: "Jon Brosnihan", address: "#6 Shorewinds Trail", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Michael Bascina", address: "13 Victoria Dr", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Nigel Daily", address: "183 Andrew Drive", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Steven Manning", address: "61 Shoreline Dr", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Guy Cowan", address: "74 Shorecrest", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Kadi Pentney", address: "Kings Court", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Shoreway Townhomes, Adonis Dr, (Mb)", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Bcqs", address: "Snug Harbour Villas - Sung Harbour, (Rw)", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Randal Martin", address: "151 Shorecrest Circle", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "Brandon Smith", address: "Victoria Villas", tech: "Jermaine", serviceDays: ["Tuesday"] },
+    { name: "David Guilmette", address: "183 Crystal Drive", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Stef Dimitrio", address: "266 Raleigh Quay", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Clive Harris", address: "516 Crighton Drive, Crystal Harbour", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Chez Tschetter", address: "53 Marquise Quay", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Gcpsl", address: "54 Crighton Dr, Crystal Harbor, Mala Malde", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Ross Fortune", address: "90 Prince Charles-Govenors Harbour.", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Marcia Milgate", address: "95 Prince Charles Quay", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Simon Palmer", address: "Olivias Cove, Govenors Harbour", tech: "Ace", serviceDays: ["Tuesday"] },
+    { name: "Caroline Moran", address: "197 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "James Reeve", address: "215 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "David Mullen", address: "23 Silver Thatch", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Sina Mirzale", address: "353 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Mike Kornegay", address: "40 Palm Island Circle", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Marlon Bispath", address: "519 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Margaret Fantasia", address: "526 Bimini Dr, Grand Harbour", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "Kenny Rankin", address: "Cascade Drive", tech: "Donald", serviceDays: ["Tuesday"] },
+    { name: "James Mendes", address: "106 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "James O'Brien", address: "102 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Lexi Pappadakis", address: "110 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Manuela Lupu", address: "103 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Mr Holland", address: "107 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Nikki Harris", address: "213 olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Scott Hughes", address: "111 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Mr Kelly and Mrs Kahn", address: "112 Olea", tech: "Ariel", serviceDays: ["Tuesday"] },
+    { name: "Anu O'Driscoll", address: "23 Lalique Point", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Scott Somerville", address: "40 Dunlop Dr", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Shelly Do Vale", address: "47 Marbel Drive", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Iman Shafiei", address: "53 Baquarat Quay, Safe Haven", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Enrique Tasende", address: "65 Baccarat Quay, Safe", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "David Wilson", address: "Boggy Sands", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Nina Irani", address: "Casa Oasis, Boggy Sands", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Boggy Sands Rd", address: "Sandy Lane Townhomes", tech: "Malik", serviceDays: ["Tuesday"] },
+    { name: "Strata #536", address: "Valencia Heights", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "172 Vienna Circle", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Jaime-Lee Eccles", address: "176 Conch Dr, The Boulevard", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Mehdi Khosrow-Pour", address: "610 South Sound Rd", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Michelle Bryan", address: "65 Fairview Road", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Gareth thacker", address: "9 The Venetia", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Raoul Pal", address: "93 Marry read crescent", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "Hilton Estates #1 - Fairbanks Rd", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "Hilton Estates #2 - Fairbanks Rd", tech: "Kadeem", serviceDays: ["Wednesday"] },
+    { name: "Romell El Madhani", address: "117 Crystal Dr", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Britni Strong", address: "150 Parkway Dr.", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Victoria Wheaton", address: "36 Whitehall Gardens", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Prasanna Ketheeswaran", address: "46 Captian Currys Rd.", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Jaron Goldberg", address: "52 Parklands Close", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Mitzi Callan", address: "Morganville Condos", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "Saphire, Nwp Rd", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "The Sands, Boggy Sand Rd", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Turtle Breeze, Conch Point Rd", tech: "Elvin", serviceDays: ["Wednesday"] },
+    { name: "Francois Du Toit", address: "115 Jennifer Drive, Snug Harbour", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Paolo Pollini", address: "16 Stewart Ln", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Jim Owen", address: "229 Andrew Dr, Sung Harbour", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Robert Morrison", address: "265 Jennifer Dr", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Johann Prinslo", address: "270 Jennifer Dr.", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Andre Slabbert", address: "7 Victoria Dr., Snug Harbour.", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Alicia McGill", address: "84 Andrew Drive", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Peter Goddard", address: "Brittania Kings Court", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Bcqs", address: "Palm Heights Residence, (Rw)", tech: "Jermaine", serviceDays: ["Wednesday"] },
+    { name: "Tracey Kline", address: "108 Roxborough dr", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Jean Mean", address: "211 Sea Spray Dr.", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Paul Rowan", address: "265 Sea Spray Dr.", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Charmaine Richter", address: "40 Natures Circle, Beach Bay", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Rory Andrews", address: "44 Country Road, Savannah", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Walker Romanica", address: "79 Riley Circle, Newlands", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Craig Stewart", address: "88 Leeward Drive", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Kuavo", address: "Grand Palmyra", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Jay Easterbrook", address: "33 Cocoplum", tech: "Ace", serviceDays: ["Wednesday"] },
+    { name: "Harry Tee", address: "438 Water Cay Rd", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Sarah Dobbyn-Thomson", address: "441 Water Cay Rd", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Reg Williams", address: "Cliff House", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Gypsy 1514 Rum Point Dr", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Kai Vista, Rum Point Dr", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Ocean Vista Strata", address: "Ocean Vista", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Stefan Marenzi", address: "Old Danube, 316 Water Cay Rd", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Queens Highway, Bella Rocca", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl", address: "Sea 2 Inity, Kiabo,", tech: "Donald", serviceDays: ["Wednesday"] },
+    { name: "Guy Manning", address: "Diamonds Edge, Safe Haven", tech: "Kingsley", serviceDays: ["Wednesday"] },
+    { name: "Kuavo", address: "One Canal Point, Main Pool And Spa - Chem Check", tech: "Kingsley", serviceDays: ["Wednesday"] },
+    { name: "Kent Nickerson", address: "Yatch Club., Salt Creek", tech: "Kingsley", serviceDays: ["Wednesday"] },
+    { name: "Grecia Iuculano", address: "133 Magellan Quay", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Suzanne Correy", address: "394 Canal Point Rd.", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Kuavo - November Capitol", address: "16 One Canal Point", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Safe Harbor strata #48", address: "Safe Harbor Condos", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Bert Thacker", address: "West Bay", tech: "Ariel", serviceDays: ["Wednesday"] },
+    { name: "Izzy Akdeniz", address: "105 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "107 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "109 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Jec", address: "123 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Sandra Tobin", address: "108 Solara", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Philip Smyres", address: "#7 Conch Point Villas", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Brandon Caruana", address: "#9 Conch Point Villas", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Chelsea Pederson", address: "131 Conch Point", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Kate Ye", address: "17 Cypres Point", tech: "Malik", serviceDays: ["Wednesday"] },
+    { name: "Gcpsl Phillip Cadien", address: "312 Cypres Point", tech: "Malik", serviceDays: ["Wednesday"] },
   ];
+  const existingClients = db.get('clients', []);
+  const mergedClients = [...existingClients];
 
-  // Map to store unique clients by name
-  const uniqueClients = {};
   clients.forEach(c => {
-    if (!uniqueClients[c.name]) {
-      uniqueClients[c.name] = {
+    const exists = mergedClients.some(
+      existing => existing.name === c.name && existing.technician === c.tech
+    );
+    if (!exists) {
+      mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
         name: c.name,
         address: c.address,
-        technician: c.tech
-      };
+        technician: c.tech,
+        serviceDays: c.serviceDays
+      });
+    } else {
+      // Update serviceDays if client exists but is missing them
+      const existing = mergedClients.find(e => e.name === c.name && e.technician === c.tech);
+      if (existing && (!existing.serviceDays || existing.serviceDays.length === 0)) {
+        existing.serviceDays = c.serviceDays;
+      }
     }
   });
 
-  const clientArray = Object.values(uniqueClients);
-  db.set('clients', clientArray);
-
-  // Generate pending workorders for each client assigned to their tech
-  const workorders = clientArray.map(c => ({
-    id: `wo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-    clientId: c.id,
-    clientName: c.name,
-    address: c.address,
-    technician: c.technician,
-    date: new Date().toISOString().split('T')[0],
-    status: 'pending',
-    readings: { pool: defaultChemReadings(), spa: defaultChemReadings() },
-    chemicalsAdded: { pool: defaultChemicalAdditions(), spa: defaultChemicalAdditions() },
-    photos: []
-  }));
-
-  db.set('workorders', workorders);
+  db.set('clients', mergedClients);
   db.set('masterScheduleLoaded', true);
 }
 
@@ -8512,15 +7275,14 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Start Firestore real-time sync
-  db.startRealtimeSync();
-
   // Always force login screen on startup
   auth.logout();
 
   cleanupTestClients();
+  db.set('masterScheduleLoaded', false); // Force reload with updated route data
   initMasterSchedule();
   migrateLegacyRepairData();
+  rollOverPendingJobs();
   populateLoginTechOptions();
 
   // Android Back Button Handling
@@ -8813,13 +7575,11 @@ function saveWorkOrderForm(orderId) {
   }
 
   order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
-  if (order.status !== 'completed') {
-    showToast('Please set status to Completed before saving');
-    return;
-  }
   workOrderManager.saveOrder(order);
   router.navigate('workorders');
-  showToast('Completed chem sheet saved');
+  showToast(order.status === 'completed'
+    ? 'Completed chem sheet saved for admin export'
+    : 'Chem sheet saved');
 }
 
 function shareReport(orderId) {
@@ -8829,11 +7589,6 @@ function shareReport(orderId) {
     return;
   }
 
-  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
-  if (order.status !== 'completed') {
-    showToast('Please set status to Completed before sharing');
-    return;
-  }
   workOrderManager.saveOrder(order);
   workOrderManager.generateReport(order);
 }
@@ -8942,45 +7697,39 @@ function quickAddClient() {
     return;
   }
 
-  const techOptions = getTechnicianNames().map(n => `<option value="${n}">${n}</option>`).join('');
+  const name = prompt('Client name');
+  if (!name) return;
 
-  const content = document.getElementById('main-content');
-  content.innerHTML = `
-    <div class="section-header">
-      <div class="section-title">Add New Client</div>
-      <button class="btn btn-secondary btn-sm" onclick="router.renderClients()">Cancel</button>
-    </div>
-    <div class="card">
-      <div class="card-body">
-        <div class="form-row"><label>Client Name</label><input id="new-client-name" class="form-control" type="text" placeholder="Enter client name" required></div>
-        <div class="form-row"><label>Address</label><input id="new-client-address" class="form-control" type="text" placeholder="Enter address"></div>
-        <div class="form-row"><label>Contact</label><input id="new-client-contact" class="form-control" type="text" placeholder="Contact name"></div>
-        <div class="form-row"><label>Assign Technician</label><select id="new-client-tech" class="form-control"><option value="">— Select technician —</option>${techOptions}</select></div>
-        <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="submitNewClient()">Save Client</button>
-      </div>
-    </div>
-  `;
-}
+  const address = prompt('Client address') || '';
+  const contact = prompt('Contact name') || '';
+  const technicianInput = prompt(
+    `Assign this client to which technician?\n\n${getTechnicianNames().join(', ')}`,
+    getTechnicianNames()[0] || ''
+  );
+  const technician = normalizeTechnicianName(technicianInput);
 
-function submitNewClient() {
-  const name = (document.getElementById('new-client-name')?.value || '').trim();
-  const address = (document.getElementById('new-client-address')?.value || '').trim();
-  const contact = (document.getElementById('new-client-contact')?.value || '').trim();
-  const technician = normalizeTechnicianName(document.getElementById('new-client-tech')?.value || '');
-
-  if (!name) { showToast('Please enter a client name'); return; }
-  if (!technician) { showToast('Please select a technician'); return; }
+  if (!technician) {
+    showToast('Please select the technician for this client');
+    return;
+  }
 
   const clients = db.get('clients', []);
   const clientId = `c${Date.now()}`;
-  clients.unshift({ id: clientId, name, address, contact, technician });
+  clients.unshift({
+    id: clientId,
+    name,
+    address,
+    contact,
+    technician
+  });
+
   db.set('clients', clients);
 
   notificationManager.create({
     type: 'client',
     title: 'New client from Admin',
-    message: `${name} has been added and assigned to ${technician}.`,
-    recipients: [...getTechnicianNames(), ...getAdminRecipients()],
+    message: `${name} has been added and sent to ${technician}.`,
+    recipients: [technician, ...getAdminRecipients()],
     targetView: 'clients',
     targetId: clientId,
     actionLabel: 'Open Clients'
@@ -9021,20 +7770,20 @@ function saveWorkOrderForm(orderId) {
 
   workOrderManager.saveOrder(order);
 
-  if (currentUser?.username === 'admin' || currentUser?.username === 'admin2') {
+  if (currentUser?.username === 'admin' && order.technician && order.technician !== currentUser.name) {
     const assignmentChanged = !previousOrder || previousOrder.technician !== order.technician || previousStatus !== (order.status || '').toLowerCase();
     if (assignmentChanged) {
       notificationManager.create({
         type: 'chem',
         title: 'New chem sheet from Admin',
-        message: `${order.clientName || 'A chem sheet'} has been assigned to ${order.technician || 'a technician'}.`,
-        recipients: [order.technician, ...getAdminRecipients(currentUser.name)],
+        message: `${order.clientName || 'A chem sheet'} has been sent directly to you.`,
+        recipients: [order.technician, ...getAdminRecipients(order.technician)],
         targetView: 'chem',
         targetId: order.id,
         actionLabel: 'Open Chem Sheet'
       });
     }
-  } else if (currentUser && currentUser.username !== 'admin' && currentUser.username !== 'admin2') {
+  } else if (currentUser && currentUser.username !== 'admin') {
     const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
     if (shouldNotifyAdmin) {
       notificationManager.create({
@@ -9065,7 +7814,7 @@ function onRepairClientChange() {
   const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     address.value = client.address || '';
-    if (title) title.textContent = client.name || 'Repair Order';
+    if (title) title.textContent = client.name || 'Work Order';
     if (techField && client.technician) techField.value = client.technician;
   }
 }
@@ -9092,37 +7841,37 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   saveRepairOrders(orders);
 
-  if (currentUser?.username === 'admin' || currentUser?.username === 'admin2') {
+  if (currentUser?.username === 'admin' && order.assignedTo && order.assignedTo !== currentUser.name) {
     const assignmentChanged = !previousOrder || previousOrder.assignedTo !== order.assignedTo || previousStatus !== (order.status || '').toLowerCase();
     if (assignmentChanged) {
       notificationManager.create({
         type: 'repair',
-        title: 'New repair order from Admin',
-        message: `${order.clientName || 'A repair order'} has been assigned to ${order.assignedTo || 'a technician'}.`,
-        recipients: [order.assignedTo, ...getAdminRecipients(currentUser.name)],
+        title: 'New work order from Admin',
+        message: `${order.clientName || 'A work order'} has been sent directly to you.`,
+        recipients: [order.assignedTo, ...getAdminRecipients(order.assignedTo)],
         targetView: 'repair',
         targetId: order.id,
-        actionLabel: 'Open Repair Order'
+        actionLabel: 'Open Work Order'
       });
     }
-  } else if (currentUser && currentUser.username !== 'admin' && currentUser.username !== 'admin2') {
+  } else if (currentUser && currentUser.username !== 'admin') {
     const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
     if (shouldNotifyAdmin) {
       notificationManager.create({
         type: 'repair',
-        title: order.status === 'completed' ? 'Completed repair order received' : 'Repair order received from technician',
-        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a repair order'}.`,
+        title: order.status === 'completed' ? 'Completed work order received' : 'Work order received from technician',
+        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a work order'}.`,
         recipients: getAdminRecipients(currentUser?.name),
         targetView: 'repair',
         targetId: order.id,
-        actionLabel: 'Open Repair Order'
+        actionLabel: 'Open Work Order'
       });
     }
   }
 
   showToast(order.status === 'completed'
-    ? 'Completed repair order saved for admin export'
-    : 'Repair work order saved');
+    ? 'Completed work order saved for admin export'
+    : 'Work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
