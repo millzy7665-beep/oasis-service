@@ -1662,18 +1662,13 @@ select.form-control {
    PAGE TRANSITIONS
    ============================================================ */
 
-/* App boot: fade in whole shell */
+/* App boot: fade in whole app shell */
 @keyframes appFadeIn {
-  from { opacity: 0; transform: scale(0.98); }
-  to   { opacity: 1; transform: scale(1); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 #app:not(.hidden) {
-  animation: appFadeIn 0.35s cubic-bezier(.22,.68,0,1.2) both;
-}
-
-/* Login screen fade in on load */
-.login-screen {
-  animation: appFadeIn 0.4s ease both;
+  animation: appFadeIn 0.3s ease both;
 }
 
 /* Per-page content fade */

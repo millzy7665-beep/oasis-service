@@ -2458,6 +2458,8 @@ function initMasterSchedule() {
 function populateLoginTechOptions() {
   const select = document.getElementById('login-tech');
   if (!select) return;
+  // If the HTML already has options populated (hardcoded in index.html), skip to avoid jump
+  if (select.options.length > 1) return;
 
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
@@ -5658,6 +5660,8 @@ function initMasterSchedule() {
 function populateLoginTechOptions() {
   const select = document.getElementById('login-tech');
   if (!select) return;
+  // If the HTML already has options populated (hardcoded in index.html), skip to avoid jump
+  if (select.options.length > 1) return;
 
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
@@ -7341,6 +7345,8 @@ function initMasterSchedule() {
 function populateLoginTechOptions() {
   const select = document.getElementById('login-tech');
   if (!select) return;
+  // If the HTML already has options populated (hardcoded in index.html), skip to avoid jump
+  if (select.options.length > 1) return;
 
   const entries = Object.entries(auth.users)
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
