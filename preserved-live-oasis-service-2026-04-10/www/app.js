@@ -604,13 +604,6 @@ class Router {
       </div>
       ` : ''}
 
-      <div class="section-header">
-        <div class="section-title">Today's Schedule</div>
-      </div>
-
-      <div id="today-schedule">
-        ${this.renderTodaySchedule()}
-      </div>
     `;
   }
 
