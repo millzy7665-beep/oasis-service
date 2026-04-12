@@ -413,6 +413,7 @@ class Router {
       'routes': this.renderRoutes.bind(this),
       'clients': this.renderClients.bind(this),
       'workorders': this.renderWorkOrders.bind(this),
+      'quotes': this.renderQuotes.bind(this),
       'settings': this.renderSettings.bind(this)
     };
     this.currentView = 'dashboard';
@@ -470,6 +471,10 @@ class Router {
     const woBtn = document.querySelector('.nav-item[data-view="workorders"]');
     if (clientsBtn) clientsBtn.style.display = canSeeClientsAndWO ? '' : 'none';
     if (woBtn) woBtn.style.display = canSeeClientsAndWO ? '' : 'none';
+
+    // Quotes: admin only
+    const quotesBtn = document.querySelector('.nav-item[data-view="quotes"]');
+    if (quotesBtn) quotesBtn.style.display = isAdmin ? '' : 'none';
   }
 
   setAdminJobStatusFilter(value = 'all') {
@@ -1035,6 +1040,72 @@ class Router {
     `;
   }
 
+  renderQuotes() {
+    if (!auth.isAdmin()) { this.navigate('dashboard'); return; }
+    const content = document.getElementById('main-content');
+    const allEstimates = [...getEstimateSheets()].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+    const sentQuotes     = allEstimates.filter(e => (e.status || '').toLowerCase() === 'sent');
+    const approvedQuotes = allEstimates.filter(e => (e.status || '').toLowerCase() === 'approved');
+    const clients = db.get('clients', []);
+
+    const renderQuoteCard = (estimate, showConvert = false) => {
+      const client = clients.find(c => c.id === estimate.clientId);
+      const clientName = client?.name || estimate.clientName || 'Client';
+      const total = formatEstimateMoney(estimate.total || estimate.subtotal || 0);
+      return `
+        <div class="job-card">
+          <div class="job-card-header">
+            <div>
+              <div class="job-card-title">${escapeHtml(clientName)}</div>
+              <div class="job-card-customer">${escapeHtml(estimate.project || 'Client Estimate')}</div>
+              <div class="job-meta">
+                <div class="job-meta-item">&#x1F9FE; ${escapeHtml(estimate.estimateNumber || 'Draft')}</div>
+                <div class="job-meta-item">&#x1F4C5; ${escapeHtml(estimate.date || '')}</div>
+                <div class="job-meta-item">&#x1F4B2; $${escapeHtml(total)}</div>
+              </div>
+            </div>
+            <div class="badge badge-${getEstimateStatusBadgeClass(estimate.status)}">${escapeHtml(estimate.status || 'Draft')}</div>
+          </div>
+          ${estimate.scope ? `<div class="detail-row"><div class="detail-label">Scope</div><div class="detail-value">${escapeHtml(estimate.scope)}</div></div>` : ''}
+          <div class="job-card-footer">
+            <button class="btn btn-secondary btn-sm" onclick="router.viewEstimate('${escapeHtml(estimate.id)}')" >Open</button>
+            <button class="btn btn-secondary btn-sm" onclick="saveEstimatePDF('${escapeHtml(estimate.id)}')">PDF</button>
+            ${auth.canShare() ? `<button class="btn btn-primary btn-sm" onclick="shareEstimatePDF('${escapeHtml(estimate.id)}')">Share</button>` : ''}
+            ${showConvert ? `<button class="btn btn-primary btn-sm" onclick="convertQuoteToWorkOrder('${escapeHtml(estimate.id)}')">Convert to WO</button>` : ''}
+            <button class="btn btn-danger btn-sm" onclick="deleteEstimateSheet('${escapeHtml(estimate.id)}')">Delete</button>
+          </div>
+        </div>
+      `;
+    };
+
+    content.innerHTML = `
+      <div class="section-header">
+        <div class="section-title">Quotes</div>
+        <button class="btn btn-primary btn-sm" onclick="router.createEstimate()">+ Create Estimate</button>
+      </div>
+
+      <div class="section-header" style="margin-top:16px;">
+        <div class="section-title" style="font-size:15px;">&#x1F4E4; Sent Quotes</div>
+      </div>
+      ${sentQuotes.length ? sentQuotes.map(e => renderQuoteCard(e)).join('') : `
+        <div class="empty-state" style="margin:0 16px 16px; padding:16px;">
+          <div class="empty-icon">&#x1F4E4;</div>
+          <div class="empty-title">No sent quotes</div>
+          <div class="empty-subtitle">Quotes will appear here after being shared with a client.</div>
+        </div>`}
+
+      <div class="section-header" style="margin-top:16px;">
+        <div class="section-title" style="font-size:15px;">&#x2705; Approved Quotes</div>
+      </div>
+      ${approvedQuotes.length ? approvedQuotes.map(e => renderQuoteCard(e, true)).join('') : `
+        <div class="empty-state" style="margin:0 16px 16px; padding:16px;">
+          <div class="empty-icon">&#x2705;</div>
+          <div class="empty-title">No approved quotes</div>
+          <div class="empty-subtitle">Mark a quote as Approved and it will appear here ready to convert to a work order.</div>
+        </div>`}
+    `;
+  }
+
   renderSettings() {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
@@ -1060,16 +1131,7 @@ class Router {
         </div>
       </div>
 
-      ${isAdmin ? `
-      <div class="section-header" style="margin-top: 20px;">
-        <div class="section-title">Estimate Builder</div>
-      </div>
-      <div class="card">
-        <div class="card-body">
-          <button class="btn btn-primary" onclick="router.createEstimate()">Create Estimate</button>
-        </div>
-      </div>
-      ` : ''}
+
 
       ${isMainAdmin ? `
       <div class="section-header" style="margin-top: 20px;">
@@ -3819,7 +3881,7 @@ async function saveEstimateSheet(estimateId = '', shareAfterSave = false) {
     await saveEstimatePDF(estimate.id, 'share');
   }
 
-  router.renderWorkOrders();
+  router.navigate('quotes');
 }
 
 function deleteEstimateSheet(estimateId) {
@@ -3830,7 +3892,7 @@ function deleteEstimateSheet(estimateId) {
   if (!confirm('Delete this estimate sheet?')) return;
   saveEstimateSheets(getEstimateSheets().filter(item => item.id !== estimateId));
   showToast('Estimate deleted');
-  router.renderWorkOrders();
+  router.navigate('quotes');
 }
 
 async function saveEstimatePDF(estimateId, mode = 'save') {
@@ -8003,6 +8065,43 @@ function renderRepairPhotoSlot(orderId, label, photo, index) {
       <input id="repair-photo-gallery-${index}" name="repair-photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
     </div>
   `;
+}
+
+function convertQuoteToWorkOrder(estimateId) {
+  if (!auth.isAdmin()) { showToast('Only admins can convert quotes'); return; }
+  const estimate = getEstimateSheet(estimateId);
+  if (!estimate) { showToast('Estimate not found'); return; }
+
+  const itemsSummary = (estimate.items || [])
+    .filter(item => item.equipment || item.partNumber)
+    .map(item => `${item.equipment || item.partNumber}${item.qty && item.qty !== '1' ? ` x${item.qty}` : ''}`)
+    .join(', ');
+
+  const newOrder = {
+    id: `r${Date.now()}`,
+    clientId: estimate.clientId || '',
+    clientName: estimate.clientName || '',
+    address: estimate.address || '',
+    date: new Date().toISOString().split('T')[0],
+    time: '', timeIn: '', timeOut: '',
+    assignedTo: '',
+    status: 'open',
+    jobType: estimate.project || 'Pool Equipment Installation',
+    summary: estimate.scope || '',
+    materials: itemsSummary,
+    partsItems: [],
+    partsSummary: itemsSummary,
+    labourHours: '',
+    notes: `Converted from Estimate ${estimate.estimateNumber || ''}. Total: $${formatEstimateMoney(estimate.total || estimate.subtotal || 0)}`,
+    photos: [],
+    sourceEstimateId: estimate.id
+  };
+
+  const orders = getRepairOrders();
+  orders.unshift(newOrder);
+  saveRepairOrders(orders);
+  showToast(`Work order created from ${estimate.estimateNumber || 'estimate'} — assign a technician`);
+  renderRepairOrderForm(newOrder.id);
 }
 
 async function exportDailyWorkOrders() {
