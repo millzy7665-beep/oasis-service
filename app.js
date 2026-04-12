@@ -1641,64 +1641,7 @@ class WorkOrderManager {
       console.warn('Logo load failed', e);
     }
 
-    const renderHeader = () => {
-      doc.setFillColor(...navy);
-      doc.rect(0, 0, 210, 25, 'F');
-      doc.setFillColor(...gold);
-      doc.rect(0, 25, 210, 1, 'F');
-
-      if (logoData) {
-        doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
-      }
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'normal');
-      doc.setCharSpace(1.6);
-      doc.setFontSize(18);
-      doc.text('OASIS', 32, 16.5);
-      doc.setCharSpace(0);
-
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      doc.text('SERVICE REPORT', 195, 14, { align: 'right' });
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
-      doc.setTextColor(...gold);
-      doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
-
-      return 35;
-    };
-
-    const renderFooter = () => {
-      const footerY = 278;
-      doc.setFillColor(...navy);
-      doc.rect(0, footerY, 210, 20, 'F');
-      doc.setFillColor(...gold);
-      doc.rect(0, footerY, 210, 0.5, 'F');
-
-      if (logoData) {
-        doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
-      }
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'normal');
-      doc.setCharSpace(1.4);
-      doc.setFontSize(10.5);
-      doc.text('OASIS', 30, footerY + 11.5);
-      doc.setCharSpace(0);
-
-      doc.setFontSize(7);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(180, 180, 180);
-      doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'normal');
-      doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
-      doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
-    };
-
-    let y = renderHeader();
+    let y = await applyOasisPdfBranding(doc, 'Service Report', 'Luxury Pool & Watershape Design');
 
     // Info Grid
 
@@ -1836,7 +1779,7 @@ class WorkOrderManager {
       }
     }
 
-    renderFooter();
+    await applyOasisPdfFooter(doc);
     sharePDF(doc, filename);
   }
 
@@ -3186,73 +3129,10 @@ async function shareRepairPDF(orderId) {
   const gold = [201, 168, 124];
   const lightBeige = [248, 245, 241];
 
-  let logoData = null;
-  try {
-    logoData = await getImageDataUrl('oasis-logo.png');
-  } catch (e) {
-    console.warn('Logo load failed', e);
-  }
+  let y = await applyOasisPdfBranding(doc, 'Repair Work Order', 'Luxury Pool & Watershape Design');
 
-  let y = 0;
-
-  const renderHeader = () => {
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, 210, 25, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, 25, 210, 1, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('times', 'bold');
-    doc.setFontSize(22);
-    doc.text('O A S I S', 32, 17);
-
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('REPAIR WORK ORDER', 195, 14, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.setTextColor(...gold);
-    doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
-
-    return 35;
-  };
-
-  const renderFooter = () => {
-    const footerY = 278;
-    doc.setFillColor(...navy);
-    doc.rect(0, footerY, 210, 20, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, footerY, 210, 0.5, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(12);
-    doc.setFont('times', 'bold');
-    doc.text('O A S I S', 30, footerY + 12);
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(180, 180, 180);
-    doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
-    doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
-  };
-
-  y = renderHeader();
-
-  // Info Grid
-
-  let gridY = y + 7;
+  const gridY_start = y + 5;
+  let gridY = gridY_start;
   const col1 = 15;
   const col2 = 110;
 
@@ -3355,7 +3235,7 @@ async function shareRepairPDF(orderId) {
     });
   }
 
-  renderFooter();
+  await applyOasisPdfFooter(doc);
   sharePDF(doc, filename);
 }
 
@@ -3912,13 +3792,13 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
   const total = parseEstimateNumber(estimate.total || subtotal);
   const items = normalizeEstimateItems(estimate.items || []);
   const clientName = estimate.clientName || 'Client';
-  let y = applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
+  let y = await applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
 
   const ensureSpace = (needed = 16) => {
     if (y + needed > 265) {
-      applyOasisPdfFooter(doc);
+      await applyOasisPdfFooter(doc);
       doc.addPage();
-      y = applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
+      y = await applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
     }
   };
 
@@ -4026,7 +3906,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
   const termLines = doc.splitTextToSize(estimate.terms || 'Estimate valid for 30 days.', 180);
   doc.text(termLines, 15, y);
 
-  applyOasisPdfFooter(doc);
+  await applyOasisPdfFooter(doc);
 
   const safeClient = String(clientName || 'Client').replace(/[^a-z0-9]+/gi, '_');
   const filename = `OASIS_Estimate_${safeClient}_${estimate.date || getEstimateDefaultDate()}.pdf`;
@@ -4730,60 +4610,86 @@ async function exportRepairToExcel(orderId) {
   }
 }
 
-function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATERSHAPE DESIGN') {
+async function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATERSHAPE DESIGN') {
   const navy = [13, 43, 69];
   const gold = [201, 168, 124];
   const white = [255, 255, 255];
 
-  // Header
+  let logoData = null;
+  try { logoData = await getImageDataUrl('oasis-logo.png'); } catch (e) {}
+
+  // Header band
   doc.setFillColor(...navy);
   doc.rect(0, 0, 210, 28, 'F');
   doc.setFillColor(...gold);
   doc.rect(0, 28, 210, 1.5, 'F');
 
-  // Logo Placeholder / Text
+  // Logo
+  if (logoData) {
+    doc.addImage(logoData, 'PNG', 10, 5, 16, 16);
+  }
+
+  // OASIS wordmark — Times italic gives the closest serif elegance to Cormorant
   doc.setTextColor(...white);
-  doc.setFont('helvetica', 'normal');
-  doc.setCharSpace(1.8);
-  doc.setFontSize(18);
-  doc.text('OASIS', 45, 18);
+  doc.setFont('times', 'bolditalic');
+  doc.setCharSpace(3.5);
+  doc.setFontSize(20);
+  doc.text('OASIS', logoData ? 30 : 14, 19);
   doc.setCharSpace(0);
 
-  // Title
-  doc.setFontSize(14);
-  doc.text(title.toUpperCase(), 190, 16, { align: 'right' });
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(...gold);
-  doc.text(subtitle.toUpperCase(), 190, 22, { align: 'right' });
+  // Title (right)
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text(title.toUpperCase(), 198, 15, { align: 'right' });
 
-  return 40;
+  // Subtitle (right, gold)
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(...gold);
+  doc.text(subtitle.toUpperCase(), 198, 22, { align: 'right' });
+
+  return 38;
 }
 
-function applyOasisPdfFooter(doc) {
+async function applyOasisPdfFooter(doc) {
   const navy = [13, 43, 69];
   const gold = [201, 168, 124];
   const white = [255, 255, 255];
-  const y = 275;
+  const y = 274;
+
+  let logoData = null;
+  try { logoData = await getImageDataUrl('oasis-logo.png'); } catch (e) {}
 
   doc.setFillColor(...navy);
-  doc.rect(0, y, 210, 22, 'F');
+  doc.rect(0, y, 210, 23, 'F');
+  doc.setFillColor(...gold);
+  doc.rect(0, y, 210, 0.8, 'F');
 
+  // Logo in footer
+  if (logoData) {
+    doc.addImage(logoData, 'PNG', 10, y + 5, 12, 12);
+  }
+
+  // OASIS wordmark
   doc.setTextColor(...white);
-  doc.setFont('helvetica', 'normal');
-  doc.setCharSpace(1.5);
-  doc.setFontSize(11);
-  doc.text('OASIS', 40, y + 10);
+  doc.setFont('times', 'bolditalic');
+  doc.setCharSpace(3);
+  doc.setFontSize(12);
+  doc.text('OASIS', logoData ? 25 : 10, y + 13);
   doc.setCharSpace(0);
-  doc.setFontSize(7);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(150, 150, 150);
-  doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 40, y + 15);
 
+  // Tagline
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(180, 180, 180);
+  doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', logoData ? 25 : 10, y + 18);
+
+  // Contact right
   doc.setTextColor(...white);
-  doc.text('Harbour Walk, 2nd Floor — Grand Cayman, KY1-1001', 190, y + 8, { align: 'right' });
-  doc.text('+1 345-945-7665 · oasis.ky', 190, y + 13, { align: 'right' });
-  doc.text(`Generated ${new Date().toLocaleDateString()}`, 190, y + 18, { align: 'right' });
+  doc.setFontSize(7);
+  doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 198, y + 8, { align: 'right' });
+  doc.text('+1 345-945-7665  ·  oasis.ky', 198, y + 13, { align: 'right' });
+  doc.text(`Generated ${new Date().toLocaleDateString()}`, 198, y + 18, { align: 'right' });
 }
 
 
@@ -6368,73 +6274,10 @@ async function shareRepairPDF(orderId) {
   const gold = [201, 168, 124];
   const lightBeige = [248, 245, 241];
 
-  let logoData = null;
-  try {
-    logoData = await getImageDataUrl('oasis-logo.png');
-  } catch (e) {
-    console.warn('Logo load failed', e);
-  }
+  let y = await applyOasisPdfBranding(doc, 'Repair Work Order', 'Luxury Pool & Watershape Design');
 
-  let y = 0;
-
-  const renderHeader = () => {
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, 210, 25, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, 25, 210, 1, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('times', 'bold');
-    doc.setFontSize(22);
-    doc.text('O A S I S', 32, 17);
-
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('REPAIR WORK ORDER', 195, 14, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.setTextColor(...gold);
-    doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
-
-    return 35;
-  };
-
-  const renderFooter = () => {
-    const footerY = 278;
-    doc.setFillColor(...navy);
-    doc.rect(0, footerY, 210, 20, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, footerY, 210, 0.5, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(12);
-    doc.setFont('times', 'bold');
-    doc.text('O A S I S', 30, footerY + 12);
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(180, 180, 180);
-    doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
-    doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
-  };
-
-  y = renderHeader();
-
-  // Info Grid
-
-  let gridY = y + 7;
+  const gridY_start = y + 5;
+  let gridY = gridY_start;
   const col1 = 15;
   const col2 = 110;
 
@@ -6537,7 +6380,7 @@ async function shareRepairPDF(orderId) {
     });
   }
 
-  renderFooter();
+  await applyOasisPdfFooter(doc);
   sharePDF(doc, filename);
 }
 
