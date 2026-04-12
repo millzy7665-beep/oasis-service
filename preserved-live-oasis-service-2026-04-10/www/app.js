@@ -456,6 +456,11 @@ class Router {
     document.querySelectorAll('.nav-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === this.currentView);
     });
+    // Hide Routes tab for Jet and Mark — they use Work Orders instead
+    const user = auth.getCurrentUser();
+    const isOfficeUser = user && (user.name === 'Jet' || user.name === 'Mark') && !auth.isAdmin();
+    const routesBtn = document.querySelector('.nav-item[data-view="routes"]');
+    if (routesBtn) routesBtn.style.display = isOfficeUser ? 'none' : '';
   }
 
   setAdminJobStatusFilter(value = 'all') {
@@ -664,19 +669,24 @@ class Router {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
-    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
 
-    // Office users see Repair Visits instead of Routes
-    if (isOfficeUser) { return this.renderRepairVisits(); }
+    // Jet and Mark have no Routes tab — redirect to work orders
+    if (!isAdmin && user && (user.name === 'Jet' || user.name === 'Mark')) {
+      return this.renderWorkOrders();
+    }
 
     const allClients = db.get('clients', []);
     const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
-    let techFilter = user ? user.name : '';
-    const techClients = allClients.filter(c => c.technician === techFilter && c.serviceDays && c.serviceDays.length);
+    // Admin: can filter by any tech. Field tech: shows only their own clients.
+    let techFilter = isAdmin ? (this._routeTechFilter || 'all') : (user ? user.name : '');
+    const techClients = techFilter === 'all'
+      ? allClients.filter(c => c.serviceDays && c.serviceDays.length)
+      : allClients.filter(c => c.technician === techFilter && c.serviceDays && c.serviceDays.length);
 
-    // Build day tabs - default to today
+    const techs = [...new Set(allClients.filter(c => c.technician).map(c => c.technician))].sort();
+
     this._routeDayFilter = this._routeDayFilter || today;
     const dayFilter = this._routeDayFilter;
 
@@ -686,9 +696,20 @@ class Router {
 
     content.innerHTML = `
       <div class="section-header">
-        <div style="display:flex; align-items:center; gap:8px;"><button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button><div class="section-title">${user ? user.name + "'s Route" : 'My Route'}</div></div>
-        <div style="font-size:12px; color:#666;">${techClients.length} clients assigned</div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button>
+          <div class="section-title">${isAdmin ? 'All Routes' : (user ? user.name + "'s Route" : 'My Route')}</div>
+        </div>
+        <div style="font-size:12px; color:#666;">${dayClients.length} client${dayClients.length !== 1 ? 's' : ''} shown</div>
       </div>
+
+      ${isAdmin ? `
+      <div style="padding:0 16px 8px;">
+        <select class="form-control" onchange="router._routeTechFilter=this.value; router._routeDayFilter=null; router.renderRoutes();" style="font-size:14px;">
+          <option value="all" ${techFilter === 'all' ? 'selected' : ''}>All Technicians</option>
+          ${techs.map(t => `<option value="${escapeHtml(t)}" ${techFilter === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+        </select>
+      </div>` : ''}
 
       <div style="display:flex; gap:4px; padding:0 16px 10px; overflow-x:auto;">
         <button class="btn btn-sm ${dayFilter === 'all' ? 'btn-primary' : 'btn-secondary'}" onclick="router._routeDayFilter='all'; router.renderRoutes();">All</button>
