@@ -3794,7 +3794,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
   const clientName = estimate.clientName || 'Client';
   let y = await applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
 
-  const ensureSpace = (needed = 16) => {
+  const ensureSpace = async (needed = 16) => {
     if (y + needed > 265) {
       await applyOasisPdfFooter(doc);
       doc.addPage();
@@ -3820,7 +3820,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
   doc.text(String(estimate.validUntil || '—'), 110, y + 19);
   y += 32;
 
-  ensureSpace(20);
+  await ensureSpace(20);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(13, 43, 69);
@@ -3865,7 +3865,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
     y = doc.lastAutoTable.finalY + 8;
   }
 
-  ensureSpace(28);
+  await ensureSpace(28);
   doc.setFillColor(248, 245, 241);
   doc.roundedRect(120, y, 75, 18, 3, 3, 'F');
   doc.setFont('helvetica', 'normal');
@@ -3880,7 +3880,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
   y += 26;
 
   if (estimate.notes) {
-    ensureSpace(20);
+    await ensureSpace(20);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.setTextColor(13, 43, 69);
@@ -3894,7 +3894,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
     y += (noteLines.length * 4.5) + 4;
   }
 
-  ensureSpace(20);
+  await ensureSpace(20);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(13, 43, 69);
