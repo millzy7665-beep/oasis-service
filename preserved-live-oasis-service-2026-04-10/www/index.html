@@ -17,7 +17,7 @@
 
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
-  <link rel="stylesheet" href="styles.css?v=180">
+  <link rel="stylesheet" href="styles.css?v=184">
 
   <style>
     /* Critical overrides for luxury feel */
@@ -26,7 +26,6 @@
       height: auto;
       margin: 0 auto 24px;
       display: block;
-      mix-blend-mode: screen;
     }
     .login-brand {
       color: #c9a87c !important;
@@ -76,11 +75,11 @@
     <div id="app-shell">
       <header class="app-header">
         <div class="header-left">
-          <img class="header-logo-icon" src="oasis-logo.png" alt="OASIS" style="height: 36px; mix-blend-mode: screen;">
+          <img class="header-logo-icon" src="oasis-logo.png" alt="OASIS" style="height: 36px;">
           <div class="header-sub">Elevate Your Outdoor Living Space</div>
         </div>
         <div id="header-actions" class="header-actions">
-          <button class="signout-btn" onclick="auth.logout(); location.reload();">Sign Out</button>
+          <button class="signout-btn" onclick="signOut()">Sign Out</button>
         </div>
       </header>
       <main id="main-content" class="main-content"></main>
@@ -135,7 +134,7 @@
   <script src="tech-catalog.js?v=101"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-  <script src="app.js?v=180"></script>
+  <script src="app.js?v=184"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
@@ -147,5 +146,6 @@
       });
     }
   </script>
+  <div id="transition-curtain"></div>
 </body>
 </html>

@@ -2523,25 +2523,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
 
-      if (loginScreen) {
-        loginScreen.classList.add('fade-out');
-        setTimeout(() => loginScreen.style.setProperty('display', 'none', 'important'), 250);
-      }
-      if (appShell) {
-        setTimeout(() => {
+      if (loginError) loginError.style.display = 'none';
+      curtainTransition(() => {
+        if (loginScreen) loginScreen.style.setProperty('display', 'none', 'important');
+        if (appShell) {
           appShell.classList.remove('hidden');
           appShell.style.setProperty('display', 'flex', 'important');
-        }, 200);
-      }
-      if (loginError) loginError.style.display = 'none';
-
-      // Navigate after fade completes
-      try {
-        setTimeout(() => router.navigate('dashboard'), 220);
-      } catch (err) {
-        console.error('Navigation error:', err);
-        location.reload();
-      }
+        }
+        try { router.navigate('dashboard'); } catch (err) { location.reload(); }
+      });
     } else {
       console.warn('Login failed: invalid username or PIN');
       if (loginError) loginError.style.display = 'block';
@@ -2555,16 +2545,26 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-function signOut() {
-  const appShell = document.getElementById('app');
-  const loginScreen = document.getElementById('login-screen');
-  if (appShell) appShell.classList.add('fade-out');
+// Dark curtain transition — prevents white flash between login and app
+function curtainTransition(callback, duration = 320) {
+  const curtain = document.getElementById('transition-curtain');
+  if (!curtain) { callback(); return; }
+  curtain.classList.add('active');
   setTimeout(() => {
+    callback();
+    requestAnimationFrame(() => requestAnimationFrame(() => curtain.classList.remove('active')));
+  }, duration / 2);
+}
+
+function signOut() {
+  curtainTransition(() => {
     auth.logout();
-    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; appShell.classList.remove('fade-out'); }
-    if (loginScreen) { loginScreen.classList.remove('hidden', 'fade-out'); loginScreen.style.display = 'flex'; }
+    const appShell = document.getElementById('app');
+    const loginScreen = document.getElementById('login-screen');
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
+    if (loginScreen) { loginScreen.style.display = 'flex'; }
     router.navigate('dashboard');
-  }, 250);
+  });
 }
 
 function quickAddClient() {
@@ -3118,7 +3118,6 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 function getImageDataUrl(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = 'Anonymous';
     img.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
@@ -4633,26 +4632,8 @@ async function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATER
   const gold = [201, 168, 124];
   const white = [255, 255, 255];
 
-  // Composite logo onto navy using 'lighten' blend: dark pixels→navy, gold pixels→gold, no transparency needed
-  let logoData = null;
-  try {
-    logoData = await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = `rgb(${navy[0]},${navy[1]},${navy[2]})`;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.globalCompositeOperation = 'lighten';
-        ctx.drawImage(img, 0, 0);
-        resolve(canvas.toDataURL('image/jpeg', 1.0));
-      };
-      img.onerror = reject;
-      img.src = 'oasis-logo.png';
-    });
-  } catch (e) {}
+  // Transparent logo — dark pixels stripped via canvas pixel processing
+  const logoData = await getImageDataUrl('oasis-logo.png');
 
   // Full navy header band
   doc.setFillColor(...navy);
@@ -4663,7 +4644,7 @@ async function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATER
 
   // Logo — lighten-composited JPEG, dark bg becomes navy
   if (logoData) {
-    doc.addImage(logoData, 'JPEG', 9, 3, 20, 20);
+    doc.addImage(logoData, 'PNG', 9, 3, 20, 20);
   }
 
   // OASIS wordmark — gold, italic (not bold), spaced letters
@@ -4705,26 +4686,8 @@ async function applyOasisPdfFooter(doc) {
   const white = [255, 255, 255];
   const y = 274;
 
-  // Composite logo onto navy using 'lighten' blend: dark pixels→navy, gold pixels→gold, no transparency needed
-  let logoData = null;
-  try {
-    logoData = await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = `rgb(${navy[0]},${navy[1]},${navy[2]})`;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.globalCompositeOperation = 'lighten';
-        ctx.drawImage(img, 0, 0);
-        resolve(canvas.toDataURL('image/jpeg', 1.0));
-      };
-      img.onerror = reject;
-      img.src = 'oasis-logo.png';
-    });
-  } catch (e) {}
+  // Transparent logo — dark pixels stripped via canvas pixel processing
+  const logoData = await getImageDataUrl('oasis-logo.png');
 
   // Full navy footer band
   doc.setFillColor(...navy);
@@ -4735,7 +4698,7 @@ async function applyOasisPdfFooter(doc) {
 
   // Logo — lighten-composited JPEG, dark bg becomes navy
   if (logoData) {
-    doc.addImage(logoData, 'JPEG', 10, y + 5, 12, 12);
+    doc.addImage(logoData, 'PNG', 10, y + 5, 12, 12);
   }
 
   // OASIS wordmark — gold, italic (not bold)
@@ -5725,25 +5688,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
 
-      if (loginScreen) {
-        loginScreen.classList.add('fade-out');
-        setTimeout(() => loginScreen.style.setProperty('display', 'none', 'important'), 250);
-      }
-      if (appShell) {
-        setTimeout(() => {
+      if (loginError) loginError.style.display = 'none';
+      curtainTransition(() => {
+        if (loginScreen) loginScreen.style.setProperty('display', 'none', 'important');
+        if (appShell) {
           appShell.classList.remove('hidden');
           appShell.style.setProperty('display', 'flex', 'important');
-        }, 200);
-      }
-      if (loginError) loginError.style.display = 'none';
-
-      // Navigate after fade completes
-      try {
-        setTimeout(() => router.navigate('dashboard'), 220);
-      } catch (err) {
-        console.error('Navigation error:', err);
-        location.reload();
-      }
+        }
+        try { router.navigate('dashboard'); } catch (err) { location.reload(); }
+      });
     } else {
       console.warn('Login failed: invalid username or PIN');
       if (loginError) loginError.style.display = 'block';
@@ -5758,15 +5711,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  const appShell = document.getElementById('app');
-  const loginScreen = document.getElementById('login-screen');
-  if (appShell) appShell.classList.add('fade-out');
-  setTimeout(() => {
+  curtainTransition(() => {
     auth.logout();
-    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; appShell.classList.remove('fade-out'); }
-    if (loginScreen) { loginScreen.classList.remove('hidden', 'fade-out'); loginScreen.style.display = 'flex'; }
+    const appShell = document.getElementById('app');
+    const loginScreen = document.getElementById('login-screen');
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
+    if (loginScreen) { loginScreen.style.display = 'flex'; }
     router.navigate('dashboard');
-  }, 250);
+  });
 }
 
 function quickAddClient() {
@@ -6320,7 +6272,6 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 function getImageDataUrl(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = 'Anonymous';
     img.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
@@ -7410,25 +7361,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
 
-      if (loginScreen) {
-        loginScreen.classList.add('fade-out');
-        setTimeout(() => loginScreen.style.setProperty('display', 'none', 'important'), 250);
-      }
-      if (appShell) {
-        setTimeout(() => {
+      if (loginError) loginError.style.display = 'none';
+      curtainTransition(() => {
+        if (loginScreen) loginScreen.style.setProperty('display', 'none', 'important');
+        if (appShell) {
           appShell.classList.remove('hidden');
           appShell.style.setProperty('display', 'flex', 'important');
-        }, 200);
-      }
-      if (loginError) loginError.style.display = 'none';
-
-      // Navigate after fade completes
-      try {
-        setTimeout(() => router.navigate('dashboard'), 220);
-      } catch (err) {
-        console.error('Navigation error:', err);
-        location.reload();
-      }
+        }
+        try { router.navigate('dashboard'); } catch (err) { location.reload(); }
+      });
     } else {
       console.warn('Login failed: invalid username or PIN');
       if (loginError) loginError.style.display = 'block';
@@ -7443,15 +7384,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  const appShell = document.getElementById('app');
-  const loginScreen = document.getElementById('login-screen');
-  if (appShell) appShell.classList.add('fade-out');
-  setTimeout(() => {
+  curtainTransition(() => {
     auth.logout();
-    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; appShell.classList.remove('fade-out'); }
-    if (loginScreen) { loginScreen.classList.remove('hidden', 'fade-out'); loginScreen.style.display = 'flex'; }
+    const appShell = document.getElementById('app');
+    const loginScreen = document.getElementById('login-screen');
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
+    if (loginScreen) { loginScreen.style.display = 'flex'; }
     router.navigate('dashboard');
-  }, 250);
+  });
 }
 
 function quickAddClient() {
