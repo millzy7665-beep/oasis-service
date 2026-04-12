@@ -88,10 +88,10 @@
         <button class="nav-item" data-view="routes" onclick="router.navigate('routes')">
           <span class="nav-icon">🗺️</span><span class="nav-label">Routes</span>
         </button>
-        <button class="nav-item" data-view="clients" onclick="router.navigate('clients')">
+        <button class="nav-item" data-view="clients" onclick="router.navigate('clients')" style="display:none;">
           <span class="nav-icon">👥</span><span class="nav-label">Clients</span>
         </button>
-        <button class="nav-item" data-view="workorders" onclick="router.navigate('workorders')">
+        <button class="nav-item" data-view="workorders" onclick="router.navigate('workorders')" style="display:none;">
           <span class="nav-icon">📋</span><span class="nav-label">Work Orders</span>
         </button>
         <button class="nav-item" data-view="settings" onclick="router.navigate('settings')">
@@ -132,7 +132,7 @@
   <script src="tech-catalog.js?v=101"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-  <script src="app.js?v=159"></script>
+  <script src="app.js?v=160"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

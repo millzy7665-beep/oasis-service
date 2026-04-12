@@ -459,17 +459,17 @@ class Router {
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
     const isJetOrMark = !isAdmin && user && (user.name === 'Jet' || user.name === 'Mark');
-    const isFieldTech = !isAdmin && !isJetOrMark && !!user;
+    const canSeeClientsAndWO = isAdmin || isJetOrMark;
 
-    // Jet/Mark: hide Routes tab
+    // Routes: visible for everyone except Jet/Mark
     const routesBtn = document.querySelector('.nav-item[data-view="routes"]');
     if (routesBtn) routesBtn.style.display = isJetOrMark ? 'none' : '';
 
-    // Field techs: hide Clients and Work Orders tabs
+    // Clients and Work Orders: only visible for admin and Jet/Mark
     const clientsBtn = document.querySelector('.nav-item[data-view="clients"]');
     const woBtn = document.querySelector('.nav-item[data-view="workorders"]');
-    if (clientsBtn) clientsBtn.style.display = isFieldTech ? 'none' : '';
-    if (woBtn) woBtn.style.display = isFieldTech ? 'none' : '';
+    if (clientsBtn) clientsBtn.style.display = canSeeClientsAndWO ? '' : 'none';
+    if (woBtn) woBtn.style.display = canSeeClientsAndWO ? '' : 'none';
   }
 
   setAdminJobStatusFilter(value = 'all') {
