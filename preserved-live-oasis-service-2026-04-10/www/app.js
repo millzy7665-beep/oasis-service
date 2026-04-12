@@ -1,5 +1,5 @@
 // OASIS Service and Repair App - Unified Version
-// Features: Login, Dashboard, Clients, Chem Sheets, Repair Orders, Settings
+// Features: Login, Dashboard, Clients, Chem Sheets, Work Orders, Settings
 // PDF generation with local save instead of email
 
 // ==========================================
@@ -291,7 +291,7 @@ class NotificationManager {
         <div class="card" style="margin: 0 16px 12px;">
           <div class="card-body">
             <div class="empty-title">No new notifications</div>
-            <div class="empty-subtitle">New clients, chem sheets, and repair orders from Admin will appear here offline on this device.</div>
+            <div class="empty-subtitle">New clients, chem sheets, and work orders from Admin will appear here offline on this device.</div>
           </div>
         </div>
       `;
@@ -624,11 +624,11 @@ class Router {
 
     const repairJobs = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo').map(order => ({
       id: order.id,
-      clientName: order.clientName || 'Repair Job',
+      clientName: order.clientName || 'Work Order',
       address: order.address || '',
       time: order.timeIn || order.time || 'TBD',
       status: order.status || 'open',
-      kind: order.jobType || 'Repair Order',
+      kind: order.jobType || 'Work Order',
       openAction: `renderRepairOrderForm('${order.id}')`,
       dateKey: this.getDateKey(order.date)
     }));
@@ -820,13 +820,14 @@ class Router {
     const isAdmin = auth.isAdmin();
     const canShare = auth.canShare();
 
+    const completedWOs = (typeof getRepairOrders === 'function' ? getRepairOrders() : []).filter(o => (o.status || '').toLowerCase() === 'completed');
+
     content.innerHTML = `
       <div class="section-header">
-        <div class="section-title">Service & Repair Jobs</div>
+        <div class="section-title">Work Orders</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="exportCompletedToExcel()">Bulk Download Excel</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
-          <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Repair Order</button>
+          <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
         </div>
       </div>
 
@@ -845,12 +846,26 @@ class Router {
       </div>
       ` : ''}
 
+      ${isAdmin && completedWOs.length > 0 ? `
+      <div class="card" style="margin: 0 16px 12px; border-left: 4px solid #4CAF50;">
+        <div class="card-body">
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+            <div>
+              <div style="font-weight:600; font-size:15px;">✅ Completed Work Orders Ready</div>
+              <div style="font-size:13px; color:#555; margin-top:2px;">${completedWOs.length} completed work order${completedWOs.length !== 1 ? 's' : ''} from Jet &amp; Mark available for download</div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="exportCompletedToExcel()">📥 Bulk Download Excel</button>
+          </div>
+        </div>
+      </div>
+      ` : ''}
+
       <div id="workorders-list">
         ${this.renderWorkOrdersList()}
       </div>
 
       <div class="section-header" style="margin-top:10px">
-        <div class="section-title">Repair Work Orders</div>
+        <div class="section-title">Work Orders</div>
       </div>
 
       <div class="card">
@@ -1689,7 +1704,7 @@ function migrateLegacyRepairData() {
     try {
       db.set('repairOrders', JSON.parse(legacyOrdersRaw));
     } catch (error) {
-      console.warn('Legacy repair orders migration failed', error);
+      console.warn('Legacy work orders migration failed', error);
     }
   }
 }
@@ -1737,7 +1752,7 @@ async function exportCompletedToExcel() {
   const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
 
   if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
-    showToast('No completed chem sheets or repair orders to export');
+    showToast('No completed chem sheets or work orders to export');
     return;
   }
 
@@ -1848,7 +1863,6 @@ async function exportCompletedToExcel() {
       { header: 'Address', key: 'address', width: 35 },
       { header: 'Technician', key: 'tech', width: 18 },
       { header: 'Job Type', key: 'jobType', width: 20 },
-      { header: 'Priority', key: 'priority', width: 12 },
       { header: 'Status', key: 'status', width: 12 },
       { header: 'Time In', key: 'timeIn', width: 10 },
       { header: 'Time Out', key: 'timeOut', width: 10 },
@@ -1859,7 +1873,7 @@ async function exportCompletedToExcel() {
       { header: 'Notes', key: 'notes', width: 40 }
     ];
 
-    const repairSheet = workbook.addWorksheet('Repair Orders');
+    const repairSheet = workbook.addWorksheet('Work Orders');
     repairSheet.columns = repairColumns;
     styleHeader(repairSheet, repairColumns.length);
 
@@ -1870,7 +1884,6 @@ async function exportCompletedToExcel() {
         address: order.address || '',
         tech: order.assignedTo || '',
         jobType: order.jobType || '',
-        priority: order.priority || '',
         status: order.status || '',
         timeIn: order.timeIn || order.time || '',
         timeOut: order.timeOut || '',
@@ -1883,7 +1896,7 @@ async function exportCompletedToExcel() {
     });
 
     if (repairSheet.rowCount === 1) {
-      repairSheet.addRow({ client: 'No completed repair orders' });
+      repairSheet.addRow({ client: 'No completed work orders' });
     }
     formatBody(repairSheet);
 
@@ -2661,16 +2674,16 @@ function renderRepairOrdersList(statusFilter = 'all') {
 
   if (!orders.length) {
     const emptyTitle = isAdmin && statusFilter === 'completed'
-      ? 'No completed repair orders'
+      ? 'No completed work orders'
       : isAdmin && statusFilter === 'pending'
-        ? 'No pending or open repair orders'
+        ? 'No pending or open work orders'
         : 'No repair work orders';
 
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
         <div class="empty-title">${emptyTitle}</div>
-        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a repair order' : 'Create one to manage service repairs in the same app'}</div>
+        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a work order' : 'Create one to manage service jobs in the same app'}</div>
       </div>
     `;
   }
@@ -2679,8 +2692,8 @@ function renderRepairOrdersList(statusFilter = 'all') {
     <div class="job-card" style="margin-bottom:12px;">
       <div class="job-card-header">
         <div>
-          <div class="job-card-title">${escapeHtml(order.clientName || 'Repair Job')}</div>
-          <div class="job-card-customer">${escapeHtml(order.jobType || 'General Repair')}</div>
+          <div class="job-card-title">${escapeHtml(order.clientName || 'Work Order')}</div>
+          <div class="job-card-customer">${escapeHtml(order.jobType || 'Work Order')}</div>
           <div class="job-meta">
             <div class="job-meta-item">📅 ${escapeHtml(order.date || '')}</div>
             <div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div>
@@ -2689,7 +2702,6 @@ function renderRepairOrdersList(statusFilter = 'all') {
       </div>
       <div class="job-card-body">
         <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
-        <div class="detail-row"><div class="detail-label">Priority</div><div class="detail-value">${escapeHtml(order.priority || 'Normal')}</div></div>
         <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
       </div>
       <div class="job-card-footer">
@@ -2717,7 +2729,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     assignedTo: auth.getCurrentUser()?.name || '',
     status: 'open',
     jobType: '',
-    priority: 'Normal',
     summary: '',
     materials: '',
     partsItems: [],
@@ -2736,7 +2747,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     <div class="wo-form">
       <div class="wo-bar">
         <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
-        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Repair Order'}</div>
+        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Work Order'}</div>
         <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
       </div>
 
@@ -2787,15 +2798,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
           <div class="form-row">
             <label for="repair-type">Work Order Type</label>
             <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
-          </div>
-
-          <div class="form-row">
-            <label for="repair-priority">Priority</label>
-            <select id="repair-priority">
-              <option value="Low" ${order.priority === 'Low' ? 'selected' : ''}>Low</option>
-              <option value="Normal" ${order.priority === 'Normal' ? 'selected' : ''}>Normal</option>
-              <option value="High" ${order.priority === 'High' ? 'selected' : ''}>High</option>
-            </select>
           </div>
 
           <div class="form-row">
@@ -2866,7 +2868,7 @@ function onRepairClientChange() {
   const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     address.value = client.address || '';
-    if (title) title.textContent = client.name || 'Repair Order';
+    if (title) title.textContent = client.name || 'Work Order';
   }
 }
 
@@ -2922,7 +2924,6 @@ function collectRepairOrderFromForm(orderId = '') {
     assignedTo: document.getElementById('repair-tech')?.value || '',
     status: document.getElementById('repair-status')?.value || 'open',
     jobType: document.getElementById('repair-type')?.value || '',
-    priority: document.getElementById('repair-priority')?.value || 'Normal',
     summary: document.getElementById('repair-summary')?.value || '',
     materials: document.getElementById('repair-materials')?.value || '',
     partsItems: partItems,
@@ -2950,8 +2951,8 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   saveRepairOrders(orders);
   showToast(order.status === 'completed'
-    ? 'Completed repair order saved for admin export'
-    : 'Repair work order saved');
+    ? 'Completed work order saved for admin export'
+    : 'Work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -3081,7 +3082,7 @@ async function shareRepairPDF(orderId) {
   addField('Job Type', order.jobType, col2, gridY);
   gridY += 12;
   addField('Assigned Tech', order.assignedTo, col1, gridY);
-  addField('Status / Priority', `${order.status} / ${order.priority}`, col2, gridY);
+  addField('Status', order.status, col2, gridY);
   gridY += 12;
   addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
   addField('Labour Hours', order.labourHours || '—', col2, gridY);
@@ -3188,7 +3189,7 @@ function deleteRepairOrder(orderId) {
   }
   if (!confirm('Delete this repair work order?')) return;
   saveRepairOrders(getRepairOrders().filter(order => order.id !== orderId));
-  showToast('Repair work order deleted');
+  showToast('Work order deleted');
   router.renderWorkOrders();
 }
 
@@ -4480,7 +4481,7 @@ async function shareFileByEmail(base64Data, filename, contentType = 'application
 async function exportRepairToExcel(orderId) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) {
-    showToast('Repair work order not found');
+    showToast('Work order not found');
     return;
   }
 
@@ -4814,7 +4815,7 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
   try {
     const order = collectRepairOrderFromForm(orderId);
     if (!order) {
-      showToast('Repair work order not found');
+      showToast('Work order not found');
       return;
     }
 
@@ -4863,7 +4864,7 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
 function removeRepairPhoto(orderId, slotIndex) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) {
-    showToast('Repair work order not found');
+    showToast('Work order not found');
     return;
   }
 
@@ -4940,7 +4941,7 @@ async function exportCompletedToExcel() {
   const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
 
   if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
-    showToast('No completed chem sheets or repair orders to export');
+    showToast('No completed chem sheets or work orders to export');
     return;
   }
 
@@ -5051,7 +5052,6 @@ async function exportCompletedToExcel() {
       { header: 'Address', key: 'address', width: 35 },
       { header: 'Technician', key: 'tech', width: 18 },
       { header: 'Job Type', key: 'jobType', width: 20 },
-      { header: 'Priority', key: 'priority', width: 12 },
       { header: 'Status', key: 'status', width: 12 },
       { header: 'Time In', key: 'timeIn', width: 10 },
       { header: 'Time Out', key: 'timeOut', width: 10 },
@@ -5062,7 +5062,7 @@ async function exportCompletedToExcel() {
       { header: 'Notes', key: 'notes', width: 40 }
     ];
 
-    const repairSheet = workbook.addWorksheet('Repair Orders');
+    const repairSheet = workbook.addWorksheet('Work Orders');
     repairSheet.columns = repairColumns;
     styleHeader(repairSheet, repairColumns.length);
 
@@ -5073,7 +5073,6 @@ async function exportCompletedToExcel() {
         address: order.address || '',
         tech: order.assignedTo || '',
         jobType: order.jobType || '',
-        priority: order.priority || '',
         status: order.status || '',
         timeIn: order.timeIn || order.time || '',
         timeOut: order.timeOut || '',
@@ -5086,7 +5085,7 @@ async function exportCompletedToExcel() {
     });
 
     if (repairSheet.rowCount === 1) {
-      repairSheet.addRow({ client: 'No completed repair orders' });
+      repairSheet.addRow({ client: 'No completed work orders' });
     }
     formatBody(repairSheet);
 
@@ -5864,16 +5863,16 @@ function renderRepairOrdersList(statusFilter = 'all') {
 
   if (!orders.length) {
     const emptyTitle = isAdmin && statusFilter === 'completed'
-      ? 'No completed repair orders'
+      ? 'No completed work orders'
       : isAdmin && statusFilter === 'pending'
-        ? 'No pending or open repair orders'
+        ? 'No pending or open work orders'
         : 'No repair work orders';
 
     return `
       <div class="empty-state">
         <div class="empty-icon">🛠️</div>
         <div class="empty-title">${emptyTitle}</div>
-        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a repair order' : 'Create one to manage service repairs in the same app'}</div>
+        <div class="empty-subtitle">${isAdmin ? 'Try a different filter or create a work order' : 'Create one to manage service jobs in the same app'}</div>
       </div>
     `;
   }
@@ -5882,8 +5881,8 @@ function renderRepairOrdersList(statusFilter = 'all') {
     <div class="job-card" style="margin-bottom:12px;">
       <div class="job-card-header">
         <div>
-          <div class="job-card-title">${escapeHtml(order.clientName || 'Repair Job')}</div>
-          <div class="job-card-customer">${escapeHtml(order.jobType || 'General Repair')}</div>
+          <div class="job-card-title">${escapeHtml(order.clientName || 'Work Order')}</div>
+          <div class="job-card-customer">${escapeHtml(order.jobType || 'Work Order')}</div>
           <div class="job-meta">
             <div class="job-meta-item">📅 ${escapeHtml(order.date || '')}</div>
             <div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div>
@@ -5892,7 +5891,6 @@ function renderRepairOrdersList(statusFilter = 'all') {
       </div>
       <div class="job-card-body">
         <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
-        <div class="detail-row"><div class="detail-label">Priority</div><div class="detail-value">${escapeHtml(order.priority || 'Normal')}</div></div>
         <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
       </div>
       <div class="job-card-footer">
@@ -5920,7 +5918,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     assignedTo: auth.getCurrentUser()?.name || '',
     status: 'open',
     jobType: '',
-    priority: 'Normal',
     summary: '',
     materials: '',
     partsItems: [],
@@ -5939,7 +5936,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     <div class="wo-form">
       <div class="wo-bar">
         <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
-        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Repair Order'}</div>
+        <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Work Order'}</div>
         <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
       </div>
 
@@ -5990,15 +5987,6 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
           <div class="form-row">
             <label for="repair-type">Work Order Type</label>
             <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
-          </div>
-
-          <div class="form-row">
-            <label for="repair-priority">Priority</label>
-            <select id="repair-priority">
-              <option value="Low" ${order.priority === 'Low' ? 'selected' : ''}>Low</option>
-              <option value="Normal" ${order.priority === 'Normal' ? 'selected' : ''}>Normal</option>
-              <option value="High" ${order.priority === 'High' ? 'selected' : ''}>High</option>
-            </select>
           </div>
 
           <div class="form-row">
@@ -6069,7 +6057,7 @@ function onRepairClientChange() {
   const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     address.value = client.address || '';
-    if (title) title.textContent = client.name || 'Repair Order';
+    if (title) title.textContent = client.name || 'Work Order';
   }
 }
 
@@ -6125,7 +6113,6 @@ function collectRepairOrderFromForm(orderId = '') {
     assignedTo: document.getElementById('repair-tech')?.value || '',
     status: document.getElementById('repair-status')?.value || 'open',
     jobType: document.getElementById('repair-type')?.value || '',
-    priority: document.getElementById('repair-priority')?.value || 'Normal',
     summary: document.getElementById('repair-summary')?.value || '',
     materials: document.getElementById('repair-materials')?.value || '',
     partsItems: partItems,
@@ -6153,8 +6140,8 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   saveRepairOrders(orders);
   showToast(order.status === 'completed'
-    ? 'Completed repair order saved for admin export'
-    : 'Repair work order saved');
+    ? 'Completed work order saved for admin export'
+    : 'Work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -6284,7 +6271,7 @@ async function shareRepairPDF(orderId) {
   addField('Job Type', order.jobType, col2, gridY);
   gridY += 12;
   addField('Assigned Tech', order.assignedTo, col1, gridY);
-  addField('Status / Priority', `${order.status} / ${order.priority}`, col2, gridY);
+  addField('Status', order.status, col2, gridY);
   gridY += 12;
   addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
   addField('Labour Hours', order.labourHours || '—', col2, gridY);
@@ -6569,7 +6556,7 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
   try {
     const order = collectRepairOrderFromForm(orderId);
     if (!order) {
-      showToast('Repair work order not found');
+      showToast('Work order not found');
       return;
     }
 
@@ -6618,7 +6605,7 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
 function removeRepairPhoto(orderId, slotIndex) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) {
-    showToast('Repair work order not found');
+    showToast('Work order not found');
     return;
   }
 
@@ -6695,7 +6682,7 @@ async function exportCompletedToExcel() {
   const completedRepairOrders = sortByNewest(getRepairOrders().filter(order => isCompleted(order.status)));
 
   if (completedChemSheets.length === 0 && completedRepairOrders.length === 0) {
-    showToast('No completed chem sheets or repair orders to export');
+    showToast('No completed chem sheets or work orders to export');
     return;
   }
 
@@ -6806,7 +6793,6 @@ async function exportCompletedToExcel() {
       { header: 'Address', key: 'address', width: 35 },
       { header: 'Technician', key: 'tech', width: 18 },
       { header: 'Job Type', key: 'jobType', width: 20 },
-      { header: 'Priority', key: 'priority', width: 12 },
       { header: 'Status', key: 'status', width: 12 },
       { header: 'Time In', key: 'timeIn', width: 10 },
       { header: 'Time Out', key: 'timeOut', width: 10 },
@@ -6817,7 +6803,7 @@ async function exportCompletedToExcel() {
       { header: 'Notes', key: 'notes', width: 40 }
     ];
 
-    const repairSheet = workbook.addWorksheet('Repair Orders');
+    const repairSheet = workbook.addWorksheet('Work Orders');
     repairSheet.columns = repairColumns;
     styleHeader(repairSheet, repairColumns.length);
 
@@ -6828,7 +6814,6 @@ async function exportCompletedToExcel() {
         address: order.address || '',
         tech: order.assignedTo || '',
         jobType: order.jobType || '',
-        priority: order.priority || '',
         status: order.status || '',
         timeIn: order.timeIn || order.time || '',
         timeOut: order.timeOut || '',
@@ -6841,7 +6826,7 @@ async function exportCompletedToExcel() {
     });
 
     if (repairSheet.rowCount === 1) {
-      repairSheet.addRow({ client: 'No completed repair orders' });
+      repairSheet.addRow({ client: 'No completed work orders' });
     }
     formatBody(repairSheet);
 
@@ -7808,7 +7793,7 @@ function onRepairClientChange() {
   const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     address.value = client.address || '';
-    if (title) title.textContent = client.name || 'Repair Order';
+    if (title) title.textContent = client.name || 'Work Order';
     if (techField && client.technician) techField.value = client.technician;
   }
 }
@@ -7840,12 +7825,12 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
     if (assignmentChanged) {
       notificationManager.create({
         type: 'repair',
-        title: 'New repair order from Admin',
-        message: `${order.clientName || 'A repair order'} has been sent directly to you.`,
+        title: 'New work order from Admin',
+        message: `${order.clientName || 'A work order'} has been sent directly to you.`,
         recipients: [order.assignedTo, ...getAdminRecipients(order.assignedTo)],
         targetView: 'repair',
         targetId: order.id,
-        actionLabel: 'Open Repair Order'
+        actionLabel: 'Open Work Order'
       });
     }
   } else if (currentUser && currentUser.username !== 'admin') {
@@ -7853,19 +7838,19 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
     if (shouldNotifyAdmin) {
       notificationManager.create({
         type: 'repair',
-        title: order.status === 'completed' ? 'Completed repair order received' : 'Repair order received from technician',
-        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a repair order'}.`,
+        title: order.status === 'completed' ? 'Completed work order received' : 'Work order received from technician',
+        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a work order'}.`,
         recipients: getAdminRecipients(currentUser?.name),
         targetView: 'repair',
         targetId: order.id,
-        actionLabel: 'Open Repair Order'
+        actionLabel: 'Open Work Order'
       });
     }
   }
 
   showToast(order.status === 'completed'
-    ? 'Completed repair order saved for admin export'
-    : 'Repair work order saved');
+    ? 'Completed work order saved for admin export'
+    : 'Work order saved');
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
