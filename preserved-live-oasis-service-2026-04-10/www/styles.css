@@ -1657,3 +1657,39 @@ select.form-control {
   #app { border-radius: 24px; max-height: 900px; }
   .login-screen { border-radius: 24px; position: absolute; }
 }
+
+/* ============================================================
+   PAGE TRANSITIONS
+   ============================================================ */
+
+/* App boot: fade in whole shell */
+@keyframes appFadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to   { opacity: 1; transform: scale(1); }
+}
+#app:not(.hidden) {
+  animation: appFadeIn 0.35s cubic-bezier(.22,.68,0,1.2) both;
+}
+
+/* Login screen fade in on load */
+.login-screen {
+  animation: appFadeIn 0.4s ease both;
+}
+
+/* Per-page content fade */
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.page-fade {
+  animation: pageFadeIn 0.25s ease both;
+}
+
+/* Login → App crossfade helpers */
+.fade-out {
+  animation: fadeOutScale 0.25s ease forwards;
+}
+@keyframes fadeOutScale {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.97); }
+}

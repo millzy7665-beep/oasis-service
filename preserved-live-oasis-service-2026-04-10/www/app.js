@@ -2520,17 +2520,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const appShell = document.getElementById('app');
 
       if (loginScreen) {
-        loginScreen.style.setProperty('display', 'none', 'important');
+        loginScreen.classList.add('fade-out');
+        setTimeout(() => loginScreen.style.setProperty('display', 'none', 'important'), 250);
       }
       if (appShell) {
-        appShell.classList.remove('hidden');
-        appShell.style.setProperty('display', 'flex', 'important');
+        setTimeout(() => {
+          appShell.classList.remove('hidden');
+          appShell.style.setProperty('display', 'flex', 'important');
+        }, 200);
       }
       if (loginError) loginError.style.display = 'none';
 
-      // Immediate navigation
+      // Navigate after fade completes
       try {
-        router.navigate('dashboard');
+        setTimeout(() => router.navigate('dashboard'), 220);
       } catch (err) {
         console.error('Navigation error:', err);
         location.reload();
@@ -2549,13 +2552,15 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  auth.logout();
-  document.getElementById('app').classList.add('hidden');
-  document.getElementById('app').style.display = 'none';
+  const appShell = document.getElementById('app');
   const loginScreen = document.getElementById('login-screen');
-  loginScreen.classList.remove('hidden');
-  loginScreen.style.display = 'flex';
-  router.navigate('dashboard');
+  if (appShell) appShell.classList.add('fade-out');
+  setTimeout(() => {
+    auth.logout();
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; appShell.classList.remove('fade-out'); }
+    if (loginScreen) { loginScreen.classList.remove('hidden', 'fade-out'); loginScreen.style.display = 'flex'; }
+    router.navigate('dashboard');
+  }, 250);
 }
 
 function quickAddClient() {
@@ -5715,17 +5720,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const appShell = document.getElementById('app');
 
       if (loginScreen) {
-        loginScreen.style.setProperty('display', 'none', 'important');
+        loginScreen.classList.add('fade-out');
+        setTimeout(() => loginScreen.style.setProperty('display', 'none', 'important'), 250);
       }
       if (appShell) {
-        appShell.classList.remove('hidden');
-        appShell.style.setProperty('display', 'flex', 'important');
+        setTimeout(() => {
+          appShell.classList.remove('hidden');
+          appShell.style.setProperty('display', 'flex', 'important');
+        }, 200);
       }
       if (loginError) loginError.style.display = 'none';
 
-      // Immediate navigation
+      // Navigate after fade completes
       try {
-        router.navigate('dashboard');
+        setTimeout(() => router.navigate('dashboard'), 220);
       } catch (err) {
         console.error('Navigation error:', err);
         location.reload();
@@ -5744,13 +5752,15 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  auth.logout();
-  document.getElementById('app').classList.add('hidden');
-  document.getElementById('app').style.display = 'none';
+  const appShell = document.getElementById('app');
   const loginScreen = document.getElementById('login-screen');
-  loginScreen.classList.remove('hidden');
-  loginScreen.style.display = 'flex';
-  router.navigate('dashboard');
+  if (appShell) appShell.classList.add('fade-out');
+  setTimeout(() => {
+    auth.logout();
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; appShell.classList.remove('fade-out'); }
+    if (loginScreen) { loginScreen.classList.remove('hidden', 'fade-out'); loginScreen.style.display = 'flex'; }
+    router.navigate('dashboard');
+  }, 250);
 }
 
 function quickAddClient() {
@@ -7393,17 +7403,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const appShell = document.getElementById('app');
 
       if (loginScreen) {
-        loginScreen.style.setProperty('display', 'none', 'important');
+        loginScreen.classList.add('fade-out');
+        setTimeout(() => loginScreen.style.setProperty('display', 'none', 'important'), 250);
       }
       if (appShell) {
-        appShell.classList.remove('hidden');
-        appShell.style.setProperty('display', 'flex', 'important');
+        setTimeout(() => {
+          appShell.classList.remove('hidden');
+          appShell.style.setProperty('display', 'flex', 'important');
+        }, 200);
       }
       if (loginError) loginError.style.display = 'none';
 
-      // Immediate navigation
+      // Navigate after fade completes
       try {
-        router.navigate('dashboard');
+        setTimeout(() => router.navigate('dashboard'), 220);
       } catch (err) {
         console.error('Navigation error:', err);
         location.reload();
@@ -7422,13 +7435,15 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  auth.logout();
-  document.getElementById('app').classList.add('hidden');
-  document.getElementById('app').style.display = 'none';
+  const appShell = document.getElementById('app');
   const loginScreen = document.getElementById('login-screen');
-  loginScreen.classList.remove('hidden');
-  loginScreen.style.display = 'flex';
-  router.navigate('dashboard');
+  if (appShell) appShell.classList.add('fade-out');
+  setTimeout(() => {
+    auth.logout();
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; appShell.classList.remove('fade-out'); }
+    if (loginScreen) { loginScreen.classList.remove('hidden', 'fade-out'); loginScreen.style.display = 'flex'; }
+    router.navigate('dashboard');
+  }, 250);
 }
 
 function quickAddClient() {

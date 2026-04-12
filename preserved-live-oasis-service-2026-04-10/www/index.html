@@ -15,7 +15,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 
-  <link rel="stylesheet" href="styles.css?v=30">
+  <link rel="stylesheet" href="styles.css?v=179">
 
   <style>
     /* Critical overrides for luxury feel */
@@ -44,18 +44,19 @@
         <div class="login-field-group">
           <label class="login-label">Select Your Name</label>
           <select id="login-tech" required>
-            <option value="">— Select your name —</option>
-            <option value="t1">Ace</option>
-            <option value="t2">Ariel</option>
-            <option value="t3">Donald</option>
-            <option value="t4">Elvin</option>
-            <option value="t5">Jermaine</option>
-            <option value="t6">Kadeem</option>
-            <option value="t7">Kingsley</option>
-            <option value="t8">Malik</option>
-            <option value="t9">Jet</option>
-            <option value="t10">Mark</option>
+            <option value="" disabled selected>— Select your name —</option>
+            <option value="t1">Service - Ace</option>
+            <option value="t2">Service - Ariel</option>
+            <option value="t3">Service - Donald</option>
+            <option value="t4">Service - Elvin</option>
+            <option value="t5">Service - Jermaine</option>
+            <option value="t6">Service - Kadeem</option>
+            <option value="t7">Service - Kingsley</option>
+            <option value="t8">Service - Malik</option>
+            <option value="t9">Tech - Jet</option>
+            <option value="t10">Tech - Mark</option>
             <option value="admin">Chris Mills (Admin)</option>
+            <option value="admin2">James Bussey (Admin)</option>
           </select>
         </div>
         <div class="login-field-group">
@@ -132,7 +133,7 @@
   <script src="tech-catalog.js?v=101"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-  <script src="app.js?v=177"></script>
+  <script src="app.js?v=179"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
