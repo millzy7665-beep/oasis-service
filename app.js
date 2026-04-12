@@ -813,6 +813,10 @@ class Router {
 
   renderRouteCard(client) {
     const daysLabel = (client.serviceDays || []).map(d => d.substring(0, 3)).join(', ');
+    const _rcUser = auth.getCurrentUser();
+    const _rcIsAdmin = auth.isAdmin();
+    const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.name === 'Jet' || _rcUser?.name === 'Mark');
+    const _rcIsFieldTech = !_rcIsAdmin && !_rcIsJetOrMark;
     return `
       <div class="list-item" style="cursor:pointer;">
         <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
@@ -823,6 +827,7 @@ class Router {
         </div>
         <div class="list-item-actions">
           <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(client.address)}')" title="Navigate">📍</button>
+          ${_rcIsFieldTech ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); router.createWorkOrder('${escapeHtml(client.id)}')">+ Chem Sheet</button>` : ''}
         </div>
       </div>
     `;
@@ -867,7 +872,9 @@ class Router {
     const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
     const currentUser = auth.getCurrentUser();
-    const scopedClients = isAdmin
+    const isJetOrMark = !isAdmin && (currentUser?.name === 'Jet' || currentUser?.name === 'Mark');
+    const canManageClients = isAdmin || isJetOrMark;
+    const scopedClients = canManageClients
       ? allClients
       : allClients.filter(client => (client.technician || '') === (currentUser?.name || ''));
 
@@ -897,7 +904,7 @@ class Router {
         </div>
         <div class="list-item-actions">
           <button class="btn btn-icon" onclick="openMap('${client.address}')" title="View on Map">📍</button>
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
+          ${canManageClients ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
           ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${client.id}')">Delete</button>` : ''}
         </div>
       </div>
@@ -1128,6 +1135,10 @@ class Router {
     const poolAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.pool || {}) };
     const spaAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.spa || {}) };
     const clients = db.get('clients', []);
+    const _woCurUser = auth.getCurrentUser();
+    const _woIsAdmin = auth.isAdmin();
+    const _woIsJetOrMark = !_woIsAdmin && (_woCurUser?.name === 'Jet' || _woCurUser?.name === 'Mark');
+    const chemClientList = (_woIsAdmin || _woIsJetOrMark) ? clients : clients.filter(c => (c.technician || '') === (_woCurUser?.name || ''));
     const technician = order.technician || auth.getCurrentUser()?.name || '';
     const timeIn = order.timeIn || order.time || '';
     const timeOut = order.timeOut || '';
@@ -1153,7 +1164,7 @@ class Router {
               <label for="wo-client">Customer</label>
               <select id="wo-client" onchange="onChemClientChange()">
                 <option value="">— Select client —</option>
-                ${clients.map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
+                ${chemClientList.map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
               </select>
             </div>
 
@@ -1361,8 +1372,11 @@ class Router {
     this.renderWorkOrderDetail(order);
   }
   editClient(id) {
-    if (!auth.isAdmin()) {
-      showToast('Only admins can edit client details');
+    const _ecUser = auth.getCurrentUser();
+    const _ecIsAdmin = auth.isAdmin();
+    const _ecIsJetOrMark = !_ecIsAdmin && (_ecUser?.name === 'Jet' || _ecUser?.name === 'Mark');
+    if (!_ecIsAdmin && !_ecIsJetOrMark) {
+      showToast('Only admins and office staff can edit client details');
       return;
     }
     const clients = db.get('clients', []);
