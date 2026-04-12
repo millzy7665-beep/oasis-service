@@ -132,6 +132,7 @@ html, body {
   height: 36px;
   width: auto;
   object-fit: contain;
+  margin-top: 4px;
 }
 
 .header-title {
