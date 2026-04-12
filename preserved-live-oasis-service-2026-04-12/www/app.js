@@ -456,11 +456,20 @@ class Router {
     document.querySelectorAll('.nav-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === this.currentView);
     });
-    // Hide Routes tab for Jet and Mark — they use Work Orders instead
     const user = auth.getCurrentUser();
-    const isOfficeUser = user && (user.name === 'Jet' || user.name === 'Mark') && !auth.isAdmin();
+    const isAdmin = auth.isAdmin();
+    const isJetOrMark = !isAdmin && user && (user.name === 'Jet' || user.name === 'Mark');
+    const isFieldTech = !isAdmin && !isJetOrMark && !!user;
+
+    // Jet/Mark: hide Routes tab
     const routesBtn = document.querySelector('.nav-item[data-view="routes"]');
-    if (routesBtn) routesBtn.style.display = isOfficeUser ? 'none' : '';
+    if (routesBtn) routesBtn.style.display = isJetOrMark ? 'none' : '';
+
+    // Field techs: hide Clients and Work Orders tabs
+    const clientsBtn = document.querySelector('.nav-item[data-view="clients"]');
+    const woBtn = document.querySelector('.nav-item[data-view="workorders"]');
+    if (clientsBtn) clientsBtn.style.display = isFieldTech ? 'none' : '';
+    if (woBtn) woBtn.style.display = isFieldTech ? 'none' : '';
   }
 
   setAdminJobStatusFilter(value = 'all') {
