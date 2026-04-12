@@ -78,7 +78,7 @@
 html, body {
   height: 100%;
   font-family: var(--font-body);
-  background: var(--surface-bg);
+  background: #0a1e2e; /* Match login screen navy — prevents white flash on transition */
   color: var(--near-black);
   -webkit-tap-highlight-color: transparent;
   -webkit-font-smoothing: antialiased;
@@ -1658,14 +1658,27 @@ select.form-control {
    PAGE TRANSITIONS
    ============================================================ */
 
-/* Login card: clean fade-up — NOT using the toast fadeIn keyframe */
+/* Login card: elegant fade-up from below */
 @keyframes loginCardIn {
   from { opacity: 0; transform: translateY(18px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Per-page content: pure opacity cross-dissolve — no translateY
-   so parchment background never shows through */
+/* Full-screen dark curtain used for login↔app transitions */
+#transition-curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: #0a1e2e;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+#transition-curtain.active {
+  opacity: 1;
+}
+
+/* Per-page content: pure opacity dissolve */
 @keyframes pageFadeIn {
   from { opacity: 0; }
   to   { opacity: 1; }
@@ -1674,7 +1687,7 @@ select.form-control {
   animation: pageFadeIn 0.22s ease both;
 }
 
-/* Login → App and App → Login: pure opacity fade */
+/* Fade-out for sign-out overlay */
 @keyframes fadeOut {
   from { opacity: 1; }
   to   { opacity: 0; }

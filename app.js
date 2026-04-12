@@ -2523,25 +2523,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
 
-      if (loginScreen) {
-        loginScreen.classList.add('fade-out');
-        setTimeout(() => loginScreen.style.setProperty('display', 'none', 'important'), 250);
-      }
-      if (appShell) {
-        setTimeout(() => {
+      if (loginError) loginError.style.display = 'none';
+      curtainTransition(() => {
+        if (loginScreen) loginScreen.style.setProperty('display', 'none', 'important');
+        if (appShell) {
           appShell.classList.remove('hidden');
           appShell.style.setProperty('display', 'flex', 'important');
-        }, 200);
-      }
-      if (loginError) loginError.style.display = 'none';
-
-      // Navigate after fade completes
-      try {
-        setTimeout(() => router.navigate('dashboard'), 220);
-      } catch (err) {
-        console.error('Navigation error:', err);
-        location.reload();
-      }
+        }
+        try { router.navigate('dashboard'); } catch (err) { location.reload(); }
+      });
     } else {
       console.warn('Login failed: invalid username or PIN');
       if (loginError) loginError.style.display = 'block';
@@ -2555,16 +2545,26 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-function signOut() {
-  const appShell = document.getElementById('app');
-  const loginScreen = document.getElementById('login-screen');
-  if (appShell) appShell.classList.add('fade-out');
+// Dark curtain transition — prevents white flash between login and app
+function curtainTransition(callback, duration = 320) {
+  const curtain = document.getElementById('transition-curtain');
+  if (!curtain) { callback(); return; }
+  curtain.classList.add('active');
   setTimeout(() => {
+    callback();
+    requestAnimationFrame(() => requestAnimationFrame(() => curtain.classList.remove('active')));
+  }, duration / 2);
+}
+
+function signOut() {
+  curtainTransition(() => {
     auth.logout();
-    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; appShell.classList.remove('fade-out'); }
-    if (loginScreen) { loginScreen.classList.remove('hidden', 'fade-out'); loginScreen.style.display = 'flex'; }
+    const appShell = document.getElementById('app');
+    const loginScreen = document.getElementById('login-screen');
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
+    if (loginScreen) { loginScreen.style.display = 'flex'; }
     router.navigate('dashboard');
-  }, 250);
+  });
 }
 
 function quickAddClient() {
@@ -5688,25 +5688,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
 
-      if (loginScreen) {
-        loginScreen.classList.add('fade-out');
-        setTimeout(() => loginScreen.style.setProperty('display', 'none', 'important'), 250);
-      }
-      if (appShell) {
-        setTimeout(() => {
+      if (loginError) loginError.style.display = 'none';
+      curtainTransition(() => {
+        if (loginScreen) loginScreen.style.setProperty('display', 'none', 'important');
+        if (appShell) {
           appShell.classList.remove('hidden');
           appShell.style.setProperty('display', 'flex', 'important');
-        }, 200);
-      }
-      if (loginError) loginError.style.display = 'none';
-
-      // Navigate after fade completes
-      try {
-        setTimeout(() => router.navigate('dashboard'), 220);
-      } catch (err) {
-        console.error('Navigation error:', err);
-        location.reload();
-      }
+        }
+        try { router.navigate('dashboard'); } catch (err) { location.reload(); }
+      });
     } else {
       console.warn('Login failed: invalid username or PIN');
       if (loginError) loginError.style.display = 'block';
@@ -5721,15 +5711,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  const appShell = document.getElementById('app');
-  const loginScreen = document.getElementById('login-screen');
-  if (appShell) appShell.classList.add('fade-out');
-  setTimeout(() => {
+  curtainTransition(() => {
     auth.logout();
-    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; appShell.classList.remove('fade-out'); }
-    if (loginScreen) { loginScreen.classList.remove('hidden', 'fade-out'); loginScreen.style.display = 'flex'; }
+    const appShell = document.getElementById('app');
+    const loginScreen = document.getElementById('login-screen');
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
+    if (loginScreen) { loginScreen.style.display = 'flex'; }
     router.navigate('dashboard');
-  }, 250);
+  });
 }
 
 function quickAddClient() {
@@ -7372,25 +7361,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
 
-      if (loginScreen) {
-        loginScreen.classList.add('fade-out');
-        setTimeout(() => loginScreen.style.setProperty('display', 'none', 'important'), 250);
-      }
-      if (appShell) {
-        setTimeout(() => {
+      if (loginError) loginError.style.display = 'none';
+      curtainTransition(() => {
+        if (loginScreen) loginScreen.style.setProperty('display', 'none', 'important');
+        if (appShell) {
           appShell.classList.remove('hidden');
           appShell.style.setProperty('display', 'flex', 'important');
-        }, 200);
-      }
-      if (loginError) loginError.style.display = 'none';
-
-      // Navigate after fade completes
-      try {
-        setTimeout(() => router.navigate('dashboard'), 220);
-      } catch (err) {
-        console.error('Navigation error:', err);
-        location.reload();
-      }
+        }
+        try { router.navigate('dashboard'); } catch (err) { location.reload(); }
+      });
     } else {
       console.warn('Login failed: invalid username or PIN');
       if (loginError) loginError.style.display = 'block';
@@ -7405,15 +7384,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  const appShell = document.getElementById('app');
-  const loginScreen = document.getElementById('login-screen');
-  if (appShell) appShell.classList.add('fade-out');
-  setTimeout(() => {
+  curtainTransition(() => {
     auth.logout();
-    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; appShell.classList.remove('fade-out'); }
-    if (loginScreen) { loginScreen.classList.remove('hidden', 'fade-out'); loginScreen.style.display = 'flex'; }
+    const appShell = document.getElementById('app');
+    const loginScreen = document.getElementById('login-screen');
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
+    if (loginScreen) { loginScreen.style.display = 'flex'; }
     router.navigate('dashboard');
-  }, 250);
+  });
 }
 
 function quickAddClient() {
