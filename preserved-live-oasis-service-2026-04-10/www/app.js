@@ -413,6 +413,7 @@ class Router {
       'routes': this.renderRoutes.bind(this),
       'clients': this.renderClients.bind(this),
       'workorders': this.renderWorkOrders.bind(this),
+      'quotes': this.renderQuotes.bind(this),
       'settings': this.renderSettings.bind(this)
     };
     this.currentView = 'dashboard';
@@ -456,11 +457,24 @@ class Router {
     document.querySelectorAll('.nav-item').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.view === this.currentView);
     });
-    // Hide Routes tab for Jet and Mark — they use Work Orders instead
     const user = auth.getCurrentUser();
-    const isOfficeUser = user && (user.name === 'Jet' || user.name === 'Mark') && !auth.isAdmin();
+    const isAdmin = auth.isAdmin();
+    const isJetOrMark = !isAdmin && user && (user.name === 'Jet' || user.name === 'Mark');
+    const canSeeClientsAndWO = isAdmin || isJetOrMark;
+
+    // Routes: visible for everyone except Jet/Mark
     const routesBtn = document.querySelector('.nav-item[data-view="routes"]');
-    if (routesBtn) routesBtn.style.display = isOfficeUser ? 'none' : '';
+    if (routesBtn) routesBtn.style.display = isJetOrMark ? 'none' : '';
+
+    // Clients and Work Orders: only visible for admin and Jet/Mark
+    const clientsBtn = document.querySelector('.nav-item[data-view="clients"]');
+    const woBtn = document.querySelector('.nav-item[data-view="workorders"]');
+    if (clientsBtn) clientsBtn.style.display = canSeeClientsAndWO ? '' : 'none';
+    if (woBtn) woBtn.style.display = canSeeClientsAndWO ? '' : 'none';
+
+    // Quotes: admin only
+    const quotesBtn = document.querySelector('.nav-item[data-view="quotes"]');
+    if (quotesBtn) quotesBtn.style.display = isAdmin ? '' : 'none';
   }
 
   setAdminJobStatusFilter(value = 'all') {
@@ -528,35 +542,59 @@ class Router {
     const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
     const unreadNotifications = notificationManager.getUnreadForUser(user).length;
 
-    if (isOfficeUser) {
-      notificationManager.requestPermission();
-      if (unreadNotifications) {
-        setTimeout(() => notificationManager.showUnreadToast(user), 150);
-      }
-    }
-
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
-    // Today's route clients for this tech (field techs only see their own)
     const allClients = db.get('clients', []);
     const myRouteClients = isAdmin
       ? allClients.filter(c => c.serviceDays && c.serviceDays.includes(todayDay))
       : allClients.filter(c => c.technician === userName && c.serviceDays && c.serviceDays.includes(todayDay));
+    const myTotalClients = isAdmin ? allClients.length : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
 
-    // Total assigned clients for this tech
-    const myTotalClients = isAdmin
-      ? allClients.length
-      : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
+    // Open and pending work orders
+    const myRepairOrders = visibleRepairOrders.filter(r => {
+      const s = (r.status || 'open');
+      return s !== 'completed' && s !== 'pending';
+    }).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+    const myPendingOrders = visibleRepairOrders.filter(r => (r.status || 'open') === 'pending')
+      .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+    // Completion stats for Jet/Mark
+    const todayDateStr = new Date().toISOString().split('T')[0];
+    const todayCompletedOrders = visibleRepairOrders.filter(r => r.status === 'completed' && r.date === todayDateStr);
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - mondayOffset);
+    weekStart.setHours(0, 0, 0, 0);
+    const weeklyCompletedOrders = visibleRepairOrders.filter(r => {
+      if (r.status !== 'completed' || !r.date) return false;
+      const d = new Date(r.date + 'T00:00:00');
+      return d >= weekStart && d <= now;
+    });
 
     content.innerHTML = `
       <div class="wave-banner">
         <div class="wave-banner-eyebrow">Welcome back</div>
         <div class="wave-banner-title">${userName}</div>
-        <div class="wave-banner-sub">${todayStr} • ${myRouteClients.length} stops today</div>
+        <div class="wave-banner-sub">${todayStr}${isOfficeUser && !isAdmin ? '' : ` • ${myRouteClients.length} stops today`}</div>
       </div>
 
       <div class="stats-grid">
+        ${isOfficeUser && !isAdmin ? `
+        <div class="stat-card">
+          <div class="stat-icon">✅</div>
+          <div class="stat-value">${todayCompletedOrders.length}</div>
+          <div class="stat-label">Today's Completed</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">📊</div>
+          <div class="stat-value">${weeklyCompletedOrders.length}</div>
+          <div class="stat-label">Weekly Completed</div>
+        </div>
+        ` : `
         <div class="stat-card" onclick="router.navigate('routes')">
           <div class="stat-icon">🗺️</div>
           <div class="stat-value">${myRouteClients.length}</div>
@@ -567,23 +605,60 @@ class Router {
           <div class="stat-value">${myTotalClients}</div>
           <div class="stat-label">Total Visits</div>
         </div>
+        `}
         ${isOfficeUser ? `
-        <div class="stat-card" onclick="router.navigate('routes')">
+        <div class="stat-card">
           <div class="stat-icon">🛠️</div>
-          <div class="stat-value">${visibleRepairOrders.length}</div>
-          <div class="stat-label">Work Orders</div>
+          <div class="stat-value">${myRepairOrders.length}</div>
+          <div class="stat-label">Open Work Orders</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">⏳</div>
+          <div class="stat-value">${myPendingOrders.length}</div>
+          <div class="stat-label">Pending Orders</div>
         </div>
         ` : ''}
       </div>
 
-      ${isOfficeUser ? `
+      ${isOfficeUser && myPendingOrders.length > 0 ? `
       <div class="section-header">
-        <div class="section-title">Notifications${unreadNotifications ? ` (${unreadNotifications} new)` : ''}</div>
+        <div class="section-title">${isAdmin ? 'All Pending Work Orders' : 'My Pending Work Orders'}</div>
       </div>
-      <div id="dashboard-notifications">
-        ${notificationManager.renderDashboardPanel()}
-      </div>
+      ${myPendingOrders.map(order => `
+        <div class="list-item" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')" style="cursor:pointer;">
+          <div class="list-item-avatar" style="background:#fff8e1; color:#f57f17;">⏳</div>
+          <div class="list-item-info">
+            <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
+            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
+            <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
+          </div>
+          <div class="list-item-actions">
+            <span style="font-size:11px; padding:3px 8px; border-radius:12px; background:#fff8e1; color:#f57f17;">pending</span>
+          </div>
+        </div>
+      `).join('')}
       ` : ''}
+
+      ${isOfficeUser ? (myRepairOrders.length > 0 ? `
+      <div class="section-header">
+        <div class="section-title">${isAdmin ? 'All Open Work Orders' : 'My Work Orders'}</div>
+      </div>
+      ${myRepairOrders.map(order => `
+        <div class="list-item" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')" style="cursor:pointer;">
+          <div class="list-item-avatar" style="background:#fff3e0; color:#e65100;">🛠️</div>
+          <div class="list-item-info">
+            <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
+            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
+            <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
+          </div>
+          <div class="list-item-actions">
+            <span style="font-size:11px; padding:3px 8px; border-radius:12px; background:${order.status === 'in-progress' ? '#fff3e0' : '#e3f2fd'}; color:${order.status === 'in-progress' ? '#e65100' : '#1565c0'};">${ escapeHtml(order.status || 'open')}</span>
+          </div>
+        </div>
+      `).join('')}
+      ` : `
+      <div class="card" style="margin:16px;"><div class="card-body"><div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">No open work orders</div></div></div></div>
+      `) : ''}
 
       ${!isOfficeUser ? `
       <div class="section-header">
@@ -745,6 +820,10 @@ class Router {
 
   renderRouteCard(client) {
     const daysLabel = (client.serviceDays || []).map(d => d.substring(0, 3)).join(', ');
+    const _rcUser = auth.getCurrentUser();
+    const _rcIsAdmin = auth.isAdmin();
+    const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.name === 'Jet' || _rcUser?.name === 'Mark');
+    const _rcIsFieldTech = !_rcIsAdmin && !_rcIsJetOrMark;
     return `
       <div class="list-item" style="cursor:pointer;">
         <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
@@ -755,6 +834,7 @@ class Router {
         </div>
         <div class="list-item-actions">
           <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(client.address)}')" title="Navigate">📍</button>
+          ${_rcIsFieldTech ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); router.createWorkOrder('${escapeHtml(client.id)}')">+ Chem Sheet</button>` : ''}
         </div>
       </div>
     `;
@@ -799,7 +879,9 @@ class Router {
     const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
     const currentUser = auth.getCurrentUser();
-    const scopedClients = isAdmin
+    const isJetOrMark = !isAdmin && (currentUser?.name === 'Jet' || currentUser?.name === 'Mark');
+    const canManageClients = isAdmin || isJetOrMark;
+    const scopedClients = canManageClients
       ? allClients
       : allClients.filter(client => (client.technician || '') === (currentUser?.name || ''));
 
@@ -829,7 +911,7 @@ class Router {
         </div>
         <div class="list-item-actions">
           <button class="btn btn-icon" onclick="openMap('${client.address}')" title="View on Map">📍</button>
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
+          ${canManageClients ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
           ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${client.id}')">Delete</button>` : ''}
         </div>
       </div>
@@ -848,7 +930,7 @@ class Router {
         <div class="section-title">Work Orders</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
-          <button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>
+          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>` : ''}
         </div>
       </div>
 
@@ -912,11 +994,10 @@ class Router {
     }
 
     if (workorders.length === 0) {
-      const emptyTitle = isAdmin && this.adminJobStatusFilter === 'completed'
-        ? 'No completed jobs found'
-        : isAdmin && this.adminJobStatusFilter === 'pending'
-          ? 'No pending or open jobs found'
-          : 'No jobs found';
+      if (isAdmin && this.adminJobStatusFilter === 'completed') return '';
+      const emptyTitle = isAdmin && this.adminJobStatusFilter === 'pending'
+        ? 'No pending or open jobs found'
+        : 'No jobs found';
 
       return `
         <div class="empty-state">
@@ -959,6 +1040,72 @@ class Router {
     `;
   }
 
+  renderQuotes() {
+    if (!auth.isAdmin()) { this.navigate('dashboard'); return; }
+    const content = document.getElementById('main-content');
+    const allEstimates = [...getEstimateSheets()].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+    const sentQuotes     = allEstimates.filter(e => (e.status || '').toLowerCase() === 'sent');
+    const approvedQuotes = allEstimates.filter(e => (e.status || '').toLowerCase() === 'approved');
+    const clients = db.get('clients', []);
+
+    const renderQuoteCard = (estimate, showConvert = false) => {
+      const client = clients.find(c => c.id === estimate.clientId);
+      const clientName = client?.name || estimate.clientName || 'Client';
+      const total = formatEstimateMoney(estimate.total || estimate.subtotal || 0);
+      return `
+        <div class="job-card">
+          <div class="job-card-header">
+            <div>
+              <div class="job-card-title">${escapeHtml(clientName)}</div>
+              <div class="job-card-customer">${escapeHtml(estimate.project || 'Client Estimate')}</div>
+              <div class="job-meta">
+                <div class="job-meta-item">&#x1F9FE; ${escapeHtml(estimate.estimateNumber || 'Draft')}</div>
+                <div class="job-meta-item">&#x1F4C5; ${escapeHtml(estimate.date || '')}</div>
+                <div class="job-meta-item">&#x1F4B2; $${escapeHtml(total)}</div>
+              </div>
+            </div>
+            <div class="badge badge-${getEstimateStatusBadgeClass(estimate.status)}">${escapeHtml(estimate.status || 'Draft')}</div>
+          </div>
+          ${estimate.scope ? `<div class="detail-row"><div class="detail-label">Scope</div><div class="detail-value">${escapeHtml(estimate.scope)}</div></div>` : ''}
+          <div class="job-card-footer">
+            <button class="btn btn-secondary btn-sm" onclick="router.viewEstimate('${escapeHtml(estimate.id)}')" >Open</button>
+            <button class="btn btn-secondary btn-sm" onclick="saveEstimatePDF('${escapeHtml(estimate.id)}')">PDF</button>
+            ${auth.canShare() ? `<button class="btn btn-primary btn-sm" onclick="shareEstimatePDF('${escapeHtml(estimate.id)}')">Share</button>` : ''}
+            ${showConvert ? `<button class="btn btn-primary btn-sm" onclick="convertQuoteToWorkOrder('${escapeHtml(estimate.id)}')">Convert to WO</button>` : ''}
+            <button class="btn btn-danger btn-sm" onclick="deleteEstimateSheet('${escapeHtml(estimate.id)}')">Delete</button>
+          </div>
+        </div>
+      `;
+    };
+
+    content.innerHTML = `
+      <div class="section-header">
+        <div class="section-title">Quotes</div>
+        <button class="btn btn-primary btn-sm" onclick="router.createEstimate()">+ Create Estimate</button>
+      </div>
+
+      <div class="section-header" style="margin-top:16px;">
+        <div class="section-title" style="font-size:15px;">&#x1F4E4; Sent Quotes</div>
+      </div>
+      ${sentQuotes.length ? sentQuotes.map(e => renderQuoteCard(e)).join('') : `
+        <div class="empty-state" style="margin:0 16px 16px; padding:16px;">
+          <div class="empty-icon">&#x1F4E4;</div>
+          <div class="empty-title">No sent quotes</div>
+          <div class="empty-subtitle">Quotes will appear here after being shared with a client.</div>
+        </div>`}
+
+      <div class="section-header" style="margin-top:16px;">
+        <div class="section-title" style="font-size:15px;">&#x2705; Approved Quotes</div>
+      </div>
+      ${approvedQuotes.length ? approvedQuotes.map(e => renderQuoteCard(e, true)).join('') : `
+        <div class="empty-state" style="margin:0 16px 16px; padding:16px;">
+          <div class="empty-icon">&#x2705;</div>
+          <div class="empty-title">No approved quotes</div>
+          <div class="empty-subtitle">Mark a quote as Approved and it will appear here ready to convert to a work order.</div>
+        </div>`}
+    `;
+  }
+
   renderSettings() {
     const content = document.getElementById('main-content');
     const user = auth.getCurrentUser();
@@ -984,16 +1131,7 @@ class Router {
         </div>
       </div>
 
-      ${isAdmin ? `
-      <div class="section-header" style="margin-top: 20px;">
-        <div class="section-title">Estimate Builder</div>
-      </div>
-      <div class="card">
-        <div class="card-body">
-          <button class="btn btn-primary" onclick="router.createEstimate()">Open Estimate Sheet</button>
-        </div>
-      </div>
-      ` : ''}
+
 
       ${isMainAdmin ? `
       <div class="section-header" style="margin-top: 20px;">
@@ -1025,6 +1163,32 @@ class Router {
         </div>
       </div>
       ` : ''}
+
+      ${isMainAdmin ? `
+      <div class="section-header" style="margin-top: 20px;">
+        <div class="section-title">Export &amp; Billing</div>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <div style="font-weight:600; font-size:15px; margin-bottom:8px;">📋 Daily Work Orders</div>
+          <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Download completed work orders for a specific date for billing.</p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="date" id="wo-export-date" class="form-control" style="flex:1; min-width:140px;" value="${new Date().toISOString().split('T')[0]}">
+            <button class="btn btn-primary" onclick="exportDailyWorkOrders()">📥 Download Work Orders</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:10px;">
+        <div class="card-body">
+          <div style="font-weight:600; font-size:15px; margin-bottom:8px;">🧪 Monthly Chem Sheets</div>
+          <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Download all completed chem sheets for a specific month.</p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="month" id="chem-export-month" class="form-control" style="flex:1; min-width:140px;" value="${new Date().toISOString().slice(0, 7)}">
+            <button class="btn btn-secondary" onclick="exportMonthlyChemSheets()">📥 Download Bulk Chem Sheets</button>
+          </div>
+        </div>
+      </div>
+      ` : ''}
     `;
   }
 
@@ -1034,6 +1198,10 @@ class Router {
     const poolAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.pool || {}) };
     const spaAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.spa || {}) };
     const clients = db.get('clients', []);
+    const _woCurUser = auth.getCurrentUser();
+    const _woIsAdmin = auth.isAdmin();
+    const _woIsJetOrMark = !_woIsAdmin && (_woCurUser?.name === 'Jet' || _woCurUser?.name === 'Mark');
+    const chemClientList = (_woIsAdmin || _woIsJetOrMark) ? clients : clients.filter(c => (c.technician || '') === (_woCurUser?.name || ''));
     const technician = order.technician || auth.getCurrentUser()?.name || '';
     const timeIn = order.timeIn || order.time || '';
     const timeOut = order.timeOut || '';
@@ -1059,7 +1227,7 @@ class Router {
               <label for="wo-client">Customer</label>
               <select id="wo-client" onchange="onChemClientChange()">
                 <option value="">— Select client —</option>
-                ${clients.map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
+                ${chemClientList.map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
               </select>
             </div>
 
@@ -1267,8 +1435,11 @@ class Router {
     this.renderWorkOrderDetail(order);
   }
   editClient(id) {
-    if (!auth.isAdmin()) {
-      showToast('Only admins can edit client details');
+    const _ecUser = auth.getCurrentUser();
+    const _ecIsAdmin = auth.isAdmin();
+    const _ecIsJetOrMark = !_ecIsAdmin && (_ecUser?.name === 'Jet' || _ecUser?.name === 'Mark');
+    if (!_ecIsAdmin && !_ecIsJetOrMark) {
+      showToast('Only admins and office staff can edit client details');
       return;
     }
     const clients = db.get('clients', []);
@@ -1470,64 +1641,7 @@ class WorkOrderManager {
       console.warn('Logo load failed', e);
     }
 
-    const renderHeader = () => {
-      doc.setFillColor(...navy);
-      doc.rect(0, 0, 210, 25, 'F');
-      doc.setFillColor(...gold);
-      doc.rect(0, 25, 210, 1, 'F');
-
-      if (logoData) {
-        doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
-      }
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'normal');
-      doc.setCharSpace(1.6);
-      doc.setFontSize(18);
-      doc.text('OASIS', 32, 16.5);
-      doc.setCharSpace(0);
-
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      doc.text('SERVICE REPORT', 195, 14, { align: 'right' });
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
-      doc.setTextColor(...gold);
-      doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
-
-      return 35;
-    };
-
-    const renderFooter = () => {
-      const footerY = 278;
-      doc.setFillColor(...navy);
-      doc.rect(0, footerY, 210, 20, 'F');
-      doc.setFillColor(...gold);
-      doc.rect(0, footerY, 210, 0.5, 'F');
-
-      if (logoData) {
-        doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
-      }
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'normal');
-      doc.setCharSpace(1.4);
-      doc.setFontSize(10.5);
-      doc.text('OASIS', 30, footerY + 11.5);
-      doc.setCharSpace(0);
-
-      doc.setFontSize(7);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(180, 180, 180);
-      doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'normal');
-      doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
-      doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
-    };
-
-    let y = renderHeader();
+    let y = await applyOasisPdfBranding(doc, 'Service Report', 'Luxury Pool & Watershape Design');
 
     // Info Grid
 
@@ -1665,7 +1779,7 @@ class WorkOrderManager {
       }
     }
 
-    renderFooter();
+    await applyOasisPdfFooter(doc);
     sharePDF(doc, filename);
   }
 
@@ -2106,7 +2220,7 @@ function initMasterSchedule() {
     { name: "Tom Balon", address: "37 Teal Island", tech: "Ace", serviceDays: ["Monday"] },
     { name: "Charles Ebanks", address: "65 Bonnieview Av, Patricks Island", tech: "Donald", serviceDays: ["Monday"] },
     { name: "Gcpsl", address: "Coral Bay Village, Shamrock Rd", tech: "Donald", serviceDays: ["Monday"] },
-    { name: "Bcqs", address: "Olea , Minerva way", tech: "Kingsley", serviceDays: ["Monday"] },
+    { name: "Olea Main Pool", address: "Olea, Minerva Way", tech: "Kingsley", serviceDays: ["Monday"] },
     { name: "Kuavo", address: "One Canal Point, Gym Pool Chem Check", tech: "Kingsley", serviceDays: ["Monday"] },
     { name: "Kuavo - Vernon Flynn", address: "15 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
     { name: "Kuavo - Manuale Lupu", address: "9 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
@@ -2694,11 +2808,10 @@ function renderRepairOrdersList(statusFilter = 'all') {
   }
 
   if (!orders.length) {
-    const emptyTitle = isAdmin && statusFilter === 'completed'
-      ? 'No completed work orders'
-      : isAdmin && statusFilter === 'pending'
-        ? 'No pending or open work orders'
-        : 'No repair work orders';
+    if (isAdmin && statusFilter === 'completed') return '';
+    const emptyTitle = isAdmin && statusFilter === 'pending'
+      ? 'No pending or open work orders'
+      : 'No repair work orders';
 
     return `
       <div class="empty-state">
@@ -3015,73 +3128,10 @@ async function shareRepairPDF(orderId) {
   const gold = [201, 168, 124];
   const lightBeige = [248, 245, 241];
 
-  let logoData = null;
-  try {
-    logoData = await getImageDataUrl('oasis-logo.png');
-  } catch (e) {
-    console.warn('Logo load failed', e);
-  }
+  let y = await applyOasisPdfBranding(doc, 'Repair Work Order', 'Luxury Pool & Watershape Design');
 
-  let y = 0;
-
-  const renderHeader = () => {
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, 210, 25, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, 25, 210, 1, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('times', 'bold');
-    doc.setFontSize(22);
-    doc.text('O A S I S', 32, 17);
-
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('REPAIR WORK ORDER', 195, 14, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.setTextColor(...gold);
-    doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
-
-    return 35;
-  };
-
-  const renderFooter = () => {
-    const footerY = 278;
-    doc.setFillColor(...navy);
-    doc.rect(0, footerY, 210, 20, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, footerY, 210, 0.5, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(12);
-    doc.setFont('times', 'bold');
-    doc.text('O A S I S', 30, footerY + 12);
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(180, 180, 180);
-    doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
-    doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
-  };
-
-  y = renderHeader();
-
-  // Info Grid
-
-  let gridY = y + 7;
+  const gridY_start = y + 5;
+  let gridY = gridY_start;
   const col1 = 15;
   const col2 = 110;
 
@@ -3184,7 +3234,7 @@ async function shareRepairPDF(orderId) {
     });
   }
 
-  renderFooter();
+  await applyOasisPdfFooter(doc);
   sharePDF(doc, filename);
 }
 
@@ -3457,13 +3507,6 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
         </div>
       </div>
 
-      <div class="card" style="margin:12px 16px 0;">
-        <div class="card-body">
-          <div class="card-title">Branded Client Estimate Sheet</div>
-          <div class="list-item-sub" style="margin-top:6px;">Build a clean OASIS estimate using the client list and equipment catalogue. Tax and discount sections have been removed.</div>
-        </div>
-      </div>
-
       <div class="wo-sec">
         <div class="wo-sec-hd">Estimate Details</div>
         <div class="wo-sec-bd">
@@ -3717,7 +3760,7 @@ async function saveEstimateSheet(estimateId = '', shareAfterSave = false) {
     await saveEstimatePDF(estimate.id, 'share');
   }
 
-  router.renderWorkOrders();
+  router.navigate('quotes');
 }
 
 function deleteEstimateSheet(estimateId) {
@@ -3728,7 +3771,7 @@ function deleteEstimateSheet(estimateId) {
   if (!confirm('Delete this estimate sheet?')) return;
   saveEstimateSheets(getEstimateSheets().filter(item => item.id !== estimateId));
   showToast('Estimate deleted');
-  router.renderWorkOrders();
+  router.navigate('quotes');
 }
 
 async function saveEstimatePDF(estimateId, mode = 'save') {
@@ -3748,13 +3791,13 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
   const total = parseEstimateNumber(estimate.total || subtotal);
   const items = normalizeEstimateItems(estimate.items || []);
   const clientName = estimate.clientName || 'Client';
-  let y = applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
+  let y = await applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
 
-  const ensureSpace = (needed = 16) => {
+  const ensureSpace = async (needed = 16) => {
     if (y + needed > 265) {
-      applyOasisPdfFooter(doc);
+      await applyOasisPdfFooter(doc);
       doc.addPage();
-      y = applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
+      y = await applyOasisPdfBranding(doc, 'Client Estimate', 'Luxury Pool & Watershape Service');
     }
   };
 
@@ -3776,7 +3819,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
   doc.text(String(estimate.validUntil || '—'), 110, y + 19);
   y += 32;
 
-  ensureSpace(20);
+  await ensureSpace(20);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(13, 43, 69);
@@ -3821,7 +3864,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
     y = doc.lastAutoTable.finalY + 8;
   }
 
-  ensureSpace(28);
+  await ensureSpace(28);
   doc.setFillColor(248, 245, 241);
   doc.roundedRect(120, y, 75, 18, 3, 3, 'F');
   doc.setFont('helvetica', 'normal');
@@ -3836,7 +3879,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
   y += 26;
 
   if (estimate.notes) {
-    ensureSpace(20);
+    await ensureSpace(20);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.setTextColor(13, 43, 69);
@@ -3850,7 +3893,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
     y += (noteLines.length * 4.5) + 4;
   }
 
-  ensureSpace(20);
+  await ensureSpace(20);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(13, 43, 69);
@@ -3862,7 +3905,7 @@ async function saveEstimatePDF(estimateId, mode = 'save') {
   const termLines = doc.splitTextToSize(estimate.terms || 'Estimate valid for 30 days.', 180);
   doc.text(termLines, 15, y);
 
-  applyOasisPdfFooter(doc);
+  await applyOasisPdfFooter(doc);
 
   const safeClient = String(clientName || 'Client').replace(/[^a-z0-9]+/gi, '_');
   const filename = `OASIS_Estimate_${safeClient}_${estimate.date || getEstimateDefaultDate()}.pdf`;
@@ -4566,60 +4609,104 @@ async function exportRepairToExcel(orderId) {
   }
 }
 
-function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATERSHAPE DESIGN') {
+async function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATERSHAPE DESIGN') {
   const navy = [13, 43, 69];
   const gold = [201, 168, 124];
   const white = [255, 255, 255];
 
-  // Header
-  doc.setFillColor(...navy);
-  doc.rect(0, 0, 210, 28, 'F');
-  doc.setFillColor(...gold);
-  doc.rect(0, 28, 210, 1.5, 'F');
+  let logoData = null;
+  try { logoData = await getImageDataUrl('oasis-logo.png'); } catch (e) {}
 
-  // Logo Placeholder / Text
-  doc.setTextColor(...white);
-  doc.setFont('helvetica', 'normal');
-  doc.setCharSpace(1.8);
-  doc.setFontSize(18);
-  doc.text('OASIS', 45, 18);
+  // Full navy header band
+  doc.setFillColor(...navy);
+  doc.rect(0, 0, 210, 32, 'F');
+  // Gold rule at bottom of header
+  doc.setFillColor(...gold);
+  doc.rect(0, 32, 210, 1, 'F');
+
+  // Logo — paint navy behind it first so the PNG dark background is invisible
+  if (logoData) {
+    doc.setFillColor(...navy);
+    doc.rect(9, 3, 20, 20, 'F');
+    doc.addImage(logoData, 'PNG', 9, 3, 20, 20);
+  }
+
+  // OASIS wordmark — gold, italic (not bold), spaced letters
+  doc.setTextColor(...gold);
+  doc.setFont('times', 'italic');
+  doc.setCharSpace(4);
+  doc.setFontSize(12);
+  doc.text('OASIS', logoData ? 32 : 12, 26);
   doc.setCharSpace(0);
 
-  // Title
-  doc.setFontSize(14);
-  doc.text(title.toUpperCase(), 190, 16, { align: 'right' });
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(...gold);
-  doc.text(subtitle.toUpperCase(), 190, 22, { align: 'right' });
+  // Thin vertical gold separator
+  doc.setDrawColor(...gold);
+  doc.setLineWidth(0.3);
+  doc.line(62, 4, 62, 29);
 
-  return 40;
+  // Document title — white, right of separator
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(...white);
+  doc.text(title.toUpperCase(), 198, 14, { align: 'right' });
+
+  // Subtitle — gold
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(...gold);
+  doc.text(subtitle.toUpperCase(), 198, 21, { align: 'right' });
+
+  // Date — light gray
+  doc.setFontSize(6.5);
+  doc.setTextColor(180, 180, 180);
+  doc.text(new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }), 198, 28, { align: 'right' });
+
+  return 42;
 }
 
-function applyOasisPdfFooter(doc) {
+async function applyOasisPdfFooter(doc) {
   const navy = [13, 43, 69];
   const gold = [201, 168, 124];
   const white = [255, 255, 255];
-  const y = 275;
+  const y = 274;
 
+  let logoData = null;
+  try { logoData = await getImageDataUrl('oasis-logo.png'); } catch (e) {}
+
+  // Full navy footer band
   doc.setFillColor(...navy);
-  doc.rect(0, y, 210, 22, 'F');
+  doc.rect(0, y, 210, 23, 'F');
+  // Gold rule at top of footer
+  doc.setFillColor(...gold);
+  doc.rect(0, y, 210, 0.8, 'F');
 
-  doc.setTextColor(...white);
-  doc.setFont('helvetica', 'normal');
-  doc.setCharSpace(1.5);
-  doc.setFontSize(11);
-  doc.text('OASIS', 40, y + 10);
+  // Logo — paint navy behind it first so PNG background blends
+  if (logoData) {
+    doc.setFillColor(...navy);
+    doc.rect(10, y + 5, 12, 12, 'F');
+    doc.addImage(logoData, 'PNG', 10, y + 5, 12, 12);
+  }
+
+  // OASIS wordmark — gold, italic (not bold)
+  doc.setTextColor(...gold);
+  doc.setFont('times', 'italic');
+  doc.setCharSpace(3.5);
+  doc.setFontSize(9);
+  doc.text('OASIS', logoData ? 25 : 10, y + 13);
   doc.setCharSpace(0);
-  doc.setFontSize(7);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(150, 150, 150);
-  doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 40, y + 15);
 
+  // Tagline
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6);
+  doc.setTextColor(180, 180, 180);
+  doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', logoData ? 25 : 10, y + 18);
+
+  // Contact info right — white
   doc.setTextColor(...white);
-  doc.text('Harbour Walk, 2nd Floor — Grand Cayman, KY1-1001', 190, y + 8, { align: 'right' });
-  doc.text('+1 345-945-7665 · oasis.ky', 190, y + 13, { align: 'right' });
-  doc.text(`Generated ${new Date().toLocaleDateString()}`, 190, y + 18, { align: 'right' });
+  doc.setFontSize(7);
+  doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 198, y + 8, { align: 'right' });
+  doc.text('+1 345-945-7665  ·  oasis.ky', 198, y + 13, { align: 'right' });
+  doc.text(`Generated ${new Date().toLocaleDateString()}`, 198, y + 18, { align: 'right' });
 }
 
 
@@ -5295,7 +5382,7 @@ function initMasterSchedule() {
     { name: "Tom Balon", address: "37 Teal Island", tech: "Ace", serviceDays: ["Monday"] },
     { name: "Charles Ebanks", address: "65 Bonnieview Av, Patricks Island", tech: "Donald", serviceDays: ["Monday"] },
     { name: "Gcpsl", address: "Coral Bay Village, Shamrock Rd", tech: "Donald", serviceDays: ["Monday"] },
-    { name: "Bcqs", address: "Olea , Minerva way", tech: "Kingsley", serviceDays: ["Monday"] },
+    { name: "Olea Main Pool", address: "Olea, Minerva Way", tech: "Kingsley", serviceDays: ["Monday"] },
     { name: "Kuavo", address: "One Canal Point, Gym Pool Chem Check", tech: "Kingsley", serviceDays: ["Monday"] },
     { name: "Kuavo - Vernon Flynn", address: "15 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
     { name: "Kuavo - Manuale Lupu", address: "9 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
@@ -5883,11 +5970,10 @@ function renderRepairOrdersList(statusFilter = 'all') {
   }
 
   if (!orders.length) {
-    const emptyTitle = isAdmin && statusFilter === 'completed'
-      ? 'No completed work orders'
-      : isAdmin && statusFilter === 'pending'
-        ? 'No pending or open work orders'
-        : 'No repair work orders';
+    if (isAdmin && statusFilter === 'completed') return '';
+    const emptyTitle = isAdmin && statusFilter === 'pending'
+      ? 'No pending or open work orders'
+      : 'No repair work orders';
 
     return `
       <div class="empty-state">
@@ -6204,73 +6290,10 @@ async function shareRepairPDF(orderId) {
   const gold = [201, 168, 124];
   const lightBeige = [248, 245, 241];
 
-  let logoData = null;
-  try {
-    logoData = await getImageDataUrl('oasis-logo.png');
-  } catch (e) {
-    console.warn('Logo load failed', e);
-  }
+  let y = await applyOasisPdfBranding(doc, 'Repair Work Order', 'Luxury Pool & Watershape Design');
 
-  let y = 0;
-
-  const renderHeader = () => {
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, 210, 25, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, 25, 210, 1, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, 5, 15, 15);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('times', 'bold');
-    doc.setFontSize(22);
-    doc.text('O A S I S', 32, 17);
-
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('REPAIR WORK ORDER', 195, 14, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.setTextColor(...gold);
-    doc.text('LUXURY POOL & WATERSHAPE DESIGN', 195, 19, { align: 'right' });
-
-    return 35;
-  };
-
-  const renderFooter = () => {
-    const footerY = 278;
-    doc.setFillColor(...navy);
-    doc.rect(0, footerY, 210, 20, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, footerY, 210, 0.5, 'F');
-
-    if (logoData) {
-      doc.addImage(logoData, 'PNG', 12, footerY + 4, 12, 12);
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(12);
-    doc.setFont('times', 'bold');
-    doc.text('O A S I S', 30, footerY + 12);
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(180, 180, 180);
-    doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', 55, footerY + 12);
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 195, footerY + 9, { align: 'right' });
-    doc.text('oasis.ky  ·  +1 345-945-7665', 195, footerY + 14, { align: 'right' });
-  };
-
-  y = renderHeader();
-
-  // Info Grid
-
-  let gridY = y + 7;
+  const gridY_start = y + 5;
+  let gridY = gridY_start;
   const col1 = 15;
   const col2 = 110;
 
@@ -6373,7 +6396,7 @@ async function shareRepairPDF(orderId) {
     });
   }
 
-  renderFooter();
+  await applyOasisPdfFooter(doc);
   sharePDF(doc, filename);
 }
 
@@ -7036,7 +7059,7 @@ function initMasterSchedule() {
     { name: "Tom Balon", address: "37 Teal Island", tech: "Ace", serviceDays: ["Monday"] },
     { name: "Charles Ebanks", address: "65 Bonnieview Av, Patricks Island", tech: "Donald", serviceDays: ["Monday"] },
     { name: "Gcpsl", address: "Coral Bay Village, Shamrock Rd", tech: "Donald", serviceDays: ["Monday"] },
-    { name: "Bcqs", address: "Olea , Minerva way", tech: "Kingsley", serviceDays: ["Monday"] },
+    { name: "Olea Main Pool", address: "Olea, Minerva Way", tech: "Kingsley", serviceDays: ["Monday"] },
     { name: "Kuavo", address: "One Canal Point, Gym Pool Chem Check", tech: "Kingsley", serviceDays: ["Monday"] },
     { name: "Kuavo - Vernon Flynn", address: "15 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
     { name: "Kuavo - Manuale Lupu", address: "9 One Canal Point", tech: "Ariel", serviceDays: ["Monday"] },
@@ -7900,4 +7923,153 @@ function renderRepairPhotoSlot(orderId, label, photo, index) {
       <input id="repair-photo-gallery-${index}" name="repair-photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
     </div>
   `;
+}
+
+function convertQuoteToWorkOrder(estimateId) {
+  if (!auth.isAdmin()) { showToast('Only admins can convert quotes'); return; }
+  const estimate = getEstimateSheet(estimateId);
+  if (!estimate) { showToast('Estimate not found'); return; }
+
+  const itemsSummary = (estimate.items || [])
+    .filter(item => item.equipment || item.partNumber)
+    .map(item => `${item.equipment || item.partNumber}${item.qty && item.qty !== '1' ? ` x${item.qty}` : ''}`)
+    .join(', ');
+
+  const newOrder = {
+    id: `r${Date.now()}`,
+    clientId: estimate.clientId || '',
+    clientName: estimate.clientName || '',
+    address: estimate.address || '',
+    date: new Date().toISOString().split('T')[0],
+    time: '', timeIn: '', timeOut: '',
+    assignedTo: '',
+    status: 'open',
+    jobType: estimate.project || 'Pool Equipment Installation',
+    summary: estimate.scope || '',
+    materials: itemsSummary,
+    partsItems: [],
+    partsSummary: itemsSummary,
+    labourHours: '',
+    notes: `Converted from Estimate ${estimate.estimateNumber || ''}. Total: $${formatEstimateMoney(estimate.total || estimate.subtotal || 0)}`,
+    photos: [],
+    sourceEstimateId: estimate.id
+  };
+
+  const orders = getRepairOrders();
+  orders.unshift(newOrder);
+  saveRepairOrders(orders);
+  showToast(`Work order created from ${estimate.estimateNumber || 'estimate'} — assign a technician`);
+  renderRepairOrderForm(newOrder.id);
+}
+
+async function exportDailyWorkOrders() {
+  const dateInput = document.getElementById('wo-export-date');
+  const selectedDate = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const orders = getRepairOrders().filter(o => isCompleted(o.status) && o.date === selectedDate);
+  if (orders.length === 0) { showToast(`No completed work orders for ${selectedDate}`); return; }
+  showToast('Generating Work Orders Excel...');
+  try {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'OASIS Service App'; workbook.created = new Date();
+    const applyHeader = (sheet, count) => {
+      const row = sheet.getRow(1);
+      row.font = { bold: true, color: { argb: 'FFFFFF' } };
+      row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      row.alignment = { vertical: 'middle', horizontal: 'center' };
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: count } };
+    };
+    const columns = [
+      { header: 'Date', key: 'date', width: 12 }, { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 }, { header: 'Technician', key: 'tech', width: 18 },
+      { header: 'Job Type', key: 'jobType', width: 20 }, { header: 'Status', key: 'status', width: 12 },
+      { header: 'Time In', key: 'timeIn', width: 10 }, { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Labour Hours', key: 'labourHours', width: 12 }, { header: 'Materials', key: 'materials', width: 30 },
+      { header: 'Parts Summary', key: 'partsSummary', width: 40 }, { header: 'Work Summary', key: 'summary', width: 40 },
+      { header: 'Notes', key: 'notes', width: 40 }
+    ];
+    const sheet = workbook.addWorksheet('Work Orders');
+    sheet.columns = columns; applyHeader(sheet, columns.length);
+    orders.forEach(order => sheet.addRow({
+      date: order.date || '', client: order.clientName || '', address: order.address || '',
+      tech: order.assignedTo || '', jobType: order.jobType || '', status: order.status || '',
+      timeIn: order.timeIn || order.time || '', timeOut: order.timeOut || '',
+      labourHours: order.labourHours || '', materials: order.materials || '',
+      partsSummary: order.partsSummary || '', summary: order.summary || '', notes: order.notes || ''
+    }));
+    sheet.eachRow((row, n) => { if (n > 1) row.alignment = { vertical: 'top', wrapText: true }; });
+    const buffer = await workbook.xlsx.writeBuffer();
+    const filename = `OASIS_Work_Orders_${selectedDate}.xlsx`;
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+    showToast(`${orders.length} work order${orders.length !== 1 ? 's' : ''} for ${selectedDate} saved`);
+  } catch (error) { console.error('Work orders export failed:', error); showToast('Work orders export failed'); }
+}
+
+async function exportMonthlyChemSheets() {
+  const monthInput = document.getElementById('chem-export-month');
+  const selectedMonth = monthInput ? monthInput.value : new Date().toISOString().slice(0, 7);
+  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
+  const sorted = [...db.get('workorders', []).filter(wo => isCompleted(wo.status) && (wo.date || '').startsWith(selectedMonth))]
+    .sort((a, b) => new Date(a?.date || 0) - new Date(b?.date || 0));
+  if (sorted.length === 0) { showToast(`No completed chem sheets found for ${selectedMonth}`); return; }
+  showToast('Generating Chem Sheets Excel...');
+  try {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'OASIS Service App'; workbook.created = new Date();
+    const styleHeader = (sheet, count) => {
+      const row = sheet.getRow(1);
+      row.font = { bold: true, color: { argb: 'FFFFFF' } };
+      row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
+      row.alignment = { vertical: 'middle', horizontal: 'center' };
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: count } };
+    };
+    const chemKeys = [
+      { key: 'tabs', label: 'Tabs' }, { key: 'shock', label: 'Shock/Oxidizer' },
+      { key: 'muriaticAcid', label: 'Muriatic Acid' }, { key: 'sodaAsh', label: 'Soda Ash' },
+      { key: 'sodiumBicarb', label: 'Sodium Bicarb' }, { key: 'calcium', label: 'Calcium Increaser' },
+      { key: 'stabilizer', label: 'Stabilizer' }, { key: 'salt', label: 'Salt' },
+      { key: 'phosphateRemover', label: 'Phosphate Remover' }, { key: 'algaecide', label: 'Algaecide' }
+    ];
+    const columns = [
+      { header: 'Date', key: 'date', width: 12 }, { header: 'Client', key: 'client', width: 25 },
+      { header: 'Address', key: 'address', width: 35 }, { header: 'Technician', key: 'tech', width: 15 },
+      { header: 'Time In', key: 'timeIn', width: 10 }, { header: 'Time Out', key: 'timeOut', width: 10 },
+      { header: 'Pool Chlorine', key: 'pCl', width: 12 }, { header: 'Pool pH', key: 'pph', width: 10 },
+      { header: 'Pool Alk', key: 'palk', width: 10 }
+    ];
+    chemKeys.forEach(ck => columns.push({ header: `Pool ${ck.label}`, key: `p_${ck.key}`, width: 15 }));
+    columns.push({ header: 'Spa Chlorine', key: 'sCl', width: 12 }, { header: 'Spa pH', key: 'sph', width: 10 }, { header: 'Spa Alk', key: 'salk', width: 10 });
+    chemKeys.forEach(ck => columns.push({ header: `Spa ${ck.label}`, key: `s_${ck.key}`, width: 15 }));
+    columns.push({ header: 'Service Notes', key: 'notes', width: 40 });
+    const sheet = workbook.addWorksheet('Chem Sheets');
+    sheet.columns = columns; styleHeader(sheet, columns.length);
+    sorted.forEach(wo => {
+      const rowData = {
+        date: wo.date || '', client: wo.clientName || '', address: wo.address || '',
+        tech: wo.technician || '', timeIn: wo.timeIn || wo.time || '', timeOut: wo.timeOut || '',
+        pCl: wo.readings?.pool?.chlorine || '', pph: wo.readings?.pool?.ph || '', palk: wo.readings?.pool?.alkalinity || '',
+        sCl: wo.readings?.spa?.chlorine || '', sph: wo.readings?.spa?.ph || '', salk: wo.readings?.spa?.alkalinity || '',
+        notes: `${wo.workPerformed || ''} ${wo.followUpNotes || wo.notes || ''}`.trim()
+      };
+      chemKeys.forEach(ck => { rowData[`p_${ck.key}`] = wo.chemicalsAdded?.pool?.[ck.key] || ''; rowData[`s_${ck.key}`] = wo.chemicalsAdded?.spa?.[ck.key] || ''; });
+      sheet.addRow(rowData);
+    });
+    sheet.eachRow((row, n) => { if (n > 1) row.alignment = { vertical: 'top', wrapText: true }; });
+    const buffer = await workbook.xlsx.writeBuffer();
+    const filename = `OASIS_Chem_Sheets_${selectedMonth}.xlsx`;
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+    showToast(`${sorted.length} chem sheet${sorted.length !== 1 ? 's' : ''} for ${selectedMonth} saved`);
+  } catch (error) { console.error('Chem sheets export failed:', error); showToast('Chem sheets export failed'); }
 }
