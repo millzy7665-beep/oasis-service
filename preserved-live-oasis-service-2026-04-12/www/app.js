@@ -1066,7 +1066,7 @@ class Router {
       </div>
       <div class="card">
         <div class="card-body">
-          <button class="btn btn-primary" onclick="router.createEstimate()">Open Estimate Sheet</button>
+          <button class="btn btn-primary" onclick="router.createEstimate()">Create Estimate</button>
         </div>
       </div>
       ` : ''}
@@ -3563,13 +3563,6 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-secondary btn-sm" onclick="saveEstimateSheet('${escapeHtml(activeEstimateId)}', true)">Save & Share</button>
           <button class="btn btn-primary btn-sm" onclick="saveEstimateSheet('${escapeHtml(activeEstimateId)}')">Save</button>
-        </div>
-      </div>
-
-      <div class="card" style="margin:12px 16px 0;">
-        <div class="card-body">
-          <div class="card-title">Branded Client Estimate Sheet</div>
-          <div class="list-item-sub" style="margin-top:6px;">Build a clean OASIS estimate using the client list and equipment catalogue. Tax and discount sections have been removed.</div>
         </div>
       </div>
 
@@ -8050,12 +8043,14 @@ async function exportDailyWorkOrders() {
     }));
     sheet.eachRow((row, n) => { if (n > 1) row.alignment = { vertical: 'top', wrapText: true }; });
     const buffer = await workbook.xlsx.writeBuffer();
-    let binary = ''; const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    const base64 = btoa(binary);
     const filename = `OASIS_Work_Orders_${selectedDate}.xlsx`;
-    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast(`${orders.length} work order${orders.length !== 1 ? 's' : ''} for ${selectedDate} ready to download`);
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+    showToast(`${orders.length} work order${orders.length !== 1 ? 's' : ''} for ${selectedDate} saved`);
   } catch (error) { console.error('Work orders export failed:', error); showToast('Work orders export failed'); }
 }
 
@@ -8111,11 +8106,13 @@ async function exportMonthlyChemSheets() {
     });
     sheet.eachRow((row, n) => { if (n > 1) row.alignment = { vertical: 'top', wrapText: true }; });
     const buffer = await workbook.xlsx.writeBuffer();
-    let binary = ''; const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    const base64 = btoa(binary);
     const filename = `OASIS_Chem_Sheets_${selectedMonth}.xlsx`;
-    await shareFileByEmail(base64, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    showToast(`${sorted.length} chem sheet${sorted.length !== 1 ? 's' : ''} for ${selectedMonth} ready to download`);
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+    showToast(`${sorted.length} chem sheet${sorted.length !== 1 ? 's' : ''} for ${selectedMonth} saved`);
   } catch (error) { console.error('Chem sheets export failed:', error); showToast('Chem sheets export failed'); }
 }
