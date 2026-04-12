@@ -517,49 +517,92 @@ class Router {
 
     const user = auth.getCurrentUser();
     const userName = user ? user.name : 'Technician';
+    const isAdmin = auth.isAdmin();
+    const isOfficeUser = isAdmin || (user && (user.name === 'Jet' || user.name === 'Mark'));
     const visibleWorkorders = this.getVisibleJobs(db.get('workorders', []), 'technician');
     const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
     const unreadNotifications = notificationManager.getUnreadForUser(user).length;
 
-    notificationManager.requestPermission();
-    if (unreadNotifications) {
-      setTimeout(() => notificationManager.showUnreadToast(user), 150);
+    if (isOfficeUser) {
+      notificationManager.requestPermission();
+      if (unreadNotifications) {
+        setTimeout(() => notificationManager.showUnreadToast(user), 150);
+      }
     }
 
     const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+
+    // Today's route clients for this tech (field techs only see their own)
+    const allClients = db.get('clients', []);
+    const myRouteClients = isAdmin
+      ? allClients.filter(c => c.serviceDays && c.serviceDays.includes(todayDay))
+      : allClients.filter(c => c.technician === userName && c.serviceDays && c.serviceDays.includes(todayDay));
+
+    // Total assigned clients for this tech
+    const myTotalClients = isAdmin
+      ? allClients.length
+      : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase()).length;
 
     content.innerHTML = `
       <div class="wave-banner">
         <div class="wave-banner-eyebrow">Welcome back</div>
         <div class="wave-banner-title">${userName}</div>
-        <div class="wave-banner-sub">Ready for today's service and repair jobs • ${todayStr}</div>
+        <div class="wave-banner-sub">${todayStr} • ${myRouteClients.length} stops today</div>
       </div>
 
       <div class="stats-grid">
-        <div class="stat-card" onclick="router.navigate('workorders')">
-          <div class="stat-icon">🧪</div>
-          <div class="stat-value">${visibleWorkorders.length}</div>
-          <div class="stat-label">Chem Sheets</div>
-        </div>
-        <div class="stat-card" onclick="router.navigate('workorders')">
-          <div class="stat-icon">🛠️</div>
-          <div class="stat-value">${visibleRepairOrders.length}</div>
-          <div class="stat-label">Repair Orders</div>
+        <div class="stat-card" onclick="router.navigate('routes')">
+          <div class="stat-icon">🗺️</div>
+          <div class="stat-value">${myRouteClients.length}</div>
+          <div class="stat-label">Today's Visits</div>
         </div>
         <div class="stat-card" onclick="router.navigate('clients')">
           <div class="stat-icon">👥</div>
-          <div class="stat-value">${db.get('clients', []).length}</div>
-          <div class="stat-label">Clients</div>
+          <div class="stat-value">${myTotalClients}</div>
+          <div class="stat-label">Total Visits</div>
         </div>
+        ${isOfficeUser ? `
+        <div class="stat-card" onclick="router.navigate('routes')">
+          <div class="stat-icon">🛠️</div>
+          <div class="stat-value">${visibleRepairOrders.length}</div>
+          <div class="stat-label">Work Orders</div>
+        </div>
+        ` : ''}
       </div>
 
+      ${isOfficeUser ? `
       <div class="section-header">
         <div class="section-title">Notifications${unreadNotifications ? ` (${unreadNotifications} new)` : ''}</div>
       </div>
-
       <div id="dashboard-notifications">
         ${notificationManager.renderDashboardPanel()}
       </div>
+      ` : ''}
+
+      ${!isOfficeUser ? `
+      <div class="section-header">
+        <div class="section-title">Today's Route · ${todayDay}</div>
+        <button class="btn btn-secondary btn-sm" onclick="router.navigate('routes')">Full Route →</button>
+      </div>
+      <div id="today-route">
+        ${myRouteClients.length > 0
+          ? myRouteClients.sort((a, b) => a.name.localeCompare(b.name)).map(c => `
+            <div class="list-item" onclick="router.editClient('${escapeHtml(c.id)}')" style="cursor:pointer;">
+              <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
+              <div class="list-item-info">
+                <div class="list-item-name">${escapeHtml(c.name)}</div>
+                <div class="list-item-sub">${escapeHtml(c.address)}</div>
+              </div>
+              <div class="list-item-actions">
+                <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(c.address)}')" title="Navigate">📍</button>
+              </div>
+            </div>
+          `).join('')
+          : `<div class="card" style="margin:0 16px 12px;"><div class="card-body"><div class="empty-title">No route stops for ${todayDay}</div><div class="empty-subtitle">Import a route sheet to see your daily schedule</div></div></div>`
+        }
+      </div>
+      ` : ''}
 
       <div class="section-header">
         <div class="section-title">Today's Schedule</div>
