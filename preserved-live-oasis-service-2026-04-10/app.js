@@ -38,6 +38,7 @@ class DB {
 }
 
 const db = new DB();
+const DATA_VERSION = 'v187'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -2475,7 +2476,17 @@ document.addEventListener('DOMContentLoaded', () => {
   auth.logout();
 
   cleanupTestClients();
-  db.set('masterScheduleLoaded', false); // Force reload with updated route data
+  // Data version check: if version changed, wipe & reseed all master-schedule clients
+  if (db.get('dataVersion') !== DATA_VERSION) {
+    const existingClients = db.get('clients', []);
+    // Master schedule clients have ids starting with 'c_'; user-created use 'c' + timestamp
+    const userClients = existingClients.filter(c => !String(c.id || '').startsWith('c_'));
+    db.set('clients', userClients);
+    db.set('masterScheduleLoaded', false);
+    db.set('dataVersion', DATA_VERSION);
+  } else {
+    db.set('masterScheduleLoaded', false);
+  }
   initMasterSchedule();
   migrateLegacyRepairData();
   rollOverPendingJobs();
@@ -5638,7 +5649,17 @@ document.addEventListener('DOMContentLoaded', () => {
   auth.logout();
 
   cleanupTestClients();
-  db.set('masterScheduleLoaded', false); // Force reload with updated route data
+  // Data version check: if version changed, wipe & reseed all master-schedule clients
+  if (db.get('dataVersion') !== DATA_VERSION) {
+    const existingClients = db.get('clients', []);
+    // Master schedule clients have ids starting with 'c_'; user-created use 'c' + timestamp
+    const userClients = existingClients.filter(c => !String(c.id || '').startsWith('c_'));
+    db.set('clients', userClients);
+    db.set('masterScheduleLoaded', false);
+    db.set('dataVersion', DATA_VERSION);
+  } else {
+    db.set('masterScheduleLoaded', false);
+  }
   initMasterSchedule();
   migrateLegacyRepairData();
   rollOverPendingJobs();
@@ -7309,7 +7330,17 @@ document.addEventListener('DOMContentLoaded', () => {
   auth.logout();
 
   cleanupTestClients();
-  db.set('masterScheduleLoaded', false); // Force reload with updated route data
+  // Data version check: if version changed, wipe & reseed all master-schedule clients
+  if (db.get('dataVersion') !== DATA_VERSION) {
+    const existingClients = db.get('clients', []);
+    // Master schedule clients have ids starting with 'c_'; user-created use 'c' + timestamp
+    const userClients = existingClients.filter(c => !String(c.id || '').startsWith('c_'));
+    db.set('clients', userClients);
+    db.set('masterScheduleLoaded', false);
+    db.set('dataVersion', DATA_VERSION);
+  } else {
+    db.set('masterScheduleLoaded', false);
+  }
   initMasterSchedule();
   migrateLegacyRepairData();
   rollOverPendingJobs();
