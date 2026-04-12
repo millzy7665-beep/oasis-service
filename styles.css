@@ -1216,10 +1216,6 @@ select.form-control {
   height: auto;
   margin: 0 auto 24px;
   display: block;
-  /* Use screen blend mode to hide the black background and show the original gold logo */
-  mix-blend-mode: screen;
-  filter: none !important;
-  -webkit-filter: none !important;
 }
 
 .login-brand {
