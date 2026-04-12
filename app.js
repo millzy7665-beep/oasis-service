@@ -4613,94 +4613,101 @@ async function exportRepairToExcel(orderId) {
 async function applyOasisPdfBranding(doc, title, subtitle = 'LUXURY POOL & WATERSHAPE DESIGN') {
   const navy = [13, 43, 69];
   const gold = [201, 168, 124];
+  const white = [255, 255, 255];
 
   let logoData = null;
   try { logoData = await getImageDataUrl('oasis-logo.png'); } catch (e) {}
 
-  // Thin gold top accent line
+  // Full navy header band
+  doc.setFillColor(...navy);
+  doc.rect(0, 0, 210, 32, 'F');
+  // Gold rule at bottom of header
   doc.setFillColor(...gold);
-  doc.rect(0, 0, 210, 0.9, 'F');
+  doc.rect(0, 32, 210, 1, 'F');
 
-  // Logo mark — large and prominent, matching the brand screenshot
-  const logoX = 13, logoY = 4, logoW = 26, logoH = 26;
-  const logoCenterX = logoX + logoW / 2; // 26
+  // Logo — paint navy behind it first so the PNG dark background is invisible
   if (logoData) {
-    doc.addImage(logoData, 'PNG', logoX, logoY, logoW, logoH);
+    doc.setFillColor(...navy);
+    doc.rect(9, 3, 20, 20, 'F');
+    doc.addImage(logoData, 'PNG', 9, 3, 20, 20);
   }
 
-  // OASIS wordmark in gold — centered below the logo mark
+  // OASIS wordmark — gold, italic (not bold), spaced letters
   doc.setTextColor(...gold);
   doc.setFont('times', 'italic');
-  doc.setCharSpace(5);
-  doc.setFontSize(10);
-  doc.text('OASIS', logoCenterX, logoData ? 34 : 16, { align: 'center' });
+  doc.setCharSpace(4);
+  doc.setFontSize(12);
+  doc.text('OASIS', logoData ? 32 : 12, 26);
   doc.setCharSpace(0);
 
-  // Vertical gold divider between logo block and document title
+  // Thin vertical gold separator
   doc.setDrawColor(...gold);
-  doc.setLineWidth(0.35);
-  doc.line(52, 3, 52, 37);
+  doc.setLineWidth(0.3);
+  doc.line(62, 4, 62, 29);
 
-  // Document title block — right of divider
-  doc.setTextColor(...navy);
+  // Document title — white, right of separator
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text(title.toUpperCase(), 57, 15);
+  doc.setFontSize(11);
+  doc.setTextColor(...white);
+  doc.text(title.toUpperCase(), 198, 14, { align: 'right' });
 
+  // Subtitle — gold
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
   doc.setTextColor(...gold);
-  doc.text(subtitle.toUpperCase(), 57, 22);
+  doc.text(subtitle.toUpperCase(), 198, 21, { align: 'right' });
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
-  doc.setTextColor(150, 150, 150);
-  doc.text(new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }), 57, 29);
+  // Date — light gray
+  doc.setFontSize(6.5);
+  doc.setTextColor(180, 180, 180);
+  doc.text(new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }), 198, 28, { align: 'right' });
 
-  // Thin gold bottom rule
-  doc.setFillColor(...gold);
-  doc.rect(0, 39, 210, 0.7, 'F');
-
-  return 46;
+  return 42;
 }
 
 async function applyOasisPdfFooter(doc) {
   const navy = [13, 43, 69];
   const gold = [201, 168, 124];
-  const y = 275;
+  const white = [255, 255, 255];
+  const y = 274;
 
   let logoData = null;
   try { logoData = await getImageDataUrl('oasis-logo.png'); } catch (e) {}
 
+  // Full navy footer band
+  doc.setFillColor(...navy);
+  doc.rect(0, y, 210, 23, 'F');
   // Gold rule at top of footer
   doc.setFillColor(...gold);
-  doc.rect(0, y, 210, 0.7, 'F');
+  doc.rect(0, y, 210, 0.8, 'F');
 
-  // Small logo mark on left
+  // Logo — paint navy behind it first so PNG background blends
   if (logoData) {
-    doc.addImage(logoData, 'PNG', 13, y + 4, 12, 12);
+    doc.setFillColor(...navy);
+    doc.rect(10, y + 5, 12, 12, 'F');
+    doc.addImage(logoData, 'PNG', 10, y + 5, 12, 12);
   }
 
-  // OASIS wordmark in gold
+  // OASIS wordmark — gold, italic (not bold)
   doc.setTextColor(...gold);
   doc.setFont('times', 'italic');
-  doc.setCharSpace(4);
-  doc.setFontSize(8.5);
-  doc.text('OASIS', logoData ? 28 : 13, y + 8);
+  doc.setCharSpace(3.5);
+  doc.setFontSize(9);
+  doc.text('OASIS', logoData ? 25 : 10, y + 13);
   doc.setCharSpace(0);
 
-  // Tagline below wordmark
+  // Tagline
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6);
-  doc.setTextColor(160, 160, 160);
-  doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', logoData ? 28 : 13, y + 13);
+  doc.setTextColor(180, 180, 180);
+  doc.text('Luxury Pool & Watershape Design, Construction & Maintenance', logoData ? 25 : 10, y + 18);
 
-  // Contact info right
-  doc.setFontSize(6.5);
-  doc.setTextColor(100, 100, 100);
-  doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 197, y + 7, { align: 'right' });
-  doc.text('+1 345-945-7665  ·  oasis.ky', 197, y + 13, { align: 'right' });
-  doc.text(`Generated ${new Date().toLocaleDateString()}`, 197, y + 18, { align: 'right' });
+  // Contact info right — white
+  doc.setTextColor(...white);
+  doc.setFontSize(7);
+  doc.text('Harbour Walk, 2nd Floor — Grand Cayman', 198, y + 8, { align: 'right' });
+  doc.text('+1 345-945-7665  ·  oasis.ky', 198, y + 13, { align: 'right' });
+  doc.text(`Generated ${new Date().toLocaleDateString()}`, 198, y + 18, { align: 'right' });
 }
 
 
