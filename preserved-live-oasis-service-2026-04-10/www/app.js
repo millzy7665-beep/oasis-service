@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v201'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v202'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -3194,15 +3194,17 @@ function saveRepairOrders(orders) {
 
 function getWorkOrderAssigneeOptions() {
   const preferredUsernames = ['t9', 't10'];
-  const assignees = preferredUsernames
+  const officeAssignees = preferredUsernames
     .map(username => auth.users?.[username]?.name)
     .filter(Boolean);
+  const adminAssignees = getAdminNames();
+  const assignees = [...new Set([...officeAssignees, ...adminAssignees])];
 
-  return assignees.length ? assignees : getTechnicianNames();
+  return assignees.length ? assignees : [...new Set([...getTechnicianNames(), ...adminAssignees])];
 }
 
 function isOfficeWorkOrderAssignee(name = '') {
-  return userNamesMatch(name, 'Tech - Jet') || userNamesMatch(name, 'Tech - Mark');
+  return ['Tech - Jet', 'Tech - Mark', ...getAdminNames()].some(candidate => userNamesMatch(name, candidate));
 }
 
 function getRepairClientDisplay(client = {}) {
@@ -8489,7 +8491,7 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   saveRepairOrders(orders);
 
-  if (auth.isAdmin() && order.assignedTo && !userNamesMatch(order.assignedTo, currentUser?.name || '')) {
+  if (auth.isAdmin() && order.assignedTo) {
     const assignmentChanged = !previousOrder || !userNamesMatch(previousOrder.assignedTo || '', order.assignedTo || '');
     const statusChanged = previousStatus !== (order.status || '').toLowerCase();
     const dateChanged = (previousOrder?.date || '') !== (order.date || '');
