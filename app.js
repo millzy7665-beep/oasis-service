@@ -3,11 +3,37 @@
 // PDF generation with local save instead of email
 
 // ==========================================
+// FIREBASE INITIALIZATION
+// ==========================================
+const firebaseConfig = {
+  apiKey: "AIzaSyAo3vP7Myf08Q8KqoFlcgGNOZp2mX2R-38",
+  authDomain: "oasis-service-app-69def.firebaseapp.com",
+  projectId: "oasis-service-app-69def",
+  storageBucket: "oasis-service-app-69def.firebasestorage.app",
+  messagingSenderId: "156557428291",
+  appId: "1:156557428291:web:243524f03403d05c65f6f6",
+  measurementId: "G-THQ9YGZ0B5"
+};
+
+const firebaseApp = typeof firebase !== 'undefined'
+  ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
+  : null;
+const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
+
+// Collections that sync across all devices via Firestore.
+const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'estimates'];
+const PUSH_TOKEN_COLLECTION = 'push_tokens';
+const PUSH_DISPATCH_COLLECTION = 'push_dispatch_queue';
+
+// ==========================================
 // DATA MANAGEMENT (DB)
 // ==========================================
 class DB {
   constructor() {
     this.storage = window.localStorage;
+    this._realtimeSyncStarted = false;
+    this._remoteWritesEnabled = false;
+    this._storageListenerBound = false;
   }
 
   get(key, defaultValue = null) {
@@ -20,25 +46,148 @@ class DB {
   }
 
   set(key, value) {
+    let serialized;
     try {
-      this.storage.setItem(key, JSON.stringify(value));
-      return true;
+      serialized = JSON.stringify(value);
+      this.storage.setItem(key, serialized);
     } catch (e) {
       return false;
     }
+
+    if (this._remoteWritesEnabled && firestore && SYNCED_KEYS.includes(key)) {
+      firestore.collection('app_data').doc(key).set({
+        data: JSON.parse(serialized),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }).catch(err => console.warn('Firestore write failed for', key, err));
+    }
+
+    return true;
   }
 
   remove(key) {
     this.storage.removeItem(key);
+
+    if (this._remoteWritesEnabled && firestore && SYNCED_KEYS.includes(key)) {
+      firestore.collection('app_data').doc(key).delete()
+        .catch(err => console.warn('Firestore delete failed for', key, err));
+    }
   }
 
   clear() {
     this.storage.clear();
   }
+
+  refreshLiveViews(key = '') {
+    if (typeof router === 'undefined' || !router.currentView) return;
+
+    try {
+      if (router.currentView === 'dashboard') {
+        router.renderDashboard();
+      } else if (router.currentView === 'routes' && typeof router.renderRoutes === 'function') {
+        router.renderRoutes();
+      } else if (router.currentView === 'clients' && document.getElementById('clients-list')) {
+        router.renderClients();
+      } else if (router.currentView === 'workorders' && document.getElementById('workorders-list')) {
+        router.renderWorkOrders();
+      } else if (router.currentView === 'quotes' && typeof router.renderQuotes === 'function' && document.getElementById('quotes-list')) {
+        router.renderQuotes();
+      }
+
+      if (typeof router.updateNav === 'function') {
+        router.updateNav();
+      }
+    } catch (error) {
+      console.warn('Live view refresh failed for', key, error);
+    }
+  }
+
+  bindStorageListener() {
+    if (this._storageListenerBound || typeof window === 'undefined') return;
+
+    this._storageListenerBound = true;
+    window.addEventListener('storage', event => {
+      if (!event.key || !SYNCED_KEYS.includes(event.key)) return;
+      this.refreshLiveViews(event.key);
+    });
+  }
+
+  startRealtimeSync() {
+    if (this._realtimeSyncStarted) return;
+
+    this._realtimeSyncStarted = true;
+    this.bindStorageListener();
+
+    if (!firestore) {
+      console.warn('Firestore unavailable; shared live sync disabled');
+      return;
+    }
+
+    const clone = value => JSON.parse(JSON.stringify(value));
+    const hasMeaningfulValue = value => value !== null && value !== undefined && (!(Array.isArray(value)) || value.length > 0);
+    let knownNotificationIds = new Set((this.get('oasis_notifications', []) || []).map(item => item.id));
+
+    Promise.all(SYNCED_KEYS.map(async key => {
+      const docRef = firestore.collection('app_data').doc(key);
+      const remoteDoc = await docRef.get();
+      const localData = this.get(key, null);
+
+      if (remoteDoc.exists) {
+        const remoteData = remoteDoc.data()?.data ?? null;
+        if (remoteData !== null && JSON.stringify(remoteData) !== JSON.stringify(localData)) {
+          this.storage.setItem(key, JSON.stringify(remoteData));
+        }
+        return;
+      }
+
+      if (hasMeaningfulValue(localData)) {
+        await docRef.set({
+          data: clone(localData),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+    })).catch(error => {
+      console.warn('Initial Firestore sync failed', error);
+    }).finally(() => {
+      knownNotificationIds = new Set((this.get('oasis_notifications', []) || []).map(item => item.id));
+      this._remoteWritesEnabled = true;
+
+      SYNCED_KEYS.forEach(key => {
+        firestore.collection('app_data').doc(key).onSnapshot(snapshot => {
+          if (!snapshot.exists) return;
+
+          const remoteData = snapshot.data()?.data ?? null;
+          const localData = this.get(key, null);
+
+          if (JSON.stringify(remoteData) === JSON.stringify(localData)) {
+            return;
+          }
+
+          this.storage.setItem(key, JSON.stringify(remoteData));
+          console.log(`[Sync] ${key} updated from Firestore`);
+
+          if (key === 'oasis_notifications' && typeof notificationManager !== 'undefined') {
+            const newItems = (remoteData || []).filter(item => item?.id && !knownNotificationIds.has(item.id));
+            newItems.forEach(item => {
+              knownNotificationIds.add(item.id);
+              notificationManager.presentLiveNotification(item);
+            });
+          }
+
+          this.refreshLiveViews(key);
+        }, error => {
+          console.warn('Firestore listener error for', key, error);
+        });
+      });
+
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+      }
+    });
+  }
 }
 
 const db = new DB();
-const DATA_VERSION = 'v189'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v194'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -153,6 +302,30 @@ class Modal {
 
 const modal = new Modal();
 
+async function enqueuePushDispatch(item = {}) {
+  if (!firestore || !item?.recipient) return;
+
+  const currentUser = auth.getCurrentUser?.() || {};
+  const payload = {
+    notificationId: item.id || '',
+    type: item.type || 'update',
+    title: item.title || 'New OASIS update',
+    body: item.message || 'You have a new update.',
+    recipient: item.recipient || '',
+    canonicalRecipient: item.recipient === 'all' ? '' : canonicalUserName(item.recipient),
+    broadcast: item.recipient === 'all',
+    targetView: item.targetView || '',
+    targetId: item.targetId || '',
+    senderUsername: currentUser.username || '',
+    senderName: currentUser.name || '',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    status: 'queued'
+  };
+
+  await firestore.collection(PUSH_DISPATCH_COLLECTION).add(payload)
+    .catch(error => console.warn('Failed to queue push dispatch', error));
+}
+
 class NotificationManager {
   constructor() {
     this.storageKey = 'oasis_notifications';
@@ -168,7 +341,7 @@ class NotificationManager {
 
   getForUser(user = auth.getCurrentUser()) {
     const userName = user?.name || '';
-    return this.getAll().filter(item => item.recipient === userName || item.recipient === 'all');
+    return this.getAll().filter(item => userNamesMatch(item.recipient, userName) || item.recipient === 'all');
   }
 
   getUnreadForUser(user = auth.getCurrentUser()) {
@@ -196,7 +369,7 @@ class NotificationManager {
 
   async presentLiveNotification(item) {
     const currentUser = auth.getCurrentUser();
-    if (!currentUser || item.recipient !== currentUser.name) return;
+    if (!currentUser || !userNamesMatch(item.recipient, currentUser.name)) return;
 
     try {
       const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
@@ -248,6 +421,7 @@ class NotificationManager {
 
       list.unshift(item);
       await this.presentLiveNotification(item);
+      await enqueuePushDispatch(item);
     }
 
     this.saveAll(list);
@@ -258,7 +432,7 @@ class NotificationManager {
     let updatedNote = null;
 
     const updated = this.getAll().map(item => {
-      if (item.id === noteId && (!userName || item.recipient === userName || item.recipient === 'all')) {
+      if (item.id === noteId && (!userName || userNamesMatch(item.recipient, userName) || item.recipient === 'all')) {
         updatedNote = { ...item, read: true };
         return updatedNote;
       }
@@ -272,7 +446,7 @@ class NotificationManager {
   markAllRead(user = auth.getCurrentUser()) {
     const userName = user?.name || '';
     const updated = this.getAll().map(item => (
-      item.recipient === userName ? { ...item, read: true } : item
+      userNamesMatch(item.recipient, userName) ? { ...item, read: true } : item
     ));
     this.saveAll(updated);
   }
@@ -367,6 +541,106 @@ function normalizeTechnicianName(name = '') {
 
   const match = getTechnicianNames().find(item => item.toLowerCase() === value.toLowerCase());
   return match || value;
+}
+
+function canonicalUserName(name = '') {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^(service|tech)\s*-\s*/i, '');
+}
+
+function userNamesMatch(a = '', b = '') {
+  if (!a || !b) return false;
+  return canonicalUserName(a) === canonicalUserName(b);
+}
+
+let pushInitInFlight = null;
+
+function getFirebaseMessagingInstance() {
+  if (typeof firebase === 'undefined' || typeof firebase.messaging !== 'function') return null;
+  try {
+    return firebase.messaging();
+  } catch (error) {
+    console.warn('Firebase messaging unavailable', error);
+    return null;
+  }
+}
+
+async function initializePushNotificationsForUser() {
+  if (pushInitInFlight) return pushInitInFlight;
+
+  pushInitInFlight = (async () => {
+    const currentUser = auth.getCurrentUser();
+    if (!currentUser) return false;
+
+    await notificationManager.requestPermission().catch(() => {});
+
+    if (typeof window === 'undefined' || typeof Notification === 'undefined') return false;
+    if (Notification.permission !== 'granted') return false;
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return false;
+
+    const messaging = getFirebaseMessagingInstance();
+    if (!messaging) return false;
+
+    const serviceWorkerRegistration = await navigator.serviceWorker.ready;
+    if (typeof messaging.useServiceWorker === 'function') {
+      messaging.useServiceWorker(serviceWorkerRegistration);
+    }
+
+    const vapidKey = String(db.get('fcmVapidKey') || '').trim();
+    let token = '';
+
+    try {
+      token = vapidKey
+        ? await messaging.getToken({ vapidKey, serviceWorkerRegistration })
+        : await messaging.getToken({ serviceWorkerRegistration });
+    } catch (error) {
+      console.warn('FCM token fetch failed', error);
+      return false;
+    }
+
+    if (!token) return false;
+
+    if (firestore) {
+      await firestore.collection(PUSH_TOKEN_COLLECTION).doc(token).set({
+        token,
+        username: currentUser.username || '',
+        userName: currentUser.name || '',
+        canonicalUserName: canonicalUserName(currentUser.name || ''),
+        platform: 'web',
+        permission: Notification.permission,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true }).catch(error => {
+        console.warn('Failed to save push token', error);
+      });
+    }
+
+    if (!window.__oasisMessagingOnMessageBound) {
+      messaging.onMessage(payload => {
+        const data = payload?.data || {};
+        const notification = payload?.notification || {};
+        const title = notification.title || data.title || 'New OASIS update';
+        const message = notification.body || data.body || data.message || 'You have a new update.';
+
+        notificationManager.presentLiveNotification({
+          title,
+          message,
+          recipient: auth.getCurrentUser()?.name || ''
+        });
+      });
+
+      window.__oasisMessagingOnMessageBound = true;
+    }
+
+    return true;
+  })();
+
+  try {
+    return await pushInitInFlight;
+  } finally {
+    pushInitInFlight = null;
+  }
 }
 
 function markNotificationsRead() {
@@ -507,7 +781,7 @@ class Router {
 
     return currentUser.role === 'admin'
       ? items
-      : items.filter(item => (item?.[technicianField] || '') === currentUser.name);
+      : items.filter(item => userNamesMatch(item?.[technicianField] || '', currentUser.name));
   }
 
   getDateKey(value = '') {
@@ -551,8 +825,8 @@ class Router {
     const allClients = db.get('clients', []);
     const myRouteClients = isAdmin
       ? allClients.filter(c => c.serviceDays && c.serviceDays.includes(todayDay))
-      : allClients.filter(c => c.technician === userName && c.serviceDays && c.serviceDays.includes(todayDay));
-    const myTechClients = isAdmin ? allClients : allClients.filter(c => c.technician && c.technician.toLowerCase() === userName.toLowerCase());
+      : allClients.filter(c => userNamesMatch(c.technician || '', userName) && c.serviceDays && c.serviceDays.includes(todayDay));
+    const myTechClients = isAdmin ? allClients : allClients.filter(c => userNamesMatch(c.technician || '', userName));
     const myTotalClients = myTechClients.reduce((sum, c) => sum + (c.serviceDays ? c.serviceDays.length : 0), 0);
 
     // Open and pending work orders
@@ -967,12 +1241,17 @@ class Router {
       </div>
       ` : ''}
 
+      ${isAdmin ? renderAdminDailyRouteSummary() : ''}
+
+      <div class="section-header" style="margin-top:4px">
+        <div class="section-title">Chem Sheets</div>
+      </div>
       <div id="workorders-list">
         ${this.renderWorkOrdersList()}
       </div>
 
       <div class="section-header" style="margin-top:10px">
-        <div class="section-title">Work Orders</div>
+        <div class="section-title">Repair Work Orders</div>
       </div>
 
       <div class="card">
@@ -991,7 +1270,7 @@ class Router {
 
     let workorders = (currentUser && currentUser.role === 'admin')
       ? allWorkorders
-      : allWorkorders.filter(wo => wo.technician === currentUser.name);
+      : allWorkorders.filter(wo => userNamesMatch(wo.technician || '', currentUser.name));
 
     if (isAdmin) {
       workorders = this.applyStatusFilter(workorders);
@@ -1012,7 +1291,9 @@ class Router {
       `;
     }
 
-    const sortedWorkorders = [...workorders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+    const sortedWorkorders = isAdmin
+      ? sortOrdersByUpcomingDate(workorders)
+      : [...workorders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
     return sortedWorkorders.map(wo => this.renderJobCard(wo, canShare, isAdmin, currentUser)).join('');
   }
 
@@ -2475,6 +2756,7 @@ function populateLoginTechOptions() {
 document.addEventListener('DOMContentLoaded', () => {
   // Always force login screen on startup
   auth.logout();
+  db.startRealtimeSync();
 
   cleanupTestClients();
   // Data version check: if version changed, wipe & reseed all master-schedule clients
@@ -2530,6 +2812,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (auth.login(username, pin)) {
       console.log('Login successful');
+      initializePushNotificationsForUser().catch(() => {});
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
 
@@ -2695,7 +2978,7 @@ function collectWorkOrderForm(orderId) {
     ...order,
     clientId: selectedClientId || order.clientId,
     clientName: selectedClient?.name || order.clientName,
-    technician: getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || ''),
+    technician: canonicalUserName(getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || '')),
     date: getValue('wo-date', order.date),
     time: getValue('wo-time-in', order.timeIn || order.time || ''),
     timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
@@ -2818,6 +3101,108 @@ function saveRepairOrders(orders) {
   db.set('repairOrders', orders);
 }
 
+function getWorkOrderAssigneeOptions() {
+  const preferredUsernames = ['t9', 't10'];
+  const assignees = preferredUsernames
+    .map(username => auth.users?.[username]?.name)
+    .filter(Boolean);
+
+  return assignees.length ? assignees : getTechnicianNames();
+}
+
+function isOfficeWorkOrderAssignee(name = '') {
+  return userNamesMatch(name, 'Tech - Jet') || userNamesMatch(name, 'Tech - Mark');
+}
+
+function getRepairClientDisplay(client = {}) {
+  const name = String(client.name || '').trim();
+  const address = String(client.address || '').trim();
+  return address ? `${name} — ${address}` : name;
+}
+
+function findClientByRepairSearch(searchValue = '', clients = db.get('clients', [])) {
+  const term = String(searchValue || '').trim().toLowerCase();
+  if (!term) return null;
+
+  const exactDisplayMatch = clients.find(client => getRepairClientDisplay(client).toLowerCase() === term);
+  if (exactDisplayMatch) return exactDisplayMatch;
+
+  const exactNameMatch = clients.find(client => String(client.name || '').trim().toLowerCase() === term);
+  if (exactNameMatch) return exactNameMatch;
+
+  return null;
+}
+
+function sortOrdersByUpcomingDate(items = []) {
+  const todayKey = new Date().toISOString().split('T')[0];
+
+  return [...items].sort((a, b) => {
+    const aDate = String(a?.date || '');
+    const bDate = String(b?.date || '');
+    const aUpcoming = aDate >= todayKey;
+    const bUpcoming = bDate >= todayKey;
+
+    if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
+    if (aDate !== bDate) return aDate.localeCompare(bDate);
+
+    return String(a?.clientName || '').localeCompare(String(b?.clientName || ''));
+  });
+}
+
+function renderAdminDailyRouteSummary() {
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+  const clients = db.get('clients', []).filter(client =>
+    Array.isArray(client.serviceDays) && client.serviceDays.includes(today)
+  );
+
+  if (!clients.length) {
+    return `
+      <div class="card" style="margin: 0 16px 12px;">
+        <div class="card-body">
+          <div style="font-weight:600; font-size:14px; margin-bottom:4px;">Daily Chem Sheets by Route</div>
+          <div style="font-size:12px; color:#666;">No route clients are scheduled for ${escapeHtml(today)}.</div>
+        </div>
+      </div>
+    `;
+  }
+
+  const grouped = clients.reduce((acc, client) => {
+    const key = client.technician || 'Unassigned Route';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(client);
+    return acc;
+  }, {});
+
+  const techBlocks = Object.entries(grouped)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([techName, techClients]) => {
+      const preview = techClients.slice(0, 3).map(item => item.name).join(', ');
+      const extraCount = techClients.length > 3 ? ` +${techClients.length - 3} more` : '';
+      return `
+        <div class="detail-row" style="align-items:flex-start;">
+          <div>
+            <div class="detail-value" style="text-align:left; font-weight:700;">${escapeHtml(techName)}</div>
+            <div class="detail-label" style="margin-top:3px; max-width:230px;">${escapeHtml(preview)}${escapeHtml(extraCount)}</div>
+          </div>
+          <span class="badge badge-in-progress">${techClients.length} route ${techClients.length === 1 ? 'stop' : 'stops'}</span>
+        </div>
+      `;
+    }).join('');
+
+  return `
+    <div class="card" style="margin: 0 16px 12px;">
+      <div class="card-body">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;">
+          <div style="font-weight:600; font-size:14px;">Daily Chem Sheets by Route</div>
+          <button class="btn btn-secondary btn-sm" onclick="router.navigate('routes')">Open Routes</button>
+        </div>
+        <div style="font-size:12px; color:#666; margin-bottom:6px;">${escapeHtml(today)} route schedule grouped by technician.</div>
+        ${techBlocks}
+      </div>
+    </div>
+  `;
+}
+
 function renderRepairOrdersList(statusFilter = 'all') {
   const allOrders = getRepairOrders();
   const currentUser = auth.getCurrentUser();
@@ -2826,7 +3211,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
 
   let orders = (currentUser && currentUser.role === 'admin')
     ? allOrders
-    : allOrders.filter(o => o.assignedTo === currentUser.name);
+    : allOrders.filter(o => userNamesMatch(o.assignedTo || '', currentUser.name));
 
   if (isAdmin) {
     if (statusFilter === 'completed') {
@@ -2851,7 +3236,11 @@ function renderRepairOrdersList(statusFilter = 'all') {
     `;
   }
 
-  return [...orders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).map(order => `
+  const sortedOrders = isAdmin
+    ? sortOrdersByUpcomingDate(orders)
+    : [...orders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+  return sortedOrders.map(order => `
     <div class="job-card" style="margin-bottom:12px;">
       <div class="job-card-header">
         <div>
@@ -2880,6 +3269,15 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
   const content = document.getElementById('main-content');
   const existing = !draftOrder && orderId ? getRepairOrders().find(order => order.id === orderId) : null;
   const clients = db.get('clients', []);
+  const assigneeOptions = getWorkOrderAssigneeOptions();
+  const currentAssignee = normalizeTechnicianName((draftOrder || existing)?.assignedTo || auth.getCurrentUser()?.name || assigneeOptions[0] || '');
+  const selectedClientId = (draftOrder || existing)?.clientId || presetClientId || '';
+  const selectedClient = clients.find(client => client.id === selectedClientId) || null;
+  const selectedClientDisplay = selectedClient
+    ? getRepairClientDisplay(selectedClient)
+    : (((draftOrder || existing)?.clientName || '') && ((draftOrder || existing)?.address || '')
+      ? `${(draftOrder || existing).clientName} — ${(draftOrder || existing).address}`
+      : ((draftOrder || existing)?.clientName || ''));
   const order = draftOrder || existing || {
     id: orderId || `r${Date.now()}`,
     clientId: presetClientId,
@@ -5648,6 +6046,7 @@ function populateLoginTechOptions() {
 document.addEventListener('DOMContentLoaded', () => {
   // Always force login screen on startup
   auth.logout();
+  db.startRealtimeSync();
 
   cleanupTestClients();
   // Data version check: if version changed, wipe & reseed all master-schedule clients
@@ -5703,6 +6102,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (auth.login(username, pin)) {
       console.log('Login successful');
+      initializePushNotificationsForUser().catch(() => {});
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
 
@@ -5988,7 +6388,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
 
   let orders = (currentUser && currentUser.role === 'admin')
     ? allOrders
-    : allOrders.filter(o => o.assignedTo === currentUser.name);
+    : allOrders.filter(o => userNamesMatch(o.assignedTo || '', currentUser.name));
 
   if (isAdmin) {
     if (statusFilter === 'completed') {
@@ -6051,7 +6451,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
     time: '',
     timeIn: '',
     timeOut: '',
-    assignedTo: auth.getCurrentUser()?.name || '',
+    assignedTo: currentAssignee,
     status: 'open',
     jobType: '',
     summary: '',
@@ -6083,11 +6483,15 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
         </div>
         <div class="wo-sec-bd" data-active-repair-id="${activeOrderId}">
           <div class="form-row">
-            <label for="repair-client">Client</label>
-            <select id="repair-client" onchange="onRepairClientChange()">
-              <option value="">— Select client —</option>
-              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
-            </select>
+            <label for="repair-client-search">Client (Search)</label>
+            <input id="repair-client-search" type="text" list="repair-client-options" value="${escapeHtml(selectedClientDisplay)}" oninput="onRepairClientChange()" placeholder="Type client name or address">
+            <datalist id="repair-client-options">
+              ${clients.map(client => `<option value="${escapeHtml(getRepairClientDisplay(client))}"></option>`).join('')}
+            </datalist>
+            <input id="repair-client" type="hidden" value="${escapeHtml(selectedClientId)}">
+            <div style="margin-top:8px;">
+              <button class="btn btn-secondary btn-sm" type="button" onclick="quickAddClientFromWorkOrder()">+ New Client</button>
+            </div>
           </div>
 
           <div class="form-row">
@@ -6103,9 +6507,8 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <div class="wo-fld">
               <div class="wo-fld-lbl">Assigned Tech</div>
               <select id="repair-tech" class="wo-fld-inp">
-                ${Object.entries(auth.users)
-                  .sort((a, b) => a[1].name.localeCompare(b[1].name))
-                  .map(([id, user]) => `<option value="${user.name}" ${user.name === (order.assignedTo || '') ? 'selected' : ''}>${user.name}</option>`).join('')}
+                ${assigneeOptions
+                  .map(name => `<option value="${name}" ${userNamesMatch(name, currentAssignee) ? 'selected' : ''}>${name}</option>`).join('')}
               </select>
             </div>
             <div class="wo-fld">
@@ -6185,16 +6588,24 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 }
 
 function onRepairClientChange() {
-  const select = document.getElementById('repair-client');
+  const searchInput = document.getElementById('repair-client-search');
+  const hiddenClientId = document.getElementById('repair-client');
   const address = document.getElementById('repair-address');
   const title = document.getElementById('repair-bar-title');
-  if (!select || !address) return;
+  if (!searchInput || !address) return;
 
-  const client = db.get('clients', []).find(item => item.id === select.value);
+  const clients = db.get('clients', []);
+  const client = findClientByRepairSearch(searchInput.value, clients);
   if (client) {
+    if (hiddenClientId) hiddenClientId.value = client.id;
+    searchInput.value = getRepairClientDisplay(client);
     address.value = client.address || '';
     if (title) title.textContent = client.name || 'Work Order';
+    return;
   }
+
+  if (hiddenClientId) hiddenClientId.value = '';
+  if (title) title.textContent = (searchInput.value || 'Work Order').split(' — ')[0];
 }
 
 function collectRepairOrderFromForm(orderId = '') {
@@ -6213,6 +6624,7 @@ function collectRepairOrderFromForm(orderId = '') {
   const finalId = orderId || existing?.id || `r${Date.now()}`;
 
   const clientId = document.getElementById('repair-client')?.value || '';
+  const typedClient = (document.getElementById('repair-client-search')?.value || '').trim();
   const client = db.get('clients', []).find(item => item.id === clientId);
   const partItems = Array.from(document.querySelectorAll('.repair-part-row')).map(row => {
     const category = row.querySelector('.repair-part-category')?.value || '';
@@ -6240,13 +6652,13 @@ function collectRepairOrderFromForm(orderId = '') {
   return {
     id: finalId,
     clientId,
-    clientName: client?.name || existing?.clientName || 'Unassigned Client',
+    clientName: client?.name || typedClient.split(' — ')[0] || existing?.clientName || 'Unassigned Client',
     address: document.getElementById('repair-address')?.value || '',
     date: document.getElementById('repair-date')?.value || '',
     time: timeIn,
     timeIn,
     timeOut,
-    assignedTo: document.getElementById('repair-tech')?.value || '',
+    assignedTo: normalizeTechnicianName(document.getElementById('repair-tech')?.value || ''),
     status: document.getElementById('repair-status')?.value || 'open',
     jobType: document.getElementById('repair-type')?.value || '',
     summary: document.getElementById('repair-summary')?.value || '',
@@ -7329,6 +7741,7 @@ function populateLoginTechOptions() {
 document.addEventListener('DOMContentLoaded', () => {
   // Always force login screen on startup
   auth.logout();
+  db.startRealtimeSync();
 
   cleanupTestClients();
   // Data version check: if version changed, wipe & reseed all master-schedule clients
@@ -7442,6 +7855,39 @@ function quickAddClient() {
   db.set('clients', clients);
   showToast('Client added');
   router.renderClients();
+}
+
+function quickAddClientFromWorkOrder() {
+  if (!auth.isAdmin()) {
+    showToast('Only admins can add clients from work orders');
+    return;
+  }
+
+  const name = prompt('New client name');
+  if (!name) return;
+
+  const address = prompt('Client address') || '';
+  const contact = prompt('Client contact') || '';
+  const technicianInput = prompt(
+    `Assign route technician (optional):\n\n${getTechnicianNames().join(', ')}`,
+    getTechnicianNames()[0] || ''
+  ) || '';
+  const technician = normalizeTechnicianName(technicianInput);
+
+  const clients = db.get('clients', []);
+  const clientId = `c${Date.now()}`;
+  const newClient = { id: clientId, name, address, contact, technician };
+  clients.unshift(newClient);
+  db.set('clients', clients);
+
+  const clientSearch = document.getElementById('repair-client-search');
+  const hiddenClientId = document.getElementById('repair-client');
+  const addressField = document.getElementById('repair-address');
+  if (clientSearch) clientSearch.value = getRepairClientDisplay(newClient);
+  if (hiddenClientId) hiddenClientId.value = newClient.id;
+  if (addressField) addressField.value = newClient.address || '';
+  onRepairClientChange();
+  showToast('New client created and selected');
 }
 
 function deleteClient(clientId) {
@@ -7826,20 +8272,20 @@ function saveWorkOrderForm(orderId) {
 
   workOrderManager.saveOrder(order);
 
-  if (currentUser?.username === 'admin' && order.technician && order.technician !== currentUser.name) {
+  if (auth.isAdmin() && order.technician && !userNamesMatch(order.technician, currentUser?.name || '')) {
     const assignmentChanged = !previousOrder || previousOrder.technician !== order.technician || previousStatus !== (order.status || '').toLowerCase();
     if (assignmentChanged) {
       notificationManager.create({
         type: 'chem',
         title: 'New chem sheet from Admin',
         message: `${order.clientName || 'A chem sheet'} has been sent directly to you.`,
-        recipients: [order.technician, ...getAdminRecipients(order.technician)],
+        recipients: [order.technician],
         targetView: 'chem',
         targetId: order.id,
         actionLabel: 'Open Chem Sheet'
       });
     }
-  } else if (currentUser && currentUser.username !== 'admin') {
+  } else if (currentUser && !auth.isAdmin()) {
     const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
     if (shouldNotifyAdmin) {
       notificationManager.create({
@@ -7861,21 +8307,27 @@ function saveWorkOrderForm(orderId) {
 }
 
 function onRepairClientChange() {
-  const select = document.getElementById('repair-client');
+  const searchInput = document.getElementById('repair-client-search');
+  const hiddenClientId = document.getElementById('repair-client');
   const address = document.getElementById('repair-address');
   const title = document.getElementById('repair-bar-title');
-  const techField = document.getElementById('repair-tech');
-  if (!select || !address) return;
+  if (!searchInput || !address) return;
 
-  const client = db.get('clients', []).find(item => item.id === select.value);
+  const clients = db.get('clients', []);
+  const client = findClientByRepairSearch(searchInput.value, clients);
   if (client) {
+    if (hiddenClientId) hiddenClientId.value = client.id;
+    searchInput.value = getRepairClientDisplay(client);
     address.value = client.address || '';
     if (title) title.textContent = client.name || 'Work Order';
-    if (techField && client.technician) techField.value = client.technician;
+    return;
   }
+
+  if (hiddenClientId) hiddenClientId.value = '';
+  if (title) title.textContent = (searchInput.value || 'Work Order').split(' — ')[0];
 }
 
-function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
+async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) return;
 
@@ -7897,23 +8349,28 @@ function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   saveRepairOrders(orders);
 
-  if (currentUser?.username === 'admin' && order.assignedTo && order.assignedTo !== currentUser.name) {
-    const assignmentChanged = !previousOrder || previousOrder.assignedTo !== order.assignedTo || previousStatus !== (order.status || '').toLowerCase();
-    if (assignmentChanged) {
-      notificationManager.create({
+  if (auth.isAdmin() && order.assignedTo && !userNamesMatch(order.assignedTo, currentUser?.name || '')) {
+    const assignmentChanged = !previousOrder || !userNamesMatch(previousOrder.assignedTo || '', order.assignedTo || '');
+    const statusChanged = previousStatus !== (order.status || '').toLowerCase();
+    const dateChanged = (previousOrder?.date || '') !== (order.date || '');
+    const shouldNotifyAssignedTech = isOfficeWorkOrderAssignee(order.assignedTo) && (assignmentChanged || statusChanged || dateChanged || !previousOrder);
+
+    if (shouldNotifyAssignedTech) {
+      const scheduledDate = order.date || 'the scheduled date';
+      await notificationManager.create({
         type: 'repair',
-        title: 'New work order from Admin',
-        message: `${order.clientName || 'A work order'} has been sent directly to you.`,
-        recipients: [order.assignedTo, ...getAdminRecipients(order.assignedTo)],
+        title: 'Work order assigned',
+        message: `${order.clientName || 'A work order'} is assigned to you for ${scheduledDate}.`,
+        recipients: [order.assignedTo],
         targetView: 'repair',
         targetId: order.id,
         actionLabel: 'Open Work Order'
       });
     }
-  } else if (currentUser && currentUser.username !== 'admin') {
+  } else if (currentUser && !auth.isAdmin()) {
     const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
     if (shouldNotifyAdmin) {
-      notificationManager.create({
+      await notificationManager.create({
         type: 'repair',
         title: order.status === 'completed' ? 'Completed work order received' : 'Work order received from technician',
         message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a work order'}.`,
