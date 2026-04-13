@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v202'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v203'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -341,7 +341,12 @@ class NotificationManager {
 
   getForUser(user = auth.getCurrentUser()) {
     const userName = user?.name || '';
-    return this.getAll().filter(item => userNamesMatch(item.recipient, userName) || item.recipient === 'all');
+    const currentDeviceId = getCurrentDeviceId();
+    return this.getAll().filter(item => {
+      const recipientMatches = userNamesMatch(item.recipient, userName) || item.recipient === 'all';
+      const deviceMatches = !item.targetDeviceId || item.targetDeviceId === currentDeviceId;
+      return recipientMatches && deviceMatches;
+    });
   }
 
   getUnreadForUser(user = auth.getCurrentUser()) {
@@ -369,7 +374,9 @@ class NotificationManager {
 
   async presentLiveNotification(item) {
     const currentUser = auth.getCurrentUser();
+    const currentDeviceId = getCurrentDeviceId();
     if (!currentUser || !userNamesMatch(item.recipient, currentUser.name)) return;
+    if (item.targetDeviceId && item.targetDeviceId !== currentDeviceId) return;
 
     try {
       const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
@@ -400,7 +407,7 @@ class NotificationManager {
     showToast(item.title);
   }
 
-  async create({ type = 'update', title = 'New update', message = '', recipients = [], targetView = '', targetId = '', actionLabel = 'Open' }) {
+  async create({ type = 'update', title = 'New update', message = '', recipients = [], targetView = '', targetId = '', actionLabel = 'Open', targetDeviceId = '' }) {
     const list = this.getAll();
     const createdAt = new Date().toISOString();
     const targetRecipients = [...new Set((Array.isArray(recipients) ? recipients : [recipients]).filter(Boolean))];
@@ -415,6 +422,7 @@ class NotificationManager {
         createdAt,
         targetView,
         targetId,
+        targetDeviceId,
         actionLabel,
         read: false
       };
@@ -541,6 +549,19 @@ function normalizeTechnicianName(name = '') {
 
   const match = getTechnicianNames().find(item => item.toLowerCase() === value.toLowerCase());
   return match || value;
+}
+
+function getCurrentDeviceId() {
+  try {
+    const existing = localStorage.getItem('oasis_device_id');
+    if (existing) return existing;
+
+    const created = `device_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem('oasis_device_id', created);
+    return created;
+  } catch (error) {
+    return 'device_unknown';
+  }
 }
 
 function canonicalUserName(name = '') {
@@ -8261,6 +8282,7 @@ async function sendTestNotification() {
     recipients: [user.name],
     targetView: 'dashboard',
     targetId: '',
+    targetDeviceId: getCurrentDeviceId(),
     actionLabel: 'Open'
   });
 
@@ -8499,6 +8521,9 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
     if (shouldNotifyAssignedTech) {
       const scheduledDate = order.date || 'the scheduled date';
+      const targetDeviceId = currentUser && userNamesMatch(order.assignedTo, currentUser.name)
+        ? getCurrentDeviceId()
+        : '';
       await notificationManager.create({
         type: 'repair',
         title: 'Work order assigned',
@@ -8506,6 +8531,7 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
         recipients: [order.assignedTo],
         targetView: 'repair',
         targetId: order.id,
+        targetDeviceId,
         actionLabel: 'Open Work Order'
       });
     }
