@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v200'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v201'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1497,7 +1497,13 @@ class Router {
         </div>
       </div>
 
-
+      <div class="card" style="margin-top: 10px;">
+        <div class="card-body">
+          <div style="font-weight:600; font-size:15px; margin-bottom:8px;">🔔 Notification Test</div>
+          <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Send a visible test notification to this device for the current signed-in user.</p>
+          <button class="btn btn-primary" onclick="sendTestNotification()" style="width: 100%;">Send Test Notification</button>
+        </div>
+      </div>
 
       ${isMainAdmin ? `
       <div class="section-header" style="margin-top: 20px;">
@@ -8237,6 +8243,26 @@ function useLatestAppLink() {
   if (!input) return;
   input.value = getDefaultAppLink();
   saveApkLink();
+}
+
+async function sendTestNotification() {
+  const user = auth.getCurrentUser();
+  if (!user?.name) {
+    showToast('Sign in required');
+    return;
+  }
+
+  await notificationManager.create({
+    type: 'update',
+    title: 'OASIS Test Sheet',
+    message: 'This is a visible in-app test notification.',
+    recipients: [user.name],
+    targetView: 'dashboard',
+    targetId: '',
+    actionLabel: 'Open'
+  });
+
+  showToast('Test notification created');
 }
 
 async function shareAppLink() {
