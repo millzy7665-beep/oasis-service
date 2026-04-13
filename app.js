@@ -207,7 +207,7 @@ class Auth {
       't9': { role: 'technician', name: 'Tech - Jet' },
       't10': { role: 'technician', name: 'Tech - Mark' },
       'admin': { role: 'admin', name: 'Chris Mills' },
-      'admin2': { role: 'admin', name: 'James Bussey' }
+      'admin2': { role: 'admin', name: 'James Bussey', disableNotifications: true }
     };
   }
 
@@ -515,7 +515,7 @@ const notificationManager = new NotificationManager();
 
 function getAdminNames() {
   return Object.values(auth.users)
-    .filter(user => user.role === 'admin')
+    .filter(user => user.role === 'admin' && !user.disableNotifications)
     .map(user => user.name)
     .sort((a, b) => a.localeCompare(b));
 }
