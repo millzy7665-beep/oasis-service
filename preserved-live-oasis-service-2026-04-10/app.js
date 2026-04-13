@@ -189,7 +189,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v197'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v198'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -569,6 +569,55 @@ function getFirebaseMessagingInstance() {
   }
 }
 
+function shouldResetPushSubscription() {
+  try {
+    return new URLSearchParams(window.location.search).get('resetPush') === '1';
+  } catch (error) {
+    return false;
+  }
+}
+
+async function resetPushSubscriptionState(messaging, serviceWorkerRegistration) {
+  try {
+    const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+    if (subscription) {
+      await subscription.unsubscribe();
+    }
+  } catch (error) {
+    console.warn('Push subscription cleanup skipped', error);
+  }
+
+  try {
+    if (typeof messaging.deleteToken === 'function') {
+      await messaging.deleteToken();
+    }
+  } catch (error) {
+    console.warn('FCM token cleanup skipped', error);
+  }
+}
+
+async function getMessagingTokenWithRecovery(messaging, serviceWorkerRegistration, vapidKey) {
+  const tokenOptions = vapidKey
+    ? { vapidKey, serviceWorkerRegistration }
+    : { serviceWorkerRegistration };
+
+  if (shouldResetPushSubscription()) {
+    await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
+  }
+
+  try {
+    return await messaging.getToken(tokenOptions);
+  } catch (error) {
+    const message = String(error?.message || error || '').toLowerCase();
+    const shouldRetry = message.includes('410') || message.includes('gone');
+    if (!shouldRetry) throw error;
+
+    console.warn('Retrying push token fetch after stale subscription reset', error);
+    await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
+    return await messaging.getToken(tokenOptions);
+  }
+}
+
 async function initializePushNotificationsForUser() {
   if (pushInitInFlight) return pushInitInFlight;
 
@@ -594,9 +643,7 @@ async function initializePushNotificationsForUser() {
     let token = '';
 
     try {
-      token = vapidKey
-        ? await messaging.getToken({ vapidKey, serviceWorkerRegistration })
-        : await messaging.getToken({ serviceWorkerRegistration });
+      token = await getMessagingTokenWithRecovery(messaging, serviceWorkerRegistration, vapidKey);
     } catch (error) {
       console.warn('FCM token fetch failed', error);
       return false;
