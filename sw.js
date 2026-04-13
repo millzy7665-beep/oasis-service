@@ -1,4 +1,4 @@
-// Oasis Service App — Cache-First SW v195
+// Oasis Service App — Cache-First SW v196
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js');
 
@@ -13,11 +13,11 @@ firebase.initializeApp({
 });
 
 const messaging = firebase.messaging();
-const CACHE = 'oasis-v195';
+const CACHE = 'oasis-v196';
 const PRECACHE = [
   '/index.html',
-  '/app.js?v=194',
-  '/styles.css?v=194',
+  '/app.js?v=196',
+  '/styles.css?v=196',
   '/manifest.json',
   '/oasis-logo.png',
 ];

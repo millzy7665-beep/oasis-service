@@ -1,4 +1,4 @@
-// Oasis Service App — Cache-First SW v195
+// Oasis Service App — Cache-First SW v196
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js');
 
@@ -13,11 +13,11 @@ firebase.initializeApp({
 });
 
 const messaging = firebase.messaging();
-const CACHE = 'oasis-v195';
+const CACHE = 'oasis-v196';
 const PRECACHE = [
   '/index.html',
-  '/app.js?v=194',
-  '/styles.css?v=194',
+  '/app.js?v=196',
+  '/styles.css?v=196',
   '/manifest.json',
   '/oasis-logo.png',
 ];
@@ -51,13 +51,16 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
+  // Don't intercept CDN or external requests
   if (url.origin !== self.location.origin) return;
 
+  // Versioned assets (app.js?v=, styles.css?v=) — pure cache-first
   if (url.search.startsWith('?v=')) {
     e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
     return;
   }
 
+  // index.html & other unversioned files — stale-while-revalidate
   e.respondWith(
     caches.open(CACHE).then(cache =>
       cache.match(e.request).then(cached => {

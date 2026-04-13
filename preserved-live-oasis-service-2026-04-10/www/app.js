@@ -15,6 +15,8 @@ const firebaseConfig = {
   measurementId: "G-THQ9YGZ0B5"
 };
 
+const DEFAULT_FCM_VAPID_KEY = 'ABLdoFsNyMaq5RSKg0M0lPdlvFOy43A3wonCNbBWkr8';
+
 const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
@@ -588,7 +590,7 @@ async function initializePushNotificationsForUser() {
       messaging.useServiceWorker(serviceWorkerRegistration);
     }
 
-    const vapidKey = String(db.get('fcmVapidKey') || '').trim();
+    const vapidKey = String(db.get('fcmVapidKey') || DEFAULT_FCM_VAPID_KEY || '').trim();
     let token = '';
 
     try {
