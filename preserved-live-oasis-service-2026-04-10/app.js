@@ -606,7 +606,7 @@ async function initializePushNotificationsForUser() {
 
     // Register token server-side via Cloud Function (bypasses Firestore security rules)
     try {
-      await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/registerPushToken', {
+      await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/debugPushStatus?secret=oasis-test-2026', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

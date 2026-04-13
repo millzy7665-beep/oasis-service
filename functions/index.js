@@ -32,6 +32,39 @@ exports.sendTestPush = functions.https.onRequest(async (req, res) => {
 });
 
 exports.debugPushStatus = functions.https.onRequest(async (req, res) => {
+  if (req.method === 'POST') {
+    const secret = req.query.secret || req.body?.secret || '';
+    if (secret !== 'oasis-test-2026') {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+
+    const body = req.body || {};
+    const token = String(body.token || '').trim();
+    const userName = String(body.userName || '').trim();
+    const username = String(body.username || '').trim();
+    const platform = String(body.platform || 'web').trim();
+    const permission = String(body.permission || 'granted').trim();
+
+    if (!token || !userName) {
+      res.status(400).json({ error: 'token and userName required' });
+      return;
+    }
+
+    await admin.firestore().collection('push_tokens').doc(token).set({
+      token,
+      username,
+      userName,
+      canonicalUserName: canonicalUserName(userName),
+      platform,
+      permission,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    res.json({ ok: true, canonicalUserName: canonicalUserName(userName) });
+    return;
+  }
+
   const secret = req.query.secret || '';
   if (secret !== 'oasis-test-2026') {
     res.status(403).send('Forbidden');
