@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v199'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v200'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1475,6 +1475,8 @@ class Router {
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
     const isMainAdmin = user && user.role === 'admin';
+    const appLink = getSavedAppLink();
+    const encodedAppLink = encodeURIComponent(appLink);
 
     content.innerHTML = `
       <div class="section-header">
@@ -1504,23 +1506,27 @@ class Router {
       <div class="card">
         <div class="card-body">
           <p style="font-size: 13px; color: var(--gray-600); margin-bottom: 12px;">
-            To share the app with your team, copy the link below or scan the QR code.
+            To share the app with your team, copy the live link below or scan the QR code.
           </p>
-          <div class="form-group" style="padding:0; margin-bottom:12px; display:none;">
-            <label class="form-label">App Link</label>
-            <input type="text" id="apk-link-input" class="form-control" placeholder="Paste your app link here..." value="https://millzy7665-beep.github.io/oasis-service/">
+          <div class="form-group" style="padding:0; margin-bottom:12px;">
+            <label class="form-label">Live App Link</label>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <input type="text" id="apk-link-input" class="form-control" placeholder="Paste your app link here..." value="${appLink}" style="flex:1; min-width:220px;">
+              <button class="btn btn-secondary btn-sm" onclick="saveApkLink()">Save</button>
+              <button class="btn btn-secondary btn-sm" onclick="useLatestAppLink()">Use Latest</button>
+            </div>
           </div>
 
           <div id="qr-container" style="text-align: center; margin-top: 15px;">
             <div style="background: white; padding: 10px; display: inline-block; border-radius: 8px;">
-              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https%3A%2F%2Fmillzy7665-beep.github.io%2Foasis-service%2F" alt="Scan to Download">
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodedAppLink}" alt="Scan to Open">
             </div>
-            <p style="font-size: 11px; margin-top: 8px; color: var(--champagne-dk);">Scan with technician phone to download App</p>
+            <p style="font-size: 11px; margin-top: 8px; color: var(--champagne-dk);">Scan with technician phone to open the latest live app</p>
             <div style="margin-top: 12px; display: flex; justify-content: center; gap: 8px;">
-              <input type="text" id="apk-link-display" class="form-control form-control-sm" value="https://millzy7665-beep.github.io/oasis-service/" readonly>
+              <input type="text" id="apk-link-display" class="form-control form-control-sm" value="${appLink}" readonly>
               <button class="btn btn-secondary btn-sm" onclick="copyApkLink()">Copy</button>
             </div>
-            <div style="margin-top: 10px;">
+            <div style="margin-top: 10px; display:flex; justify-content:center; gap:8px; flex-wrap:wrap;">
               <button class="btn btn-secondary btn-sm" onclick="shareAppLink()">Share Link</button>
             </div>
           </div>
@@ -8191,10 +8197,19 @@ function sendReport(orderId) {
   shareReport(orderId);
 }
 
+function getDefaultAppLink() {
+  const versionNumber = String(DATA_VERSION || 'v200').replace(/^v/i, '');
+  return `https://millzy7665-beep.github.io/oasis-service/?v=${versionNumber}`;
+}
+
 function getSavedAppLink() {
   const savedLink = String(db.get('apk_download_link') || '').trim();
-  if (!savedLink || /oasis-app\.apk$/i.test(savedLink)) {
-    return 'https://millzy7665-beep.github.io/oasis-service/';
+  if (
+    !savedLink ||
+    /oasis-app\.apk$/i.test(savedLink) ||
+    /^https:\/\/millzy7665-beep\.github\.io\/oasis-service\/?$/i.test(savedLink)
+  ) {
+    return getDefaultAppLink();
   }
   return savedLink;
 }
@@ -8205,7 +8220,7 @@ function saveApkLink() {
 
   const rawLink = input.value.trim();
   const link = (!rawLink || /oasis-app\.apk$/i.test(rawLink))
-    ? 'https://millzy7665-beep.github.io/oasis-service/'
+    ? getDefaultAppLink()
     : rawLink;
   db.set('apk_download_link', link);
 
@@ -8215,6 +8230,13 @@ function saveApkLink() {
   }
 
   showToast(link ? 'App link saved' : 'App link cleared');
+}
+
+function useLatestAppLink() {
+  const input = document.getElementById('apk-link-input');
+  if (!input) return;
+  input.value = getDefaultAppLink();
+  saveApkLink();
 }
 
 async function shareAppLink() {
