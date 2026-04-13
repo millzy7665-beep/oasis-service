@@ -6442,6 +6442,15 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
   const content = document.getElementById('main-content');
   const existing = !draftOrder && orderId ? getRepairOrders().find(order => order.id === orderId) : null;
   const clients = db.get('clients', []);
+  const assigneeOptions = getWorkOrderAssigneeOptions();
+  const currentAssignee = normalizeTechnicianName((draftOrder || existing)?.assignedTo || auth.getCurrentUser()?.name || assigneeOptions[0] || '');
+  const selectedClientId = (draftOrder || existing)?.clientId || presetClientId || '';
+  const selectedClient = clients.find(client => client.id === selectedClientId) || null;
+  const selectedClientDisplay = selectedClient
+    ? getRepairClientDisplay(selectedClient)
+    : (((draftOrder || existing)?.clientName || '') && ((draftOrder || existing)?.address || '')
+      ? `${(draftOrder || existing).clientName} — ${(draftOrder || existing).address}`
+      : ((draftOrder || existing)?.clientName || ''));
   const order = draftOrder || existing || {
     id: orderId || `r${Date.now()}`,
     clientId: presetClientId,
