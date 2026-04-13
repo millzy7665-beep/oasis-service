@@ -1,12 +1,54 @@
-// Oasis Service App — Cache-First SW v189
-const CACHE = 'oasis-v189';
+// Oasis Service App — Cache-First SW v195
+importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js');
+
+firebase.initializeApp({
+  apiKey: 'AIzaSyAo3vP7Myf08Q8KqoFlcgGNOZp2mX2R-38',
+  authDomain: 'oasis-service-app-69def.firebaseapp.com',
+  projectId: 'oasis-service-app-69def',
+  storageBucket: 'oasis-service-app-69def.firebasestorage.app',
+  messagingSenderId: '156557428291',
+  appId: '1:156557428291:web:243524f03403d05c65f6f6',
+  measurementId: 'G-THQ9YGZ0B5'
+});
+
+const messaging = firebase.messaging();
+const CACHE = 'oasis-v195';
 const PRECACHE = [
   '/index.html',
-  '/app.js?v=185',
-  '/styles.css?v=185',
+  '/app.js?v=194',
+  '/styles.css?v=194',
   '/manifest.json',
   '/oasis-logo.png',
 ];
+
+messaging.onBackgroundMessage(payload => {
+  const data = payload?.data || {};
+  const title = payload?.notification?.title || data.title || 'New OASIS update';
+  const body = payload?.notification?.body || data.body || data.message || 'You have a new update.';
+
+  self.registration.showNotification(title, {
+    body,
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    data
+  });
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+      for (const client of clients) {
+        if ('focus' in client) return client.focus();
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow('/index.html');
+      }
+      return Promise.resolve();
+    })
+  );
+});
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)));
