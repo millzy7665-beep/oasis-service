@@ -23,7 +23,7 @@ const firebaseApp = typeof firebase !== 'undefined'
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
 
 // Collections that sync across all devices via Firestore.
-const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'estimates'];
+const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
 const PUSH_TOKEN_COLLECTION = 'push_tokens';
 const PUSH_DISPATCH_COLLECTION = 'push_dispatch_queue';
 
@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v204'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v205'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -218,7 +218,9 @@ class Auth {
       if ((username === 't9' || username === 't10') && pin === '1234') {
         this.currentUser = { ...user, username };
         db.set('currentUser', this.currentUser);
-        markCurrentDeviceAsPreferred(this.currentUser);
+        if (shouldAutoClaimAlertDevice()) {
+          markCurrentDeviceAsPreferred(this.currentUser);
+        }
         return true;
       }
 
@@ -227,7 +229,9 @@ class Auth {
       if (pin === requiredPin) {
         this.currentUser = { ...user, username };
         db.set('currentUser', this.currentUser);
-        markCurrentDeviceAsPreferred(this.currentUser);
+        if (shouldAutoClaimAlertDevice()) {
+          markCurrentDeviceAsPreferred(this.currentUser);
+        }
         return true;
       }
     }
@@ -589,6 +593,11 @@ function markCurrentDeviceAsPreferred(user = auth?.getCurrentUser?.()) {
   };
   db.set('notification_device_registry', registry);
   return deviceId;
+}
+
+function shouldAutoClaimAlertDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return isIosLikeDevice() || /android/i.test(navigator.userAgent || '') || isStandaloneDisplayMode();
 }
 
 function canonicalUserName(name = '') {
