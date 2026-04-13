@@ -7809,6 +7809,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const loginScreen = document.getElementById('login-screen');
       const appShell = document.getElementById('app');
 
+      initializePushNotificationsForUser().catch(error => {
+        console.warn('Push initialization failed', error);
+      });
+
       if (loginError) loginError.style.display = 'none';
       curtainTransition(() => {
         if (loginScreen) loginScreen.style.setProperty('display', 'none', 'important');
