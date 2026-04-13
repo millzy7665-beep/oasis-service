@@ -181,15 +181,13 @@ class DB {
         });
       });
 
-      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-        Notification.requestPermission().catch(() => {});
-      }
+      // Permission requests are deferred to the explicit post-login flow on supported devices.
     });
   }
 }
 
 const db = new DB();
-const DATA_VERSION = 'v198'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v199'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -569,6 +567,30 @@ function getFirebaseMessagingInstance() {
   }
 }
 
+function isIosLikeDevice() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  return /iphone|ipad|ipod/i.test(ua) || (platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isStandaloneDisplayMode() {
+  try {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function browserSupportsPushNotifications() {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  if (!window.isSecureContext) return false;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
+  if (typeof Notification === 'undefined') return false;
+  if (isIosLikeDevice() && !isStandaloneDisplayMode()) return false;
+  return true;
+}
+
 function shouldResetPushSubscription() {
   try {
     return new URLSearchParams(window.location.search).get('resetPush') === '1';
@@ -624,6 +646,7 @@ async function initializePushNotificationsForUser() {
   pushInitInFlight = (async () => {
     const currentUser = auth.getCurrentUser();
     if (!currentUser) return false;
+    if (!browserSupportsPushNotifications()) return false;
 
     await notificationManager.requestPermission().catch(() => {});
 
