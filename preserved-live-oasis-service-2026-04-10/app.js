@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v203'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v204'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -218,6 +218,7 @@ class Auth {
       if ((username === 't9' || username === 't10') && pin === '1234') {
         this.currentUser = { ...user, username };
         db.set('currentUser', this.currentUser);
+        markCurrentDeviceAsPreferred(this.currentUser);
         return true;
       }
 
@@ -226,6 +227,7 @@ class Auth {
       if (pin === requiredPin) {
         this.currentUser = { ...user, username };
         db.set('currentUser', this.currentUser);
+        markCurrentDeviceAsPreferred(this.currentUser);
         return true;
       }
     }
@@ -562,6 +564,31 @@ function getCurrentDeviceId() {
   } catch (error) {
     return 'device_unknown';
   }
+}
+
+function getNotificationDeviceRegistry() {
+  return db.get('notification_device_registry', {});
+}
+
+function getPreferredNotificationDeviceId(userName = '') {
+  const key = canonicalUserName(userName);
+  const registry = getNotificationDeviceRegistry();
+  return String(registry?.[key]?.deviceId || '').trim();
+}
+
+function markCurrentDeviceAsPreferred(user = auth?.getCurrentUser?.()) {
+  if (!user?.name) return '';
+
+  const deviceId = getCurrentDeviceId();
+  const key = canonicalUserName(user.name);
+  const registry = getNotificationDeviceRegistry();
+  registry[key] = {
+    userName: user.name,
+    deviceId,
+    updatedAt: new Date().toISOString()
+  };
+  db.set('notification_device_registry', registry);
+  return deviceId;
 }
 
 function canonicalUserName(name = '') {
@@ -1523,6 +1550,7 @@ class Router {
           <div style="font-weight:600; font-size:15px; margin-bottom:8px;">🔔 Notification Test</div>
           <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Send a visible test notification to this device for the current signed-in user.</p>
           <button class="btn btn-primary" onclick="sendTestNotification()" style="width: 100%;">Send Test Notification</button>
+          <button class="btn btn-secondary" onclick="useThisDeviceForAlerts()" style="width: 100%; margin-top: 8px;">Use This Device For Alerts</button>
         </div>
       </div>
 
@@ -8268,12 +8296,24 @@ function useLatestAppLink() {
   saveApkLink();
 }
 
+function useThisDeviceForAlerts() {
+  const user = auth.getCurrentUser();
+  if (!user?.name) {
+    showToast('Sign in required');
+    return;
+  }
+  markCurrentDeviceAsPreferred(user);
+  showToast('This device is now selected for your alerts');
+}
+
 async function sendTestNotification() {
   const user = auth.getCurrentUser();
   if (!user?.name) {
     showToast('Sign in required');
     return;
   }
+
+  const targetDeviceId = getPreferredNotificationDeviceId(user.name) || markCurrentDeviceAsPreferred(user);
 
   await notificationManager.create({
     type: 'update',
@@ -8282,7 +8322,7 @@ async function sendTestNotification() {
     recipients: [user.name],
     targetView: 'dashboard',
     targetId: '',
-    targetDeviceId: getCurrentDeviceId(),
+    targetDeviceId,
     actionLabel: 'Open'
   });
 
@@ -8521,9 +8561,7 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
     if (shouldNotifyAssignedTech) {
       const scheduledDate = order.date || 'the scheduled date';
-      const targetDeviceId = currentUser && userNamesMatch(order.assignedTo, currentUser.name)
-        ? getCurrentDeviceId()
-        : '';
+      const targetDeviceId = getPreferredNotificationDeviceId(order.assignedTo || '');
       await notificationManager.create({
         type: 'repair',
         title: 'Work order assigned',
