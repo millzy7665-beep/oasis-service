@@ -602,18 +602,21 @@ async function initializePushNotificationsForUser() {
 
     if (!token) return false;
 
-    if (firestore) {
-      await firestore.collection(PUSH_TOKEN_COLLECTION).doc(token).set({
-        token,
-        username: currentUser.username || '',
-        userName: currentUser.name || '',
-        canonicalUserName: canonicalUserName(currentUser.name || ''),
-        platform: 'web',
-        permission: Notification.permission,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      }, { merge: true }).catch(error => {
-        console.warn('Failed to save push token', error);
+    // Register token server-side via Cloud Function (bypasses Firestore security rules)
+    try {
+      await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/registerPushToken', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          username: currentUser.username || '',
+          userName: currentUser.name || '',
+          platform: /android/i.test(navigator.userAgent) ? 'android-pwa' : 'web',
+          permission: Notification.permission
+        })
       });
+    } catch (error) {
+      console.warn('Failed to register push token', error);
     }
 
     if (!window.__oasisMessagingOnMessageBound) {
