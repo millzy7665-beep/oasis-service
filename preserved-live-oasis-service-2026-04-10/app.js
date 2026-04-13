@@ -189,7 +189,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v194'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v197'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -604,9 +604,9 @@ async function initializePushNotificationsForUser() {
 
     if (!token) return false;
 
-    // Register token server-side via Cloud Function (bypasses Firestore security rules)
+    // Register token server-side via CORS-enabled Cloud Function
     try {
-      await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/debugPushStatus?secret=oasis-test-2026', {
+      const response = await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/registerPushToken', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -617,6 +617,10 @@ async function initializePushNotificationsForUser() {
           permission: Notification.permission
         })
       });
+
+      if (!response.ok) {
+        throw new Error(`Token registration failed: ${response.status}`);
+      }
     } catch (error) {
       console.warn('Failed to register push token', error);
     }
