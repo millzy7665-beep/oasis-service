@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v211'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v212'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1723,6 +1723,10 @@ class Router {
           <div class="detail-row">
             <div class="detail-label">Role</div>
             <div class="detail-value" style="text-transform: capitalize;">${user.role}</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">App Version</div>
+            <div class="detail-value">${DATA_VERSION}</div>
           </div>
           <button class="btn btn-danger" onclick="auth.logout(); location.reload()" style="width: 100%; margin-top: 10px;">Sign Out</button>
         </div>
