@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v210'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v211'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -8457,7 +8457,7 @@ async function enablePhoneNotifications() {
     return false;
   }
 
-  showToast('Phone notifications enabled');
+  showToast('Waiting for phone registration...');
   return true;
 }
 

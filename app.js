@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v210'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v211'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -832,34 +832,58 @@ async function initializePushNotificationsForUser(force = false) {
           return false;
         }
 
-        if (!window.__oasisNativePushBound) {
+        const nativeRegistrationResult = await new Promise(resolve => {
+          let settled = false;
+          const finish = value => {
+            if (settled) return;
+            settled = true;
+            resolve(value);
+          };
+
           pushNotifications.addListener('registration', async tokenInfo => {
             const token = String(tokenInfo?.value || '').trim();
-            if (!token) return;
-            await registerPushTokenForCurrentUser(token, 'android-native', 'granted');
+            if (!token) {
+              finish(false);
+              return;
+            }
+            const saved = await registerPushTokenForCurrentUser(token, 'android-native', 'granted');
+            if (saved) {
+              showToast('Phone notifications enabled');
+            }
+            finish(saved);
           });
 
           pushNotifications.addListener('registrationError', error => {
             console.warn('Native push registration error', error);
+            alert(`Phone notification setup failed: ${error?.error || error?.message || 'registration error'}`);
+            finish(false);
           });
 
-          pushNotifications.addListener('pushNotificationReceived', notification => {
-            notificationManager.presentLiveNotification({
-              title: notification?.title || 'New OASIS update',
-              message: notification?.body || 'You have a new update.',
-              recipient: auth.getCurrentUser()?.name || ''
+          if (!window.__oasisNativePushBound) {
+            pushNotifications.addListener('pushNotificationReceived', notification => {
+              notificationManager.presentLiveNotification({
+                title: notification?.title || 'New OASIS update',
+                message: notification?.body || 'You have a new update.',
+                recipient: auth.getCurrentUser()?.name || ''
+              });
             });
+
+            pushNotifications.addListener('pushNotificationActionPerformed', event => {
+              console.log('Push action performed', event);
+            });
+
+            window.__oasisNativePushBound = true;
+          }
+
+          pushNotifications.register().catch(error => {
+            console.warn('Native push register call failed', error);
+            finish(false);
           });
 
-          pushNotifications.addListener('pushNotificationActionPerformed', event => {
-            console.log('Push action performed', event);
-          });
+          setTimeout(() => finish(false), 15000);
+        });
 
-          window.__oasisNativePushBound = true;
-        }
-
-        await pushNotifications.register();
-        return true;
+        return nativeRegistrationResult;
       } catch (error) {
         console.warn('Native push setup failed', error);
         return false;
@@ -8517,7 +8541,7 @@ async function enablePhoneNotifications() {
     return false;
   }
 
-  showToast('Phone notifications enabled');
+  showToast('Waiting for phone registration...');
   return true;
 }
 
