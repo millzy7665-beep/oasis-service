@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v217'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v218'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1111,10 +1111,17 @@ class Router {
 
     const allClients = db.get('clients', []);
     const myRouteClients = isAdmin
-      ? allClients.filter(c => getClientServiceDays(c).includes(todayDay))
-      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).includes(todayDay));
-    const myTechClients = isAdmin ? allClients : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName));
-    const myTotalClients = myTechClients.reduce((sum, c) => sum + getClientServiceDays(c).length, 0);
+      ? allClients.filter(c => {
+          const days = getClientServiceDays(c);
+          return days.length ? days.includes(todayDay) : !!getClientTechnician(c);
+        })
+      : allClients.filter(c => {
+          if (!userNamesMatch(getClientTechnician(c), userName)) return false;
+          const days = getClientServiceDays(c);
+          return days.length ? days.includes(todayDay) : true;
+        });
+    const myTechClients = isAdmin ? allClients.filter(c => getClientTechnician(c)) : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName));
+    const myTotalClients = myTechClients.length;
 
     // Open and pending work orders
     const myRepairOrders = visibleRepairOrders.filter(r => {
@@ -1322,12 +1329,12 @@ class Router {
     // Admin: can filter by any tech. Field tech: shows only their own clients.
     let techFilter = isAdmin ? (this._routeTechFilter || 'all') : (user ? user.name : '');
     const techClients = techFilter === 'all'
-      ? allClients.filter(c => getClientServiceDays(c).length)
-      : allClients.filter(c => userNamesMatch(getClientTechnician(c), techFilter) && getClientServiceDays(c).length);
+      ? allClients.filter(c => getClientTechnician(c))
+      : allClients.filter(c => userNamesMatch(getClientTechnician(c), techFilter));
 
     const techs = [...new Set(allClients.map(c => getClientTechnician(c)).filter(Boolean))].sort();
 
-    this._routeDayFilter = this._routeDayFilter || today;
+    this._routeDayFilter = this._routeDayFilter || (isAdmin ? today : 'all');
     const dayFilter = this._routeDayFilter;
 
     const dayClients = dayFilter === 'all'
@@ -1384,7 +1391,7 @@ class Router {
   }
 
   renderRouteCard(client) {
-    const daysLabel = getClientServiceDays(client).map(d => d.substring(0, 3)).join(', ');
+    const daysLabel = getClientServiceDays(client).map(d => d.substring(0, 3)).join(', ') || 'Unscheduled';
     const _rcUser = auth.getCurrentUser();
     const _rcIsAdmin = auth.isAdmin();
     const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.username === 't9' || _rcUser?.username === 't10');
