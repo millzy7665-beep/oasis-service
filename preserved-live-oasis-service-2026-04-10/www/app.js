@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v207'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v208'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -641,13 +641,30 @@ function isStandaloneDisplayMode() {
   }
 }
 
+function getPushSupportDiagnostic() {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return 'Notifications are unavailable in this browser context.';
+  }
+  if (!window.isSecureContext) {
+    return 'Open the secure live Oasis link to enable notifications.';
+  }
+  if (isIosLikeDevice() && !isStandaloneDisplayMode()) {
+    return 'On iPhone or iPad, open Oasis in Safari, tap Share, then Add to Home Screen. Reopen it from the Home Screen and try again.';
+  }
+  if (!('serviceWorker' in navigator)) {
+    return 'This browser does not support background notifications.';
+  }
+  if (!('PushManager' in window)) {
+    return 'Push notifications are not supported on this phone/browser version yet.';
+  }
+  if (typeof Notification === 'undefined') {
+    return 'The Notifications API is not available on this device.';
+  }
+  return '';
+}
+
 function browserSupportsPushNotifications() {
-  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
-  if (!window.isSecureContext) return false;
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
-  if (typeof Notification === 'undefined') return false;
-  if (isIosLikeDevice() && !isStandaloneDisplayMode()) return false;
-  return true;
+  return !getPushSupportDiagnostic();
 }
 
 function shouldResetPushSubscription() {
@@ -699,13 +716,18 @@ async function getMessagingTokenWithRecovery(messaging, serviceWorkerRegistratio
   }
 }
 
-async function initializePushNotificationsForUser() {
+async function initializePushNotificationsForUser(force = false) {
   if (pushInitInFlight) return pushInitInFlight;
 
   pushInitInFlight = (async () => {
     const currentUser = auth.getCurrentUser();
     if (!currentUser) return false;
-    if (!browserSupportsPushNotifications()) return false;
+
+    const diagnostic = getPushSupportDiagnostic();
+    if (diagnostic) {
+      console.warn('Push unavailable:', diagnostic);
+      return false;
+    }
 
     await notificationManager.requestPermission().catch(() => {});
 
@@ -8327,15 +8349,33 @@ async function enablePhoneNotifications() {
 
   markCurrentDeviceAsPreferred(user);
 
-  if (isIosLikeDevice() && !isStandaloneDisplayMode()) {
-    alert('On iPhone or iPad, first add Oasis to your Home Screen, then reopen it there and tap Enable Phone Notifications again.');
+  const diagnostic = getPushSupportDiagnostic();
+  if (diagnostic) {
+    alert(diagnostic);
+    showToast('Follow the setup steps shown');
     return false;
   }
 
   await notificationManager.requestPermission();
+
+  if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+    alert('Notifications are currently blocked for Oasis on this phone. Please allow them in the browser or Home Screen app settings, then try again.');
+    showToast('Notifications are blocked on this phone');
+    return false;
+  }
+
   const enabled = await initializePushNotificationsForUser(true);
-  showToast(enabled ? 'Phone notifications enabled' : 'Phone notifications are not available in this browser yet');
-  return enabled;
+  if (!enabled) {
+    const fallbackMessage = isIosLikeDevice()
+      ? 'Push setup did not complete. Please launch Oasis from the Home Screen and try again.'
+      : 'Push setup did not complete. Please allow notifications for this site and try again.';
+    alert(fallbackMessage);
+    showToast('Phone notification setup incomplete');
+    return false;
+  }
+
+  showToast('Phone notifications enabled');
+  return true;
 }
 
 async function sendTestNotification() {
