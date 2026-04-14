@@ -1,4 +1,4 @@
-// Oasis Service App — Cache-First SW v197
+// Oasis Service App — Refresh SW v232
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js');
 
@@ -13,11 +13,11 @@ firebase.initializeApp({
 });
 
 const messaging = firebase.messaging();
-const CACHE = 'oasis-v228';
+const CACHE = 'oasis-v232';
 const PRECACHE = [
   './index.html',
-  './app.js?v=231',
-  './styles.css?v=231',
+  './app.js?v=232',
+  './styles.css?v=232',
   './manifest.json',
   './oasis-logo.png',
 ];
@@ -57,6 +57,12 @@ self.addEventListener('notificationclick', event => {
   })());
 });
 
+self.addEventListener('message', event => {
+  if (event?.data?.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)));
   self.skipWaiting();
@@ -73,23 +79,38 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
-  // Don't intercept CDN or external requests
   if (url.origin !== self.location.origin) return;
 
-  // Versioned assets (app.js?v=, styles.css?v=) — pure cache-first
+  const acceptsHtml = (e.request.headers.get('accept') || '').includes('text/html');
+  if (e.request.mode === 'navigate' || acceptsHtml) {
+    e.respondWith(
+      fetch(e.request)
+        .then(resp => {
+          if (resp.ok) {
+            const copy = resp.clone();
+            caches.open(CACHE).then(cache => cache.put(e.request, copy));
+          }
+          return resp;
+        })
+        .catch(() => caches.match(e.request).then(r => r || caches.match('./index.html')))
+    );
+    return;
+  }
+
   if (url.search.startsWith('?v=')) {
     e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
     return;
   }
 
-  // index.html & other unversioned files — stale-while-revalidate
   e.respondWith(
     caches.open(CACHE).then(cache =>
       cache.match(e.request).then(cached => {
-        const networkFetch = fetch(e.request).then(resp => {
-          if (resp.ok) cache.put(e.request, resp.clone());
-          return resp;
-        });
+        const networkFetch = fetch(e.request)
+          .then(resp => {
+            if (resp.ok) cache.put(e.request, resp.clone());
+            return resp;
+          })
+          .catch(() => cached);
         return cached || networkFetch;
       })
     )

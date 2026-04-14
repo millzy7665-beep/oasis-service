@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v231'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v232'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
