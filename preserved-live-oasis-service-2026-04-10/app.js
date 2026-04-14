@@ -153,6 +153,16 @@ class DB {
       knownNotificationIds = new Set((this.get('oasis_notifications', []) || []).map(item => item.id));
       this._remoteWritesEnabled = true;
 
+      const syncedClients = this.get('clients', []);
+      const assignedRouteCount = Array.isArray(syncedClients)
+        ? syncedClients.filter(client => getClientTechnician(client) && getClientServiceDays(client).length).length
+        : 0;
+
+      if (assignedRouteCount < Math.max(20, Math.floor((syncedClients.length || 0) * 0.25)) && typeof initMasterSchedule === 'function') {
+        this.set('masterScheduleLoaded', false);
+        setTimeout(() => initMasterSchedule(), 150);
+      }
+
       SYNCED_KEYS.forEach(key => {
         firestore.collection('app_data').doc(key).onSnapshot(snapshot => {
           if (!snapshot.exists) return;
@@ -166,6 +176,14 @@ class DB {
 
           this.storage.setItem(key, JSON.stringify(remoteData));
           console.log(`[Sync] ${key} updated from Firestore`);
+
+          if (key === 'clients' && Array.isArray(remoteData)) {
+            const routeCount = remoteData.filter(client => getClientTechnician(client) && getClientServiceDays(client).length).length;
+            if (routeCount < Math.max(20, Math.floor((remoteData.length || 0) * 0.25)) && typeof initMasterSchedule === 'function') {
+              this.set('masterScheduleLoaded', false);
+              setTimeout(() => initMasterSchedule(), 0);
+            }
+          }
 
           if (key === 'oasis_notifications' && typeof notificationManager !== 'undefined') {
             const newItems = (remoteData || []).filter(item => item?.id && !knownNotificationIds.has(item.id));
@@ -187,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v216'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v217'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
