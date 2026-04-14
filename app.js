@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v229'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v230'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1674,7 +1674,7 @@ class Router {
                 <div class="empty-subtitle">Completed work orders will appear here automatically once they are saved.</div>
               </div>`}
           <div style="display:flex; justify-content:flex-end; margin-top:12px;">
-            <button class="btn btn-primary btn-sm" onclick="exportCompletedToExcel()">📥 Bulk Download Excel</button>
+            <button class="btn btn-primary btn-sm" onclick="exportDailyWorkOrders()">📥 Download Daily Work Orders</button>
           </div>
         </div>
       </div>
@@ -9296,6 +9296,20 @@ async function addRepairWorkOrderPdfToDocument(doc, order, addNewPage = false) {
     y += 5;
   }
 
+  const materialsText = String(order.materials || ((!order.partsItems || !order.partsItems.length) ? order.partsSummary : '') || '').trim();
+  if (materialsText) {
+    await ensureSpace(24);
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('ADDITIONAL PARTS NOTES', 15, y + 5);
+    y += 10;
+    doc.setTextColor(60, 60, 60);
+    const materialLines = doc.splitTextToSize(materialsText, 180);
+    doc.text(materialLines, 15, y);
+    y += (materialLines.length * 5) + 5;
+  }
+
   if (order.notes) {
     await ensureSpace(24);
     doc.setFillColor(...navy);
@@ -9374,6 +9388,10 @@ async function exportDailyWorkOrders() {
     console.error('Daily work order export failed:', error);
     showToast('Daily work order export failed');
   }
+}
+
+async function exportCompletedToExcel() {
+  return exportDailyWorkOrders();
 }
 
 async function exportMonthlyChemSheets() {
