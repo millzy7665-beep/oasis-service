@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v228'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v229'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1638,6 +1638,9 @@ class Router {
   renderWorkOrders() {
     const content = document.getElementById('main-content');
     const isAdmin = auth.isAdmin();
+    const currentUser = auth.getCurrentUser();
+    const isJetOrMark = !isAdmin && (currentUser?.username === 't9' || currentUser?.username === 't10');
+    const canCreateRepairOrders = isAdmin || isJetOrMark;
     const completedWOs = (typeof getRepairOrders === 'function' ? getRepairOrders() : []).filter(o => (o.status || '').toLowerCase() === 'completed');
     const todayKey = new Date().toISOString().split('T')[0];
     const todaysPendingOpenCount = isAdmin
@@ -1652,7 +1655,7 @@ class Router {
         <div class="section-title">Work Orders</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary btn-sm" onclick="router.createWorkOrder()">+ New Chem Sheet</button>
-          ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>` : ''}
+          ${canCreateRepairOrders ? `<button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>` : ''}
         </div>
       </div>
 
@@ -5160,6 +5163,10 @@ function renderChemPhotoSection(order) {
  */
 async function takeNativePhoto(type, orderId, slotIndex, preferredSource = 'CAMERA') {
   try {
+    if (type === 'repair') {
+      orderId = persistRepairOrderDraft(orderId) || orderId;
+    }
+
     if (typeof Capacitor === 'undefined' || !Capacitor.Plugins.Camera) {
       const fallbackInputId = type === 'repair'
         ? (preferredSource === 'PHOTOS' ? `repair-photo-gallery-${slotIndex}` : `repair-photo-camera-${slotIndex}`)
@@ -6998,6 +7005,13 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
   const timeIn = order.timeIn || order.time || '';
   const timeOut = order.timeOut || '';
   const timeSpent = calculateTimeSpent(timeIn, timeOut);
+  const normalizedStatus = String(order.status || 'open').toLowerCase();
+  const isCompleted = normalizedStatus === 'completed';
+  const readyToComplete = isRepairOrderReadyToComplete({
+    ...order,
+    clientName: order.clientName || selectedClient?.name || selectedClientDisplay.split(' — ')[0] || '',
+    address: order.address || selectedClient?.address || ''
+  });
 
   content.innerHTML = `
     <div class="wo-form">
@@ -7015,7 +7029,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
         <div class="wo-sec-bd" data-active-repair-id="${activeOrderId}">
           <div class="form-row">
             <label for="repair-client-search">Client (Search)</label>
-            <input id="repair-client-search" type="text" list="repair-client-options" value="${escapeHtml(selectedClientDisplay)}" oninput="onRepairClientChange()" placeholder="Type client name or address">
+            <input id="repair-client-search" type="text" list="repair-client-options" value="${escapeHtml(selectedClientDisplay)}" oninput="onRepairClientChange(); updateRepairCompletionState()" placeholder="Type client name or address">
             <datalist id="repair-client-options">
               ${getSortedClients(clients).map(client => `<option value="${escapeHtml(getRepairClientDisplay(client))}"></option>`).join('')}
             </datalist>
@@ -7027,17 +7041,17 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 
           <div class="form-row">
             <label for="repair-address">Address</label>
-            <input id="repair-address" type="text" value="${escapeHtml(order.address || '')}">
+            <input id="repair-address" type="text" value="${escapeHtml(order.address || '')}" oninput="updateRepairCompletionState()">
           </div>
 
           <div class="wo-grid" style="margin-bottom:12px; border-radius:var(--radius-sm);">
             <div class="wo-fld">
               <div class="wo-fld-lbl">Date</div>
-              <input id="repair-date" class="wo-fld-inp" type="date" value="${escapeHtml(order.date || '')}">
+              <input id="repair-date" class="wo-fld-inp" type="date" value="${escapeHtml(order.date || '')}" onchange="updateRepairCompletionState()">
             </div>
             <div class="wo-fld">
               <div class="wo-fld-lbl">Assigned Tech</div>
-              <select id="repair-tech" class="wo-fld-inp">
+              <select id="repair-tech" class="wo-fld-inp" onchange="updateRepairCompletionState()">
                 ${assigneeOptions
                   .map(name => `<option value="${name}" ${userNamesMatch(name, currentAssignee) ? 'selected' : ''}>${name}</option>`).join('')}
               </select>
@@ -7056,15 +7070,15 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 
           <div class="form-row">
             <label for="repair-type">Work Order Type</label>
-            <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue...">
+            <input id="repair-type" type="text" value="${escapeHtml(order.jobType || '')}" placeholder="Pump repair, leak check, automation issue..." oninput="updateRepairCompletionState()">
           </div>
 
           <div class="form-row">
             <label for="repair-status">Status</label>
-            <select id="repair-status">
-              <option value="open" ${order.status === 'open' ? 'selected' : ''}>Open</option>
-              <option value="in-progress" ${order.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
-              <option value="completed" ${order.status === 'completed' ? 'selected' : ''}>Completed</option>
+            <select id="repair-status" onchange="updateRepairCompletionState()">
+              <option value="open" ${normalizedStatus === 'open' ? 'selected' : ''}>Open</option>
+              <option value="pending" ${(normalizedStatus === 'pending' || normalizedStatus === 'in-progress') ? 'selected' : ''}>Pending</option>
+              ${isCompleted ? '<option value="completed" selected>Completed</option>' : ''}
             </select>
           </div>
         </div>
@@ -7078,7 +7092,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
         <div class="wo-sec-bd">
           <div class="form-row">
             <label for="repair-summary">Summary of Work</label>
-            <textarea id="repair-summary" placeholder="Describe the repair performed...">${escapeHtml(order.summary || '')}</textarea>
+            <textarea id="repair-summary" placeholder="Describe the repair performed..." oninput="updateRepairCompletionState()">${escapeHtml(order.summary || '')}</textarea>
           </div>
 
           <div class="form-row">
@@ -7106,9 +7120,17 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
       ${renderRepairPhotoSection(activeOrderId, order)}
 
       <div class="card" style="margin:12px;">
-        <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save Changes</button>
+          <button id="repair-complete-btn" class="btn btn-primary" onclick="completeRepairWorkOrder('${escapeHtml(activeOrderId)}')" ${(!isCompleted && readyToComplete) ? '' : 'disabled'}>${isCompleted ? 'Completed' : 'Complete Work Order'}</button>
           ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true)">Share Report</button>` : ''}
+          <div id="repair-completion-hint" class="wo-hint" style="flex-basis:100%;margin:0;">
+            ${isCompleted
+              ? 'This work order is already completed.'
+              : (readyToComplete
+                ? 'All required sections are filled in and ready to complete.'
+                : 'Fill in client, address, date, assigned tech, work order type, and summary to enable completion.')}
+          </div>
         </div>
       </div>
     </div>
@@ -8988,6 +9010,85 @@ function onRepairClientChange() {
   if (title) title.textContent = (searchInput.value || 'Work Order').split(' — ')[0];
 }
 
+function updateRepairCompletionState() {
+  const button = document.getElementById('repair-complete-btn');
+  const hint = document.getElementById('repair-completion-hint');
+  if (!button || !hint) return;
+
+  const status = String(document.getElementById('repair-status')?.value || 'open').toLowerCase();
+  if (status === 'completed') {
+    button.disabled = true;
+    button.textContent = 'Completed';
+    hint.textContent = 'This work order is already completed.';
+    return;
+  }
+
+  const draft = collectRepairOrderFromForm();
+  const ready = isRepairOrderReadyToComplete(draft || {});
+  button.disabled = !ready;
+  button.textContent = 'Complete Work Order';
+  hint.textContent = ready
+    ? 'All required sections are filled in and ready to complete.'
+    : 'Fill in client, address, date, assigned tech, work order type, and summary to enable completion.';
+}
+
+function isRepairOrderReadyToComplete(order = {}) {
+  const requiredValues = [
+    order.clientName,
+    order.address,
+    order.date,
+    order.assignedTo,
+    order.jobType,
+    order.summary
+  ];
+
+  return requiredValues.every(value => String(value || '').trim());
+}
+
+function persistRepairOrderDraft(orderId = '') {
+  const order = collectRepairOrderFromForm(orderId);
+  if (!order) return orderId || '';
+
+  const orders = getRepairOrders();
+  const index = orders.findIndex(item => item.id === order.id);
+  const nextOrder = {
+    ...order,
+    status: order.status || 'open',
+    updatedAt: new Date().toISOString()
+  };
+
+  if (index >= 0) {
+    orders[index] = { ...orders[index], ...nextOrder };
+  } else {
+    orders.unshift(nextOrder);
+  }
+
+  saveRepairOrders(orders);
+
+  const container = document.querySelector('[data-active-repair-id]');
+  if (container) container.setAttribute('data-active-repair-id', order.id);
+
+  return order.id;
+}
+
+async function completeRepairWorkOrder(orderId = '') {
+  const order = collectRepairOrderFromForm(orderId);
+  if (!order) {
+    showToast('Work order not found');
+    return;
+  }
+
+  if (!isRepairOrderReadyToComplete(order)) {
+    showToast('Finish the required work order sections first');
+    return;
+  }
+
+  const statusField = document.getElementById('repair-status');
+  if (statusField) statusField.value = 'completed';
+
+  return saveRepairWorkOrder(orderId);
+}
+
 async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) return;
@@ -9070,7 +9171,7 @@ function renderRepairPhotoSlot(orderId, label, photo, index) {
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
         <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('repair', '${orderId || ''}', ${index}, 'CAMERA')">Camera</button>
-        <label class="btn btn-secondary btn-sm" for="repair-photo-gallery-${index}">Gallery</label>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="takeNativePhoto('repair', '${orderId || ''}', ${index}, 'PHOTOS')">Gallery</button>
       </div>
       <input id="repair-photo-camera-${index}" name="repair-photo-camera-${index}" class="photo-file-inp" type="file" accept="image/*" capture="environment" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
       <input id="repair-photo-gallery-${index}" name="repair-photo-gallery-${index}" class="photo-file-inp" type="file" accept="image/*" onchange="handleRepairPhotoUpload('${orderId || ''}', ${index}, event)">
