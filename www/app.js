@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v226'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v227'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1602,12 +1602,12 @@ class Router {
       ? allClients
       : allClients.filter(client => userNamesMatch(getClientTechnician(client), (currentUser?.name || '')));
 
-    const clients = (query
-      ? scopedClients.filter(c =>
-          c.name.toLowerCase().includes(query.toLowerCase()) ||
-          c.address.toLowerCase().includes(query.toLowerCase())
-        )
-      : scopedClients).slice().sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    const normalizedQuery = String(query || '').trim().toLowerCase();
+    const clients = getSortedClients(
+      normalizedQuery
+        ? scopedClients.filter(c => getRepairClientDisplay(c).toLowerCase().includes(normalizedQuery))
+        : scopedClients
+    );
 
     if (clients.length === 0) {
       return `
@@ -2003,11 +2003,13 @@ class Router {
     const spa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
     const poolAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.pool || {}) };
     const spaAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.spa || {}) };
-    const clients = db.get('clients', []);
+    const clients = getSortedClients(db.get('clients', []));
     const _woCurUser = auth.getCurrentUser();
     const _woIsAdmin = auth.isAdmin();
     const _woIsJetOrMark = !_woIsAdmin && (_woCurUser?.username === 't9' || _woCurUser?.username === 't10');
-    const chemClientList = (_woIsAdmin || _woIsJetOrMark) ? clients : clients.filter(c => (c.technician || '') === (_woCurUser?.name || ''));
+    const chemClientList = (_woIsAdmin || _woIsJetOrMark)
+      ? clients
+      : clients.filter(c => userNamesMatch((c.technician || ''), (_woCurUser?.name || '')));
     const technician = order.technician || auth.getCurrentUser()?.name || '';
     const timeIn = order.timeIn || order.time || '';
     const timeOut = order.timeOut || '';
@@ -2033,7 +2035,7 @@ class Router {
               <label for="wo-client">Customer</label>
               <select id="wo-client" onchange="onChemClientChange()">
                 <option value="">— Select client —</option>
-                ${chemClientList.map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${client.name}</option>`).join('')}
+                ${chemClientList.map(client => `<option value="${client.id}" ${client.id === order.clientId ? 'selected' : ''}>${escapeHtml(getRepairClientDisplay(client))}</option>`).join('')}
               </select>
             </div>
 
@@ -3674,6 +3676,14 @@ function compareAlphaNumeric(a = '', b = '') {
   });
 }
 
+function getSortedClients(clients = []) {
+  return [...clients].sort((a, b) => {
+    const byName = compareAlphaNumeric(a?.name || '', b?.name || '');
+    if (byName !== 0) return byName;
+    return compareAlphaNumeric(a?.address || '', b?.address || '');
+  });
+}
+
 function findClientByRepairSearch(searchValue = '', clients = db.get('clients', [])) {
   const term = String(searchValue || '').trim().toLowerCase();
   if (!term) return null;
@@ -3831,7 +3841,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <label for="repair-client">Client</label>
             <select id="repair-client" onchange="onRepairClientChange()">
               <option value="">— Select client —</option>
-              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+              ${getSortedClients(clients).map(client => `<option value="${escapeHtml(client.id)}" ${client.id === (order.clientId || presetClientId) ? 'selected' : ''}>${escapeHtml(getRepairClientDisplay(client))}</option>`).join('')}
             </select>
           </div>
 
@@ -4411,7 +4421,7 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
     return;
   }
 
-  const clients = db.get('clients', []);
+  const clients = getSortedClients(db.get('clients', []));
   if (!clients.length) {
     showToast('Add a client first');
     router.renderClients();
@@ -4472,7 +4482,7 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
           <div class="form-group">
             <label class="form-label">Client *</label>
             <select id="est-client" class="form-control" onchange="onEstimateClientChange()">
-              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === selectedClientId ? 'selected' : ''}>${escapeHtml(client.name)}</option>`).join('')}
+              ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${client.id === selectedClientId ? 'selected' : ''}>${escapeHtml(getRepairClientDisplay(client))}</option>`).join('')}
             </select>
           </div>
 
@@ -7007,7 +7017,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <label for="repair-client-search">Client (Search)</label>
             <input id="repair-client-search" type="text" list="repair-client-options" value="${escapeHtml(selectedClientDisplay)}" oninput="onRepairClientChange()" placeholder="Type client name or address">
             <datalist id="repair-client-options">
-              ${clients.map(client => `<option value="${escapeHtml(getRepairClientDisplay(client))}"></option>`).join('')}
+              ${getSortedClients(clients).map(client => `<option value="${escapeHtml(getRepairClientDisplay(client))}"></option>`).join('')}
             </datalist>
             <input id="repair-client" type="hidden" value="${escapeHtml(selectedClientId)}">
             <div style="margin-top:8px;">
