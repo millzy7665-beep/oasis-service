@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v208'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v209'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -633,6 +633,17 @@ function isIosLikeDevice() {
   return /iphone|ipad|ipod/i.test(ua) || (platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
+function isAndroidDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /android/i.test(navigator.userAgent || '');
+}
+
+function isProbablyAndroidInAppBrowser() {
+  if (!isAndroidDevice() || typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /; wv\)|version\/\d+\.\d+|fbav|fban|instagram|linkedinapp|snapchat|gsa\//i.test(ua);
+}
+
 function isStandaloneDisplayMode() {
   try {
     return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
@@ -647,6 +658,9 @@ function getPushSupportDiagnostic() {
   }
   if (!window.isSecureContext) {
     return 'Open the secure live Oasis link to enable notifications.';
+  }
+  if (isProbablyAndroidInAppBrowser()) {
+    return 'This looks like an in-app Android browser. Use Chrome for closed-app notifications.';
   }
   if (isIosLikeDevice() && !isStandaloneDisplayMode()) {
     return 'On iPhone or iPad, open Oasis in Safari, tap Share, then Add to Home Screen. Reopen it from the Home Screen and try again.';
@@ -1582,9 +1596,11 @@ class Router {
         <div class="card-body">
           <div style="font-weight:600; font-size:15px; margin-bottom:8px;">🔔 Notification Test</div>
           <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Send a visible test notification to this device for the current signed-in user.</p>
+          ${getPushSupportDiagnostic() ? `<div style="font-size:12px; color:#9a6a00; background:#fff7e6; border:1px solid #f3d08b; border-radius:8px; padding:10px; margin-bottom:10px;">${getPushSupportDiagnostic()}</div>` : ''}
           <button class="btn btn-primary" onclick="sendTestNotification()" style="width: 100%;">Send Test Notification</button>
           <button class="btn btn-secondary" onclick="useThisDeviceForAlerts()" style="width: 100%; margin-top: 8px;">Use This Device For Alerts</button>
           <button class="btn btn-secondary" onclick="enablePhoneNotifications()" style="width: 100%; margin-top: 8px;">Enable Phone Notifications</button>
+          <button class="btn btn-secondary" onclick="openInChromeForNotifications()" style="width: 100%; margin-top: 8px;">Open In Chrome</button>
         </div>
       </div>
 
@@ -8340,6 +8356,18 @@ function useThisDeviceForAlerts() {
   showToast('This device is now selected for your alerts');
 }
 
+function openInChromeForNotifications() {
+  const liveUrl = getDefaultAppLink();
+
+  if (isAndroidDevice()) {
+    const stripped = liveUrl.replace(/^https?:\/\//i, '');
+    window.location.href = `intent://${stripped}#Intent;scheme=https;package=com.android.chrome;end`;
+    return;
+  }
+
+  window.open(liveUrl, '_blank', 'noopener');
+}
+
 async function enablePhoneNotifications() {
   const user = auth.getCurrentUser();
   if (!user?.name) {
@@ -8352,6 +8380,9 @@ async function enablePhoneNotifications() {
   const diagnostic = getPushSupportDiagnostic();
   if (diagnostic) {
     alert(diagnostic);
+    if (isProbablyAndroidInAppBrowser()) {
+      openInChromeForNotifications();
+    }
     showToast('Follow the setup steps shown');
     return false;
   }
