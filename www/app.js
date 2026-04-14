@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v219'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v220'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1619,7 +1619,7 @@ class Router {
         </div>
 
         <div class="section-header" style="margin-top:10px">
-          <div class="section-title">Pending Chem Sheets by User</div>
+          <div class="section-title">Pending Chem Sheets by User and Day</div>
           <div style="font-size:12px; color:var(--gray-600);">${pendingChemSheetCount} pending</div>
         </div>
         <div id="workorders-list">
@@ -1664,25 +1664,57 @@ class Router {
     }
 
     const grouped = pendingSheets.reduce((acc, order) => {
-      const key = normalizeTechnicianName(order.technician || 'Unassigned');
-      if (!acc[key]) acc[key] = [];
-      acc[key].push(order);
+      const techKey = normalizeTechnicianName(order.technician || 'Unassigned');
+      const rawDate = String(order.date || order.serviceDate || '').trim();
+      const parsedDate = rawDate
+        ? (/^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? new Date(`${rawDate}T00:00:00`) : new Date(rawDate))
+        : null;
+      const hasValidDate = !!(parsedDate && !Number.isNaN(parsedDate.getTime()));
+      const dayKey = hasValidDate ? rawDate : '__no_due_date__';
+      const dayLabel = hasValidDate
+        ? `${parsedDate.toLocaleDateString('en-US', { weekday: 'long' })} • ${formatDisplayDate(rawDate)}`
+        : 'No Due Date Set';
+
+      if (!acc[techKey]) acc[techKey] = {};
+      if (!acc[techKey][dayKey]) {
+        acc[techKey][dayKey] = {
+          label: dayLabel,
+          sortValue: hasValidDate ? parsedDate.getTime() : Number.MAX_SAFE_INTEGER,
+          items: []
+        };
+      }
+
+      acc[techKey][dayKey].items.push(order);
       return acc;
     }, {});
 
     return Object.entries(grouped)
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([techName, items]) => `
-        <div class="card" style="margin: 0 16px 12px;">
-          <div class="card-body">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px;">
-              <div style="font-weight:700; font-size:14px;">${escapeHtml(techName)}</div>
-              <span class="badge badge-pending">${items.length} pending</span>
+      .map(([techName, dayGroups]) => {
+        const renderedDays = Object.values(dayGroups)
+          .sort((a, b) => (a.sortValue - b.sortValue) || a.label.localeCompare(b.label))
+          .map(group => `
+            <div style="margin-top:10px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; padding:6px 8px; background:#f7f9fc; border-radius:8px;">
+                <div style="font-size:12px; font-weight:700; color:var(--gray-700);">${escapeHtml(group.label)}</div>
+                <span class="badge badge-pending">${group.items.length}</span>
+              </div>
+              ${group.items.map(wo => this.renderJobCard(wo, canShare, true, currentUser)).join('')}
             </div>
-            ${items.map(wo => this.renderJobCard(wo, canShare, true, currentUser)).join('')}
+          `).join('');
+
+        return `
+          <div class="card" style="margin: 0 16px 12px;">
+            <div class="card-body">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px;">
+                <div style="font-weight:700; font-size:14px;">${escapeHtml(techName)}</div>
+                <span class="badge badge-pending">${Object.values(dayGroups).reduce((total, group) => total + group.items.length, 0)} pending</span>
+              </div>
+              ${renderedDays}
+            </div>
           </div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
   }
 
   renderWorkOrdersList() {
