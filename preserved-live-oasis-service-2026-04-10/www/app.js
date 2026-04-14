@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v227'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v228'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1980,7 +1980,7 @@ class Router {
           <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Download completed work orders for a specific date for billing.</p>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <input type="date" id="wo-export-date" class="form-control" style="flex:1; min-width:140px;" value="${new Date().toISOString().split('T')[0]}">
-            <button class="btn btn-primary" onclick="exportDailyWorkOrders()">📥 Download Work Orders</button>
+            <button class="btn btn-primary" onclick="exportDailyWorkOrders()">📥 Download Daily Work Orders</button>
           </div>
         </div>
       </div>
@@ -9115,53 +9115,164 @@ function convertQuoteToWorkOrder(estimateId) {
   renderRepairOrderForm(newOrder.id);
 }
 
+async function addRepairWorkOrderPdfToDocument(doc, order, addNewPage = false) {
+  if (addNewPage) {
+    doc.addPage();
+  }
+
+  const navy = [13, 43, 69];
+  let y = await applyOasisPdfBranding(doc, 'Repair Work Order', 'Luxury Pool & Watershape Design');
+  let gridY = y + 5;
+  const col1 = 15;
+  const col2 = 110;
+
+  const ensureSpace = async (needed = 18) => {
+    if (y + needed > 265) {
+      await applyOasisPdfFooter(doc);
+      doc.addPage();
+      y = await applyOasisPdfBranding(doc, 'Repair Work Order', 'Luxury Pool & Watershape Design');
+    }
+  };
+
+  const addField = (label, value, x, currentY) => {
+    doc.setFontSize(6);
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'bold');
+    doc.text(label.toUpperCase(), x, currentY);
+    doc.setFontSize(9);
+    doc.setTextColor(...navy);
+    doc.setFont('helvetica', 'normal');
+    doc.text(String(value || '—'), x, currentY + 5);
+  };
+
+  addField('Customer', order.clientName, col1, gridY);
+  addField('Date', formatDisplayDate(order.date || '') || order.date || '—', col2, gridY);
+  gridY += 12;
+  addField('Address', order.address, col1, gridY);
+  addField('Job Type', order.jobType, col2, gridY);
+  gridY += 12;
+  addField('Assigned Tech', order.assignedTo, col1, gridY);
+  addField('Status', order.status, col2, gridY);
+  gridY += 12;
+  addField('Time In / Out', `${order.timeIn || '—'} / ${order.timeOut || '—'}`, col1, gridY);
+  addField('Labour Hours', order.labourHours || '—', col2, gridY);
+
+  y += 50;
+
+  await ensureSpace(28);
+  doc.setFillColor(...navy);
+  doc.rect(10, y, 190, 7, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.text('WORK SUMMARY', 15, y + 5);
+  y += 10;
+
+  doc.setTextColor(60, 60, 60);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  const summaryLines = doc.splitTextToSize(order.summary || 'No summary provided.', 180);
+  doc.text(summaryLines, 15, y);
+  y += (summaryLines.length * 5) + 5;
+
+  if (order.partsItems && order.partsItems.length > 0) {
+    await ensureSpace((order.partsItems.length * 6) + 18);
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('PARTS & EQUIPMENT INSTALLED', 15, y + 5);
+    doc.text('QTY', 170, y + 5);
+    y += 7;
+
+    order.partsItems.forEach(item => {
+      doc.setDrawColor(235, 235, 235);
+      doc.line(10, y + 6, 200, y + 6);
+      doc.setTextColor(...navy);
+      doc.text(`${item.category || 'Part'}: ${item.product || item.partNumber || 'Unknown Part'}`, 15, y + 4.5);
+      doc.text(String(item.qty || 1), 170, y + 4.5);
+      y += 6;
+    });
+    y += 5;
+  }
+
+  if (order.notes) {
+    await ensureSpace(24);
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('INTERNAL OFFICE NOTES', 15, y + 5);
+    y += 10;
+    doc.setTextColor(60, 60, 60);
+    const notesLines = doc.splitTextToSize(order.notes, 180);
+    doc.text(notesLines, 15, y);
+    y += (notesLines.length * 5) + 5;
+  }
+
+  const photos = normalizeRepairPhotos(order.photos || []);
+  if (photos.some(Boolean)) {
+    await ensureSpace(52);
+    doc.setFillColor(...navy);
+    doc.rect(10, y, 190, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('REPAIR PHOTOS', 15, y + 5);
+    y += 10;
+
+    const pW = 42;
+    const pH = 32;
+    let pX = 15;
+    photos.forEach((p, i) => {
+      if (p && i < 4) {
+        try {
+          doc.addImage(p, 'JPEG', pX, y, pW, pH);
+          doc.setFontSize(6);
+          doc.setTextColor(150, 150, 150);
+          doc.text(REPAIR_PHOTO_LABELS[i], pX, y + pH + 4);
+        } catch (error) {
+          console.warn('Repair photo skipped in PDF', error);
+        }
+        pX += 48;
+      }
+    });
+  }
+
+  await applyOasisPdfFooter(doc);
+}
+
 async function exportDailyWorkOrders() {
   const dateInput = document.getElementById('wo-export-date');
   const selectedDate = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
-  const orders = getRepairOrders().filter(o => isCompleted(o.status) && o.date === selectedDate);
-  if (orders.length === 0) { showToast(`No completed work orders for ${selectedDate}`); return; }
-  showToast('Generating Work Orders Excel...');
+  const orders = getRepairOrders()
+    .filter(order => isCompleted(order.status) && order.date === selectedDate)
+    .sort((a, b) => compareAlphaNumeric(a?.clientName || '', b?.clientName || '') || compareAlphaNumeric(a?.address || '', b?.address || ''));
+
+  if (orders.length === 0) {
+    showToast(`No completed work orders for ${selectedDate}`);
+    return;
+  }
+
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    showToast('PDF library not loaded');
+    return;
+  }
+
+  showToast('Generating daily work order sheets...');
+
   try {
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'OASIS Service App'; workbook.created = new Date();
-    const applyHeader = (sheet, count) => {
-      const row = sheet.getRow(1);
-      row.font = { bold: true, color: { argb: 'FFFFFF' } };
-      row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0D2B45' } };
-      row.alignment = { vertical: 'middle', horizontal: 'center' };
-      sheet.views = [{ state: 'frozen', ySplit: 1 }];
-      sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: count } };
-    };
-    const columns = [
-      { header: 'Date', key: 'date', width: 12 }, { header: 'Client', key: 'client', width: 25 },
-      { header: 'Address', key: 'address', width: 35 }, { header: 'Technician', key: 'tech', width: 18 },
-      { header: 'Job Type', key: 'jobType', width: 20 }, { header: 'Status', key: 'status', width: 12 },
-      { header: 'Time In', key: 'timeIn', width: 10 }, { header: 'Time Out', key: 'timeOut', width: 10 },
-      { header: 'Labour Hours', key: 'labourHours', width: 12 }, { header: 'Materials', key: 'materials', width: 30 },
-      { header: 'Parts Summary', key: 'partsSummary', width: 40 }, { header: 'Work Summary', key: 'summary', width: 40 },
-      { header: 'Notes', key: 'notes', width: 40 }
-    ];
-    const sheet = workbook.addWorksheet('Work Orders');
-    sheet.columns = columns; applyHeader(sheet, columns.length);
-    orders.forEach(order => sheet.addRow({
-      date: order.date || '', client: order.clientName || '', address: order.address || '',
-      tech: order.assignedTo || '', jobType: order.jobType || '', status: order.status || '',
-      timeIn: order.timeIn || order.time || '', timeOut: order.timeOut || '',
-      labourHours: order.labourHours || '', materials: order.materials || '',
-      partsSummary: order.partsSummary || '', summary: order.summary || '', notes: order.notes || ''
-    }));
-    sheet.eachRow((row, n) => { if (n > 1) row.alignment = { vertical: 'top', wrapText: true }; });
-    const buffer = await workbook.xlsx.writeBuffer();
-    const filename = `OASIS_Work_Orders_${selectedDate}.xlsx`;
-    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a); URL.revokeObjectURL(url);
-    showToast(`${orders.length} work order${orders.length !== 1 ? 's' : ''} for ${selectedDate} saved`);
-  } catch (error) { console.error('Work orders export failed:', error); showToast('Work orders export failed'); }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    for (let index = 0; index < orders.length; index += 1) {
+      await addRepairWorkOrderPdfToDocument(doc, orders[index], index > 0);
+    }
+
+    const filename = `OASIS_Daily_Work_Orders_${selectedDate}.pdf`;
+    await sharePDF(doc, filename);
+    showToast(`${orders.length} daily work order${orders.length !== 1 ? 's' : ''} ready`);
+  } catch (error) {
+    console.error('Daily work order export failed:', error);
+    showToast('Daily work order export failed');
+  }
 }
 
 async function exportMonthlyChemSheets() {
