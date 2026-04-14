@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v221'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v222'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1593,14 +1593,21 @@ class Router {
         </div>
       </div>
 
-      ${isAdmin && completedWOs.length > 0 ? `
+      ${isAdmin ? `
       <div class="card" style="margin: 0 16px 12px; border-left: 4px solid #4CAF50;">
         <div class="card-body">
-          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-            <div>
-              <div style="font-weight:600; font-size:15px;">✅ Completed Work Orders Ready</div>
-              <div style="font-size:13px; color:#555; margin-top:2px;">${completedWOs.length} completed work order${completedWOs.length !== 1 ? 's' : ''} from Jet &amp; Mark available for download</div>
-            </div>
+          <div style="margin-bottom:10px;">
+            <div style="font-weight:600; font-size:15px;">✅ Completed Work Orders Ready</div>
+            <div style="font-size:13px; color:#555; margin-top:2px;">${completedWOs.length} completed work order${completedWOs.length !== 1 ? 's' : ''} ready for review by client name</div>
+          </div>
+          ${completedWOs.length
+            ? `<div style="margin-top:10px;">${renderRepairOrdersList('completed')}</div>`
+            : `<div class="empty-state" style="margin:0;">
+                <div class="empty-icon">🛠️</div>
+                <div class="empty-title">No completed work orders yet</div>
+                <div class="empty-subtitle">Completed work orders will appear here automatically once they are saved.</div>
+              </div>`}
+          <div style="display:flex; justify-content:flex-end; margin-top:12px;">
             <button class="btn btn-primary btn-sm" onclick="exportCompletedToExcel()">📥 Bulk Download Excel</button>
           </div>
         </div>
@@ -1686,18 +1693,26 @@ class Router {
     }, {});
 
     return Object.values(grouped)
-      .sort((a, b) => (b.sortValue - a.sortValue) || a.label.localeCompare(b.label))
-      .map(group => `
+      .sort((a, b) => (a.sortValue - b.sortValue) || compareAlphaNumeric(a.label, b.label))
+      .map(group => {
+        const dayItems = [...group.items].sort((a, b) => {
+          const nameCompare = compareAlphaNumeric(a?.clientName || '', b?.clientName || '');
+          if (nameCompare !== 0) return nameCompare;
+          return compareAlphaNumeric(a?.address || '', b?.address || '');
+        });
+
+        return `
         <div class="card" style="margin: 0 16px 12px;">
           <div class="card-body">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px;">
               <div style="font-weight:700; font-size:14px;">${escapeHtml(group.label)}</div>
               <span class="badge badge-completed">${group.items.length} completed</span>
             </div>
-            ${group.items.map(wo => this.renderJobCard(wo, canShare, true, currentUser)).join('')}
+            ${dayItems.map(wo => this.renderJobCard(wo, canShare, true, currentUser)).join('')}
           </div>
         </div>
-      `).join('');
+      `;
+      }).join('');
   }
 
   renderWorkOrdersList() {
@@ -3581,6 +3596,13 @@ function getRepairClientDisplay(client = {}) {
   return address ? `${name} — ${address}` : name;
 }
 
+function compareAlphaNumeric(a = '', b = '') {
+  return String(a || '').localeCompare(String(b || ''), undefined, {
+    numeric: true,
+    sensitivity: 'base'
+  });
+}
+
 function findClientByRepairSearch(searchValue = '', clients = db.get('clients', [])) {
   const term = String(searchValue || '').trim().toLowerCase();
   if (!term) return null;
@@ -3606,7 +3628,10 @@ function sortOrdersByUpcomingDate(items = []) {
     if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
     if (aDate !== bDate) return aDate.localeCompare(bDate);
 
-    return String(a?.clientName || '').localeCompare(String(b?.clientName || ''));
+    const clientCompare = compareAlphaNumeric(a?.clientName || '', b?.clientName || '');
+    if (clientCompare !== 0) return clientCompare;
+
+    return compareAlphaNumeric(a?.address || '', b?.address || '');
   });
 }
 
@@ -3643,9 +3668,15 @@ function renderRepairOrdersList(statusFilter = 'all') {
     `;
   }
 
-  const sortedOrders = isAdmin
-    ? sortOrdersByUpcomingDate(orders)
-    : [...orders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  const sortedOrders = isAdmin && statusFilter === 'completed'
+    ? [...orders].sort((a, b) => {
+        const nameCompare = compareAlphaNumeric(a?.clientName || '', b?.clientName || '');
+        if (nameCompare !== 0) return nameCompare;
+        return String(a?.date || '').localeCompare(String(b?.date || ''));
+      })
+    : isAdmin
+      ? sortOrdersByUpcomingDate(orders)
+      : [...orders].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0) || compareAlphaNumeric(a?.clientName || '', b?.clientName || ''));
 
   return sortedOrders.map(order => `
     <div class="job-card" style="margin-bottom:12px;">
@@ -3654,7 +3685,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
           <div class="job-card-title">${escapeHtml(order.clientName || 'Work Order')}</div>
           <div class="job-card-customer">${escapeHtml(order.jobType || 'Work Order')}</div>
           <div class="job-meta">
-            <div class="job-meta-item">📅 ${escapeHtml(order.date || '')}</div>
+            <div class="job-meta-item">📅 ${escapeHtml(formatDisplayDate(order.date) || order.date || '')}</div>
             <div class="job-meta-item">👤 ${escapeHtml(order.assignedTo || '')}</div>
           </div>
         </div>
@@ -3664,7 +3695,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
         <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
       </div>
       <div class="job-card-footer">
-        <button class="btn ${order.status === 'completed' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">${order.status === 'completed' ? 'Completed' : 'Open'}</button>
+        <button class="btn ${order.status === 'completed' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">View / Edit</button>
         ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
         ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
       </div>
