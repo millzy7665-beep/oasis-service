@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v209'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v210'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -379,6 +379,15 @@ class NotificationManager {
       }
     } catch (error) {
       console.warn('Local notification permission request failed', error);
+    }
+
+    try {
+      const pushNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.PushNotifications : null;
+      if (pushNotifications?.requestPermissions) {
+        await pushNotifications.requestPermissions();
+      }
+    } catch (error) {
+      console.warn('Native push permission request failed', error);
     }
   }
 
@@ -659,6 +668,17 @@ function isAndroidDevice() {
   return /android/i.test(navigator.userAgent || '');
 }
 
+function isCapacitorNativeApp() {
+  try {
+    if (typeof Capacitor === 'undefined') return false;
+    return typeof Capacitor.isNativePlatform === 'function'
+      ? Capacitor.isNativePlatform()
+      : !!Capacitor.Plugins;
+  } catch (error) {
+    return false;
+  }
+}
+
 function isProbablyAndroidInAppBrowser() {
   if (!isAndroidDevice() || typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
@@ -674,6 +694,9 @@ function isStandaloneDisplayMode() {
 }
 
 function getPushSupportDiagnostic() {
+  if (isCapacitorNativeApp()) {
+    return '';
+  }
   if (typeof window === 'undefined' || typeof navigator === 'undefined') {
     return 'Notifications are unavailable in this browser context.';
   }
@@ -700,6 +723,35 @@ function getPushSupportDiagnostic() {
 
 function browserSupportsPushNotifications() {
   return !getPushSupportDiagnostic();
+}
+
+async function registerPushTokenForCurrentUser(token, platform = 'web', permission = 'granted') {
+  const currentUser = auth.getCurrentUser();
+  if (!currentUser || !token) return false;
+
+  try {
+    const response = await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/registerPushToken', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        username: currentUser.username || '',
+        userName: currentUser.name || '',
+        deviceId: getCurrentDeviceId(),
+        platform,
+        permission
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Token registration failed: ${response.status}`);
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Failed to register push token', error);
+    return false;
+  }
 }
 
 function shouldResetPushSubscription() {
@@ -758,13 +810,67 @@ async function initializePushNotificationsForUser(force = false) {
     const currentUser = auth.getCurrentUser();
     if (!currentUser) return false;
 
+    await notificationManager.requestPermission().catch(() => {});
+
+    if (isCapacitorNativeApp()) {
+      const pushNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.PushNotifications : null;
+      if (!pushNotifications) {
+        console.warn('Native push plugin unavailable');
+        return false;
+      }
+
+      try {
+        let permissionState = { receive: 'granted' };
+        if (pushNotifications.checkPermissions) {
+          permissionState = await pushNotifications.checkPermissions();
+        }
+        if (permissionState.receive === 'prompt' && pushNotifications.requestPermissions) {
+          permissionState = await pushNotifications.requestPermissions();
+        }
+        if (permissionState.receive !== 'granted') {
+          console.warn('Native push permission not granted', permissionState);
+          return false;
+        }
+
+        if (!window.__oasisNativePushBound) {
+          pushNotifications.addListener('registration', async tokenInfo => {
+            const token = String(tokenInfo?.value || '').trim();
+            if (!token) return;
+            await registerPushTokenForCurrentUser(token, 'android-native', 'granted');
+          });
+
+          pushNotifications.addListener('registrationError', error => {
+            console.warn('Native push registration error', error);
+          });
+
+          pushNotifications.addListener('pushNotificationReceived', notification => {
+            notificationManager.presentLiveNotification({
+              title: notification?.title || 'New OASIS update',
+              message: notification?.body || 'You have a new update.',
+              recipient: auth.getCurrentUser()?.name || ''
+            });
+          });
+
+          pushNotifications.addListener('pushNotificationActionPerformed', event => {
+            console.log('Push action performed', event);
+          });
+
+          window.__oasisNativePushBound = true;
+        }
+
+        await pushNotifications.register();
+        return true;
+      } catch (error) {
+        console.warn('Native push setup failed', error);
+        return false;
+      }
+    }
+
     const diagnostic = getPushSupportDiagnostic();
     if (diagnostic) {
       console.warn('Push unavailable:', diagnostic);
       return false;
     }
-
-    await notificationManager.requestPermission().catch(() => {});
 
     if (typeof window === 'undefined' || typeof Notification === 'undefined') return false;
     if (Notification.permission !== 'granted') return false;
@@ -790,27 +896,11 @@ async function initializePushNotificationsForUser(force = false) {
 
     if (!token) return false;
 
-    // Register token server-side via CORS-enabled Cloud Function
-    try {
-      const response = await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/registerPushToken', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token,
-          username: currentUser.username || '',
-          userName: currentUser.name || '',
-          deviceId: getCurrentDeviceId(),
-          platform: /android/i.test(navigator.userAgent) ? 'android-pwa' : (isIosLikeDevice() ? 'ios-pwa' : 'web'),
-          permission: Notification.permission
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Token registration failed: ${response.status}`);
-      }
-    } catch (error) {
-      console.warn('Failed to register push token', error);
-    }
+    await registerPushTokenForCurrentUser(
+      token,
+      /android/i.test(navigator.userAgent) ? 'android-pwa' : (isIosLikeDevice() ? 'ios-pwa' : 'web'),
+      Notification.permission
+    );
 
     if (!window.__oasisMessagingOnMessageBound) {
       messaging.onMessage(payload => {
@@ -8411,7 +8501,7 @@ async function enablePhoneNotifications() {
 
   await notificationManager.requestPermission();
 
-  if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+  if (!isCapacitorNativeApp() && typeof Notification !== 'undefined' && Notification.permission === 'denied') {
     alert('Notifications are currently blocked for Oasis on this phone. Please allow them in the browser or Home Screen app settings, then try again.');
     showToast('Notifications are blocked on this phone');
     return false;

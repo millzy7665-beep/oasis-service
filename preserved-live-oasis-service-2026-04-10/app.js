@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v209'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v210'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -376,6 +376,15 @@ class NotificationManager {
       }
     } catch (error) {
       console.warn('Local notification permission request failed', error);
+    }
+
+    try {
+      const pushNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.PushNotifications : null;
+      if (pushNotifications?.requestPermissions) {
+        await pushNotifications.requestPermissions();
+      }
+    } catch (error) {
+      console.warn('Native push permission request failed', error);
     }
   }
 
@@ -638,6 +647,17 @@ function isAndroidDevice() {
   return /android/i.test(navigator.userAgent || '');
 }
 
+function isCapacitorNativeApp() {
+  try {
+    if (typeof Capacitor === 'undefined') return false;
+    return typeof Capacitor.isNativePlatform === 'function'
+      ? Capacitor.isNativePlatform()
+      : !!Capacitor.Plugins;
+  } catch (error) {
+    return false;
+  }
+}
+
 function isProbablyAndroidInAppBrowser() {
   if (!isAndroidDevice() || typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
@@ -653,6 +673,9 @@ function isStandaloneDisplayMode() {
 }
 
 function getPushSupportDiagnostic() {
+  if (isCapacitorNativeApp()) {
+    return '';
+  }
   if (typeof window === 'undefined' || typeof navigator === 'undefined') {
     return 'Notifications are unavailable in this browser context.';
   }
@@ -679,6 +702,35 @@ function getPushSupportDiagnostic() {
 
 function browserSupportsPushNotifications() {
   return !getPushSupportDiagnostic();
+}
+
+async function registerPushTokenForCurrentUser(token, platform = 'web', permission = 'granted') {
+  const currentUser = auth.getCurrentUser();
+  if (!currentUser || !token) return false;
+
+  try {
+    const response = await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/registerPushToken', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        username: currentUser.username || '',
+        userName: currentUser.name || '',
+        deviceId: getCurrentDeviceId(),
+        platform,
+        permission
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Token registration failed: ${response.status}`);
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Failed to register push token', error);
+    return false;
+  }
 }
 
 function shouldResetPushSubscription() {

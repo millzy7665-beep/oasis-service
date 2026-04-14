@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "156557428291",
+    "project_id": "oasis-service-app-69def",
+    "storage_bucket": "oasis-service-app-69def.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:156557428291:android:a139eba872f57bcc65f6f6",
+        "android_client_info": {
+          "package_name": "com.oasis.serviceandrepair"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBEuoB6pOfIWLc4Yn9rClqnMGm6o3C1UOA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
