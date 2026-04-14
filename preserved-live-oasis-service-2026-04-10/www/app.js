@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v212'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v213'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -8453,9 +8453,11 @@ async function enablePhoneNotifications() {
 
   const enabled = await initializePushNotificationsForUser(true);
   if (!enabled) {
-    const fallbackMessage = isIosLikeDevice()
-      ? 'Push setup did not complete. Please launch Oasis from the Home Screen and try again.'
-      : 'Push setup did not complete. Please allow notifications for this site and try again.';
+    const fallbackMessage = isCapacitorNativeApp()
+      ? 'Push setup did not complete yet. Please make sure Android notifications are allowed for OASIS, then tap Enable Phone Notifications again.'
+      : (isIosLikeDevice()
+        ? 'Push setup did not complete. Please launch Oasis from the Home Screen and try again.'
+        : 'Push setup did not complete. Please allow notifications for this site and try again.');
     alert(fallbackMessage);
     showToast('Phone notification setup incomplete');
     return false;
