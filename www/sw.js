@@ -16,8 +16,8 @@ const messaging = firebase.messaging();
 const CACHE = 'oasis-v228';
 const PRECACHE = [
   './index.html',
-  './app.js?v=230',
-  './styles.css?v=230',
+  './app.js?v=231',
+  './styles.css?v=231',
   './manifest.json',
   './oasis-logo.png',
 ];

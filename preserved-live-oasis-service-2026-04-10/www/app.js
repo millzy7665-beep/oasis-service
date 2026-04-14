@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v230'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v231'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -9084,12 +9084,15 @@ async function completeRepairWorkOrder(orderId = '') {
   }
 
   const statusField = document.getElementById('repair-status');
+  if (statusField && !Array.from(statusField.options || []).some(option => option.value === 'completed')) {
+    statusField.insertAdjacentHTML('beforeend', '<option value="completed">Completed</option>');
+  }
   if (statusField) statusField.value = 'completed';
 
-  return saveRepairWorkOrder(orderId);
+  return saveRepairWorkOrder(orderId, false, 'completed');
 }
 
-async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
+async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedStatus = '') {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) return;
 
@@ -9098,7 +9101,10 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
   const previousOrder = orders.find(item => item.id === order.id);
   const previousStatus = (previousOrder?.status || '').toLowerCase();
 
-  order.status = document.getElementById('repair-status')?.value || order.status || 'open';
+  order.status = String(forcedStatus || document.getElementById('repair-status')?.value || order.status || 'open').toLowerCase();
+  if (order.status === 'completed') {
+    order.completedAt = previousOrder?.completedAt || new Date().toISOString();
+  }
   order.updatedAt = new Date().toISOString();
   order.updatedBy = currentUser?.name || '';
 
@@ -9358,7 +9364,12 @@ async function exportDailyWorkOrders() {
   const selectedDate = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const orders = getRepairOrders()
-    .filter(order => isCompleted(order.status) && order.date === selectedDate)
+    .filter(order => {
+      if (!isCompleted(order.status)) return false;
+      const workDate = String(order.date || '').trim();
+      const completedDate = String(order.completedAt || '').slice(0, 10);
+      return workDate === selectedDate || completedDate === selectedDate;
+    })
     .sort((a, b) => compareAlphaNumeric(a?.clientName || '', b?.clientName || '') || compareAlphaNumeric(a?.address || '', b?.address || ''));
 
   if (orders.length === 0) {
