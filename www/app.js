@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v224'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v225'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -699,6 +699,18 @@ function userNamesMatch(a = '', b = '') {
 }
 
 let pushInitInFlight = null;
+let pushSetupMode = 'unknown';
+let pushSetupMessage = '';
+
+function setPushSetupState(mode = 'unknown', message = '') {
+  pushSetupMode = mode;
+  pushSetupMessage = String(message || '');
+
+  if (typeof window !== 'undefined') {
+    window.__oasisPushSetupMode = pushSetupMode;
+    window.__oasisPushSetupMessage = pushSetupMessage;
+  }
+}
 
 function getFirebaseMessagingInstance() {
   if (typeof firebase === 'undefined' || typeof firebase.messaging !== 'function') return null;
@@ -881,14 +893,19 @@ async function initializePushNotificationsForUser(force = false) {
 
   pushInitInFlight = (async () => {
     const currentUser = auth.getCurrentUser();
-    if (!currentUser) return false;
+    if (!currentUser) {
+      setPushSetupState('error', 'Please sign in first.');
+      return false;
+    }
 
+    setPushSetupState('pending', 'Preparing phone notifications...');
     await notificationManager.requestPermission().catch(() => {});
 
     if (isCapacitorNativeApp()) {
       const pushNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.PushNotifications : null;
       if (!pushNotifications) {
         console.warn('Native push plugin unavailable');
+        setPushSetupState('error', 'Native push is unavailable on this install.');
         return false;
       }
 
@@ -902,6 +919,7 @@ async function initializePushNotificationsForUser(force = false) {
         }
         if (permissionState.receive === 'denied') {
           console.warn('Native push permission denied', permissionState);
+          setPushSetupState('error', 'Android notifications are blocked for Oasis on this phone.');
           alert('Android notifications are currently blocked for Oasis. Please enable them in Settings > Apps > OASIS Service > Notifications, then try again.');
           return false;
         }
@@ -924,14 +942,19 @@ async function initializePushNotificationsForUser(force = false) {
             }
             const saved = await registerPushTokenForCurrentUser(token, 'android-native', 'granted');
             if (saved) {
+              setPushSetupState('push', 'Phone notifications enabled.');
               showToast('Phone notifications enabled');
+            } else {
+              setPushSetupState('local-only', 'Live alerts will still show while Oasis is open on this device.');
             }
-            finish(saved);
+            finish(saved || permissionState.receive === 'granted');
           });
 
           pushNotifications.addListener('registrationError', error => {
             console.warn('Native push registration error', error);
-            alert(`Phone notification setup failed: ${error?.error || error?.message || 'registration error'}`);
+            const details = error?.error || error?.message || 'registration error';
+            setPushSetupState('local-only', `Live alerts will still show while Oasis is open on this device. ${details}`);
+            alert(`Phone notification setup failed: ${details}`);
             finish(false);
           });
 
@@ -962,6 +985,7 @@ async function initializePushNotificationsForUser(force = false) {
         return nativeRegistrationResult;
       } catch (error) {
         console.warn('Native push setup failed', error);
+        setPushSetupState('error', String(error?.message || error || 'Native push setup failed'));
         return false;
       }
     }
@@ -969,15 +993,28 @@ async function initializePushNotificationsForUser(force = false) {
     const diagnostic = getPushSupportDiagnostic();
     if (diagnostic) {
       console.warn('Push unavailable:', diagnostic);
+      setPushSetupState('error', diagnostic);
       return false;
     }
 
-    if (typeof window === 'undefined' || typeof Notification === 'undefined') return false;
-    if (Notification.permission !== 'granted') return false;
-    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return false;
+    if (typeof window === 'undefined' || typeof Notification === 'undefined') {
+      setPushSetupState('error', 'Notifications are unavailable in this browser context.');
+      return false;
+    }
+    if (Notification.permission !== 'granted') {
+      setPushSetupState('error', 'Please allow notifications for Oasis on this device.');
+      return false;
+    }
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
+      setPushSetupState('local-only', 'Live alerts will show while Oasis is open on this device.');
+      return true;
+    }
 
     const messaging = getFirebaseMessagingInstance();
-    if (!messaging) return false;
+    if (!messaging) {
+      setPushSetupState('local-only', 'Live alerts will show while Oasis is open on this device.');
+      return true;
+    }
 
     const serviceWorkerRegistration = await navigator.serviceWorker.ready;
     if (typeof messaging.useServiceWorker === 'function') {
@@ -991,10 +1028,14 @@ async function initializePushNotificationsForUser(force = false) {
       token = await getMessagingTokenWithRecovery(messaging, serviceWorkerRegistration, vapidKey);
     } catch (error) {
       console.warn('FCM token fetch failed', error);
-      return false;
+      setPushSetupState('local-only', 'Live alerts will show while Oasis is open on this device.');
+      return true;
     }
 
-    if (!token) return false;
+    if (!token) {
+      setPushSetupState('local-only', 'Live alerts will show while Oasis is open on this device.');
+      return true;
+    }
 
     const saved = await registerPushTokenForCurrentUser(
       token,
@@ -1003,7 +1044,11 @@ async function initializePushNotificationsForUser(force = false) {
     );
 
     if (saved) {
+      setPushSetupState('push', 'Phone notifications enabled.');
       showToast('Phone notifications enabled');
+    } else {
+      setPushSetupState('local-only', 'Live alerts will show while Oasis is open on this device.');
+      showToast('Notifications enabled for this device');
     }
 
     if (!window.__oasisMessagingOnMessageBound) {
@@ -8691,17 +8736,26 @@ async function enablePhoneNotifications() {
 
   const enabled = await initializePushNotificationsForUser(true);
   if (!enabled) {
-    const fallbackMessage = isCapacitorNativeApp()
+    const fallbackMessage = pushSetupMessage || (isCapacitorNativeApp()
       ? 'Push setup did not complete yet. Please make sure Android notifications are allowed for OASIS, then tap Enable Phone Notifications again.'
       : (isIosLikeDevice()
         ? 'Push setup did not complete. Please launch Oasis from the Home Screen and try again.'
-        : 'Push setup did not complete. Please allow notifications for this site and try again.');
+        : 'Push setup did not complete. Please allow notifications for this site and try again.'));
     alert(fallbackMessage);
     showToast('Phone notification setup incomplete');
     return false;
   }
 
-  showToast('Waiting for phone registration...');
+  await notificationManager.presentLiveNotification({
+    title: 'OASIS Notifications On',
+    message: pushSetupMode === 'push'
+      ? 'This phone is ready for new and completed work order alerts.'
+      : 'This phone will now show live OASIS alerts while the app is open.',
+    recipient: user.name,
+    targetDeviceId: getCurrentDeviceId()
+  });
+
+  showToast(pushSetupMode === 'push' ? 'Phone notifications enabled' : 'Live device alerts enabled');
   return true;
 }
 
