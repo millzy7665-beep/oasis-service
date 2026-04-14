@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v206'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v207'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -416,7 +416,23 @@ class NotificationManager {
       console.warn('Browser notification failed', error);
     }
 
-    showToast(item.title);
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate([250, 120, 250]);
+      }
+    } catch (error) {
+      console.warn('Vibration unavailable', error);
+    }
+
+    showToast(`${item.title}: ${item.message}`);
+
+    try {
+      if (typeof alert === 'function') {
+        alert(`${item.title}\n\n${item.message}`);
+      }
+    } catch (error) {
+      console.warn('Alert fallback unavailable', error);
+    }
   }
 
   async create({ type = 'update', title = 'New update', message = '', recipients = [], targetView = '', targetId = '', actionLabel = 'Open', targetDeviceId = '' }) {
@@ -1568,6 +1584,7 @@ class Router {
           <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Send a visible test notification to this device for the current signed-in user.</p>
           <button class="btn btn-primary" onclick="sendTestNotification()" style="width: 100%;">Send Test Notification</button>
           <button class="btn btn-secondary" onclick="useThisDeviceForAlerts()" style="width: 100%; margin-top: 8px;">Use This Device For Alerts</button>
+          <button class="btn btn-secondary" onclick="enablePhoneNotifications()" style="width: 100%; margin-top: 8px;">Enable Phone Notifications</button>
         </div>
       </div>
 
@@ -8323,6 +8340,26 @@ function useThisDeviceForAlerts() {
   showToast('This device is now selected for your alerts');
 }
 
+async function enablePhoneNotifications() {
+  const user = auth.getCurrentUser();
+  if (!user?.name) {
+    showToast('Sign in required');
+    return false;
+  }
+
+  markCurrentDeviceAsPreferred(user);
+
+  if (isIosLikeDevice() && !isStandaloneDisplayMode()) {
+    alert('On iPhone or iPad, first add Oasis to your Home Screen, then reopen it there and tap Enable Phone Notifications again.');
+    return false;
+  }
+
+  await notificationManager.requestPermission();
+  const enabled = await initializePushNotificationsForUser(true);
+  showToast(enabled ? 'Phone notifications enabled' : 'Phone notifications are not available in this browser yet');
+  return enabled;
+}
+
 async function sendTestNotification() {
   const user = auth.getCurrentUser();
   if (!user?.name) {
@@ -8331,19 +8368,24 @@ async function sendTestNotification() {
   }
 
   const targetDeviceId = getPreferredNotificationDeviceId(user.name) || markCurrentDeviceAsPreferred(user);
-
-  await notificationManager.create({
+  const item = {
     type: 'update',
     title: 'OASIS Test Sheet',
     message: 'This is a visible in-app test notification.',
-    recipients: [user.name],
+    recipient: user.name,
     targetView: 'dashboard',
     targetId: '',
     targetDeviceId,
     actionLabel: 'Open'
+  };
+
+  await notificationManager.presentLiveNotification(item);
+  await notificationManager.create({
+    ...item,
+    recipients: [user.name]
   });
 
-  showToast('Test notification created');
+  showToast('Test notification sent to this device');
 }
 
 async function shareAppLink() {
