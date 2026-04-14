@@ -24,6 +24,7 @@
   "homepage": "https://github.com/millzy7665-beep/oasis-service#readme",
   "dependencies": {
     "@capacitor/android": "^8.3.0",
+    "@capacitor/app": "^8.1.0",
     "@capacitor/cli": "^8.3.0",
     "@capacitor/core": "^8.3.0",
     "@capacitor/filesystem": "^8.1.2",
