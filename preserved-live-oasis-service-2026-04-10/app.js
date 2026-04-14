@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v205'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v206'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -322,6 +322,7 @@ async function enqueuePushDispatch(item = {}) {
     broadcast: item.recipient === 'all',
     targetView: item.targetView || '',
     targetId: item.targetId || '',
+    targetDeviceId: item.targetDeviceId || getPreferredNotificationDeviceId(item.recipient || ''),
     senderUsername: currentUser.username || '',
     senderName: currentUser.name || '',
     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -419,6 +420,7 @@ class NotificationManager {
     const targetRecipients = [...new Set((Array.isArray(recipients) ? recipients : [recipients]).filter(Boolean))];
 
     for (const recipient of targetRecipients) {
+      const resolvedTargetDeviceId = targetDeviceId || getPreferredNotificationDeviceId(recipient);
       const item = {
         id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         type,
@@ -428,7 +430,7 @@ class NotificationManager {
         createdAt,
         targetView,
         targetId,
-        targetDeviceId,
+        targetDeviceId: resolvedTargetDeviceId,
         actionLabel,
         read: false
       };

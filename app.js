@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v205'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v206'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -322,6 +322,7 @@ async function enqueuePushDispatch(item = {}) {
     broadcast: item.recipient === 'all',
     targetView: item.targetView || '',
     targetId: item.targetId || '',
+    targetDeviceId: item.targetDeviceId || getPreferredNotificationDeviceId(item.recipient || ''),
     senderUsername: currentUser.username || '',
     senderName: currentUser.name || '',
     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -348,9 +349,12 @@ class NotificationManager {
   getForUser(user = auth.getCurrentUser()) {
     const userName = user?.name || '';
     const currentDeviceId = getCurrentDeviceId();
+    const preferredDeviceId = getPreferredNotificationDeviceId(userName);
     return this.getAll().filter(item => {
       const recipientMatches = userNamesMatch(item.recipient, userName) || item.recipient === 'all';
-      const deviceMatches = !item.targetDeviceId || item.targetDeviceId === currentDeviceId;
+      const deviceMatches = item.targetDeviceId
+        ? item.targetDeviceId === currentDeviceId
+        : (!preferredDeviceId || preferredDeviceId === currentDeviceId);
       return recipientMatches && deviceMatches;
     });
   }
@@ -381,8 +385,10 @@ class NotificationManager {
   async presentLiveNotification(item) {
     const currentUser = auth.getCurrentUser();
     const currentDeviceId = getCurrentDeviceId();
+    const preferredDeviceId = getPreferredNotificationDeviceId(currentUser?.name || '');
     if (!currentUser || !userNamesMatch(item.recipient, currentUser.name)) return;
     if (item.targetDeviceId && item.targetDeviceId !== currentDeviceId) return;
+    if (!item.targetDeviceId && preferredDeviceId && preferredDeviceId !== currentDeviceId) return;
 
     try {
       const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
@@ -419,6 +425,7 @@ class NotificationManager {
     const targetRecipients = [...new Set((Array.isArray(recipients) ? recipients : [recipients]).filter(Boolean))];
 
     for (const recipient of targetRecipients) {
+      const resolvedTargetDeviceId = targetDeviceId || getPreferredNotificationDeviceId(recipient);
       const item = {
         id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         type,
@@ -428,7 +435,7 @@ class NotificationManager {
         createdAt,
         targetView,
         targetId,
-        targetDeviceId,
+        targetDeviceId: resolvedTargetDeviceId,
         actionLabel,
         read: false
       };
@@ -740,7 +747,8 @@ async function initializePushNotificationsForUser() {
           token,
           username: currentUser.username || '',
           userName: currentUser.name || '',
-          platform: /android/i.test(navigator.userAgent) ? 'android-pwa' : 'web',
+          deviceId: getCurrentDeviceId(),
+          platform: /android/i.test(navigator.userAgent) ? 'android-pwa' : (isIosLikeDevice() ? 'ios-pwa' : 'web'),
           permission: Notification.permission
         })
       });

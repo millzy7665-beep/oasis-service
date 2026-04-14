@@ -45,6 +45,7 @@ exports.debugPushStatus = functions.https.onRequest(async (req, res) => {
     const username = String(body.username || '').trim();
     const platform = String(body.platform || 'web').trim();
     const permission = String(body.permission || 'granted').trim();
+    const deviceId = String(body.deviceId || '').trim();
 
     if (!token || !userName) {
       res.status(400).json({ error: 'token and userName required' });
@@ -58,6 +59,7 @@ exports.debugPushStatus = functions.https.onRequest(async (req, res) => {
       canonicalUserName: canonicalUserName(userName),
       platform,
       permission,
+      deviceId,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
@@ -112,6 +114,7 @@ exports.debugPushStatus = functions.https.onRequest(async (req, res) => {
         id: doc.id,
         platform: data.platform || '',
         permission: data.permission || '',
+        deviceId: data.deviceId || '',
         updatedAt: data.updatedAt || null
       };
     }),
@@ -132,6 +135,7 @@ exports.registerPushToken = functions.https.onRequest(async (req, res) => {
   const username = String(body.username || '').trim();
   const platform = String(body.platform || 'web').trim();
   const permission = String(body.permission || 'granted').trim();
+  const deviceId = String(body.deviceId || '').trim();
 
   if (!token || !userName) {
     res.status(400).json({ error: 'token and userName required' });
@@ -145,6 +149,7 @@ exports.registerPushToken = functions.https.onRequest(async (req, res) => {
     canonicalUserName: canonicalUserName(userName),
     platform,
     permission,
+    deviceId,
     updatedAt: admin.firestore.FieldValue.serverTimestamp()
   }, { merge: true });
 
@@ -170,6 +175,7 @@ exports.dispatchQueuedPush = functions.firestore
     const body = String(data.body || 'You have a new update.');
     const targetView = String(data.targetView || 'dashboard');
     const targetId = String(data.targetId || '');
+    const targetDeviceId = String(data.targetDeviceId || '').trim();
 
     let tokenDocs = [];
 
@@ -182,6 +188,10 @@ exports.dispatchQueuedPush = functions.firestore
         .where('canonicalUserName', '==', canonicalRecipient)
         .get();
       tokenDocs = tokenSnap.docs;
+    }
+
+    if (targetDeviceId) {
+      tokenDocs = tokenDocs.filter(doc => String(doc.get('deviceId') || '').trim() === targetDeviceId);
     }
 
     const tokens = tokenDocs
