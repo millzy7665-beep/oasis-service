@@ -2026,7 +2026,7 @@ class Router {
         <div class="wo-bar">
           <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
           <div id="wo-client-name" class="wo-bar-title">${order.clientName || 'Chem Sheet'}</div>
-          <button class="btn btn-primary btn-sm" onclick="saveWorkOrderForm('${order.id}')">Save</button>
+          <button class="btn btn-primary btn-sm" onclick="saveWorkOrderForm('${order.id}', true)">Save & Complete</button>
         </div>
 
         <div class="wo-sec">
@@ -2178,7 +2178,7 @@ class Router {
 
         <div class="card" style="margin:12px;">
           <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button class="btn btn-secondary" onclick="saveWorkOrderForm('${order.id}')">Save Changes</button>
+            <button class="btn btn-secondary" onclick="saveWorkOrderForm('${order.id}', true)">Save & Complete</button>
             ${auth.canShare() ? `<button class="btn send-report-btn" onclick="shareReport('${order.id}')">Share Report</button>` : ''}
           </div>
         </div>
@@ -7018,7 +7018,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
       <div class="wo-bar">
         <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
         <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Work Order'}</div>
-        <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
+        <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}', false, 'completed')">Save & Complete</button>
       </div>
 
       <div class="wo-sec">
@@ -7121,16 +7121,9 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 
       <div class="card" style="margin:12px;">
         <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save Changes</button>
-          <button id="repair-complete-btn" class="btn btn-primary" onclick="completeRepairWorkOrder('${escapeHtml(activeOrderId)}')" ${(!isCompleted && readyToComplete) ? '' : 'disabled'}>${isCompleted ? 'Completed' : 'Complete Work Order'}</button>
-          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true)">Share Report</button>` : ''}
-          <div id="repair-completion-hint" class="wo-hint" style="flex-basis:100%;margin:0;">
-            ${isCompleted
-              ? 'This work order is already completed.'
-              : (readyToComplete
-                ? 'All required sections are filled in and ready to complete.'
-                : 'Fill in client, address, date, assigned tech, work order type, and summary to enable completion.')}
-          </div>
+          <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', false, 'completed')">Save & Complete</button>
+          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true, 'completed')">Share Report</button>` : ''}
+          <div class="wo-hint" style="flex-basis:100%;margin:0;">Saving this work order now submits it as completed and makes it ready for the daily download.</div>
         </div>
       </div>
     </div>
@@ -8935,7 +8928,7 @@ function onChemClientChange() {
   }
 }
 
-function saveWorkOrderForm(orderId) {
+function saveWorkOrderForm(orderId, forceComplete = true) {
   const previousOrder = workOrderManager.getOrder(orderId);
   const order = collectWorkOrderForm(orderId);
   if (!order) {
@@ -8945,7 +8938,7 @@ function saveWorkOrderForm(orderId) {
 
   const currentUser = auth.getCurrentUser();
   const previousStatus = (previousOrder?.status || '').toLowerCase();
-  order.status = String(document.getElementById('wo-status')?.value || order.status || 'pending').toLowerCase();
+  order.status = String(forceComplete ? 'completed' : (document.getElementById('wo-status')?.value || order.status || 'pending')).toLowerCase();
   order.technician = normalizeTechnicianName(order.technician || '');
   if (order.status === 'completed') {
     order.completedAt = previousOrder?.completedAt || new Date().toISOString();
@@ -9092,7 +9085,7 @@ async function completeRepairWorkOrder(orderId = '') {
   return saveRepairWorkOrder(orderId, false, 'completed');
 }
 
-async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedStatus = '') {
+async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedStatus = 'completed') {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) return;
 
