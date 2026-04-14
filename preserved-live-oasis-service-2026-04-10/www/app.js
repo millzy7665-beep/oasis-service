@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v215'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v216'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -566,6 +566,49 @@ function normalizeTechnicianName(name = '') {
 
   const match = getTechnicianNames().find(item => item.toLowerCase() === value.toLowerCase());
   return match || value;
+}
+
+function normalizeServiceDays(value = []) {
+  const rawDays = Array.isArray(value)
+    ? value
+    : String(value || '').split(',');
+
+  const dayMap = {
+    mon: 'Monday', monday: 'Monday',
+    tue: 'Tuesday', tues: 'Tuesday', tuesday: 'Tuesday',
+    wed: 'Wednesday', weds: 'Wednesday', wednesday: 'Wednesday',
+    thu: 'Thursday', thur: 'Thursday', thurs: 'Thursday', thursday: 'Thursday',
+    fri: 'Friday', friday: 'Friday',
+    sat: 'Saturday', saturday: 'Saturday',
+    sun: 'Sunday', sunday: 'Sunday'
+  };
+
+  return [...new Set(rawDays
+    .map(day => String(day || '').trim())
+    .filter(Boolean)
+    .map(day => dayMap[day.toLowerCase()] || day))];
+}
+
+function getClientTechnician(client = {}) {
+  return normalizeTechnicianName(client?.technician || client?.tech || '');
+}
+
+function getClientServiceDays(client = {}) {
+  return normalizeServiceDays(client?.serviceDays || client?.serviceDay || []);
+}
+
+function formatDisplayDate(value = '') {
+  const dateKey = String(value || '').trim();
+  if (!dateKey) return '';
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    const [year, month, day] = dateKey.split('-');
+    return `${day}/${month}/${year}`;
+  }
+
+  const parsed = new Date(dateKey);
+  if (Number.isNaN(parsed.getTime())) return dateKey;
+  return parsed.toLocaleDateString('en-GB');
 }
 
 function getCurrentDeviceId() {
@@ -1045,15 +1088,15 @@ class Router {
     const visibleRepairOrders = this.getVisibleJobs(typeof getRepairOrders === 'function' ? getRepairOrders() : [], 'assignedTo');
     const unreadNotifications = notificationManager.getUnreadForUser(user).length;
 
-    const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+    const todayStr = `${todayDay}, ${formatDisplayDate(new Date())}`;
 
     const allClients = db.get('clients', []);
     const myRouteClients = isAdmin
-      ? allClients.filter(c => c.serviceDays && c.serviceDays.includes(todayDay))
-      : allClients.filter(c => userNamesMatch(c.technician || '', userName) && c.serviceDays && c.serviceDays.includes(todayDay));
-    const myTechClients = isAdmin ? allClients : allClients.filter(c => userNamesMatch(c.technician || '', userName));
-    const myTotalClients = myTechClients.reduce((sum, c) => sum + (c.serviceDays ? c.serviceDays.length : 0), 0);
+      ? allClients.filter(c => getClientServiceDays(c).includes(todayDay))
+      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).includes(todayDay));
+    const myTechClients = isAdmin ? allClients : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName));
+    const myTotalClients = myTechClients.reduce((sum, c) => sum + getClientServiceDays(c).length, 0);
 
     // Open and pending work orders
     const myRepairOrders = visibleRepairOrders.filter(r => {
@@ -1133,7 +1176,7 @@ class Router {
           <div class="list-item-avatar" style="background:#fff8e1; color:#f57f17;">⏳</div>
           <div class="list-item-info">
             <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
-            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
+            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(formatDisplayDate(order.date) || 'No date')}</div>
             <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
           </div>
           <div class="list-item-actions">
@@ -1152,7 +1195,7 @@ class Router {
           <div class="list-item-avatar" style="background:#fff3e0; color:#e65100;">🛠️</div>
           <div class="list-item-info">
             <div class="list-item-name">${escapeHtml(order.clientName || 'Repair Job')}</div>
-            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(order.date || 'No date')}</div>
+            <div class="list-item-sub">${escapeHtml(order.jobType || 'General Repair')} • ${escapeHtml(formatDisplayDate(order.date) || 'No date')}</div>
             <div class="list-item-sub" style="font-size:11px; color:#666;">📍 ${escapeHtml(order.address || '')}${!isAdmin && order.assignedTo ? '' : ` • 👤 ${escapeHtml(order.assignedTo || 'Unassigned')}`}</div>
           </div>
           <div class="list-item-actions">
@@ -1261,17 +1304,17 @@ class Router {
     // Admin: can filter by any tech. Field tech: shows only their own clients.
     let techFilter = isAdmin ? (this._routeTechFilter || 'all') : (user ? user.name : '');
     const techClients = techFilter === 'all'
-      ? allClients.filter(c => c.serviceDays && c.serviceDays.length)
-      : allClients.filter(c => c.technician === techFilter && c.serviceDays && c.serviceDays.length);
+      ? allClients.filter(c => getClientServiceDays(c).length)
+      : allClients.filter(c => userNamesMatch(getClientTechnician(c), techFilter) && getClientServiceDays(c).length);
 
-    const techs = [...new Set(allClients.filter(c => c.technician).map(c => c.technician))].sort();
+    const techs = [...new Set(allClients.map(c => getClientTechnician(c)).filter(Boolean))].sort();
 
     this._routeDayFilter = this._routeDayFilter || today;
     const dayFilter = this._routeDayFilter;
 
     const dayClients = dayFilter === 'all'
       ? techClients
-      : techClients.filter(c => c.serviceDays && c.serviceDays.includes(dayFilter));
+      : techClients.filter(c => getClientServiceDays(c).includes(dayFilter));
 
     content.innerHTML = `
       <div class="section-header">
@@ -1323,7 +1366,7 @@ class Router {
   }
 
   renderRouteCard(client) {
-    const daysLabel = (client.serviceDays || []).map(d => d.substring(0, 3)).join(', ');
+    const daysLabel = getClientServiceDays(client).map(d => d.substring(0, 3)).join(', ');
     const _rcUser = auth.getCurrentUser();
     const _rcIsAdmin = auth.isAdmin();
     const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.username === 't9' || _rcUser?.username === 't10');
@@ -1387,7 +1430,7 @@ class Router {
     const canManageClients = isAdmin || isJetOrMark;
     const scopedClients = canManageClients
       ? allClients
-      : allClients.filter(client => (client.technician || '') === (currentUser?.name || ''));
+      : allClients.filter(client => userNamesMatch(getClientTechnician(client), (currentUser?.name || '')));
 
     const clients = (query
       ? scopedClients.filter(c =>
@@ -1571,7 +1614,8 @@ class Router {
   }
 
   renderJobCard(wo, canShare, isAdmin, currentUser) {
-    const isCompleted = wo.status === 'completed';
+    const status = String(wo.status || 'pending').toLowerCase();
+    const isCompleted = status === 'completed';
     return `
       <div class="job-card ${isCompleted ? 'job-card-completed' : ''}">
         <div class="job-card-header">
@@ -1579,7 +1623,7 @@ class Router {
             <div class="job-card-title">${wo.clientName}</div>
             <div class="job-card-customer">${wo.address}</div>
             <div class="job-meta">
-              <div class="job-meta-item">📅 ${wo.date}</div>
+              <div class="job-meta-item">📅 ${formatDisplayDate(wo.date) || 'No date'}</div>
               <div class="job-meta-item">⏰ ${wo.time || 'TBD'}</div>
               ${currentUser.role === 'admin' ? `<div class="job-meta-item">👤 ${wo.technician || 'Unknown'}</div>` : ''}
             </div>
@@ -1587,7 +1631,7 @@ class Router {
           <button class="btn btn-icon" onclick="openMap('${wo.address}')" title="View on Map">📍</button>
         </div>
         <div class="job-card-body">
-          <div class="badge badge-${wo.status || 'pending'}">${wo.status || 'pending'}</div>
+          <div class="badge badge-${status}">${status.replace('-', ' ')}</div>
         </div>
         <div class="job-card-footer">
           <button class="btn ${isCompleted ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="router.viewWorkOrder('${wo.id}')">${isCompleted ? 'Completed' : 'Open'}</button>
@@ -2094,7 +2138,7 @@ class WorkOrderManager {
     if (!client) return null;
 
     const currentUser = auth.getCurrentUser();
-    const assignedTechnician = client.technician || currentUser?.name || '';
+    const assignedTechnician = getClientTechnician(client) || currentUser?.name || '';
 
     const order = {
       id: Date.now().toString(),
@@ -8618,7 +8662,8 @@ function onChemClientChange() {
   if (client) {
     if (addressField) addressField.value = client.address || '';
     if (title) title.textContent = client.name || 'Chem Sheet';
-    if (techField && client.technician) techField.value = client.technician;
+    const assignedTech = getClientTechnician(client);
+    if (techField && assignedTech) techField.value = assignedTech;
   }
 }
 
@@ -8632,7 +8677,11 @@ function saveWorkOrderForm(orderId) {
 
   const currentUser = auth.getCurrentUser();
   const previousStatus = (previousOrder?.status || '').toLowerCase();
-  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
+  order.status = String(document.getElementById('wo-status')?.value || order.status || 'pending').toLowerCase();
+  order.technician = normalizeTechnicianName(order.technician || '');
+  if (order.status === 'completed') {
+    order.completedAt = previousOrder?.completedAt || new Date().toISOString();
+  }
   order.updatedAt = new Date().toISOString();
   order.updatedBy = currentUser?.name || '';
 
