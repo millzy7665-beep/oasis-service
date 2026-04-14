@@ -13,11 +13,11 @@ firebase.initializeApp({
 });
 
 const messaging = firebase.messaging();
-const CACHE = 'oasis-v214';
+const CACHE = 'oasis-v215';
 const PRECACHE = [
   './index.html',
-  './app.js?v=214',
-  './styles.css?v=214',
+  './app.js?v=215',
+  './styles.css?v=215',
   './manifest.json',
   './oasis-logo.png',
 ];

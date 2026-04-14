@@ -187,7 +187,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v214'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v215'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1425,9 +1425,14 @@ class Router {
   renderWorkOrders() {
     const content = document.getElementById('main-content');
     const isAdmin = auth.isAdmin();
-    const canShare = auth.canShare();
-
     const completedWOs = (typeof getRepairOrders === 'function' ? getRepairOrders() : []).filter(o => (o.status || '').toLowerCase() === 'completed');
+    const todayKey = new Date().toISOString().split('T')[0];
+    const todaysPendingOpenCount = isAdmin
+      ? (typeof getRepairOrders === 'function' ? getRepairOrders() : []).filter(order => String(order.date || '') === todayKey && (order.status || '').toLowerCase() !== 'completed').length
+      : 0;
+    const pendingChemSheetCount = isAdmin
+      ? db.get('workorders', []).filter(order => (order.status || '').toLowerCase() !== 'completed').length
+      : 0;
 
     content.innerHTML = `
       <div class="section-header">
@@ -1437,21 +1442,6 @@ class Router {
           ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="renderRepairOrderForm()">+ Work Order</button>` : ''}
         </div>
       </div>
-
-      ${isAdmin ? `
-      <div class="card" style="margin: 0 16px 12px;">
-        <div class="card-body">
-          <div class="form-row" style="margin-bottom:0;">
-            <label for="admin-job-status-filter">Filter jobs by status</label>
-            <select id="admin-job-status-filter" onchange="router.setAdminJobStatusFilter(this.value)">
-              <option value="all" ${this.adminJobStatusFilter === 'all' ? 'selected' : ''}>All jobs</option>
-              <option value="pending" ${this.adminJobStatusFilter === 'pending' ? 'selected' : ''}>Pending / Open</option>
-              <option value="completed" ${this.adminJobStatusFilter === 'completed' ? 'selected' : ''}>Completed only</option>
-            </select>
-          </div>
-        </div>
-      </div>
-      ` : ''}
 
       ${isAdmin && completedWOs.length > 0 ? `
       <div class="card" style="margin: 0 16px 12px; border-left: 4px solid #4CAF50;">
@@ -1467,25 +1457,82 @@ class Router {
       </div>
       ` : ''}
 
-      ${isAdmin ? renderAdminDailyRouteSummary() : ''}
-
-      <div class="section-header" style="margin-top:4px">
-        <div class="section-title">Chem Sheets</div>
-      </div>
-      <div id="workorders-list">
-        ${this.renderWorkOrdersList()}
-      </div>
-
-      <div class="section-header" style="margin-top:10px">
-        <div class="section-title">Repair Work Orders</div>
-      </div>
-
-      <div class="card">
-        <div class="card-body">
-          ${renderRepairOrdersList(this.adminJobStatusFilter)}
+      ${isAdmin ? `
+        <div class="section-header" style="margin-top:4px">
+          <div class="section-title">Current Day Pending Open Work Orders</div>
+          <div style="font-size:12px; color:var(--gray-600);">${todaysPendingOpenCount} active today</div>
         </div>
-      </div>
+        <div class="card">
+          <div class="card-body">
+            ${renderRepairOrdersList('today-open')}
+          </div>
+        </div>
+
+        <div class="section-header" style="margin-top:10px">
+          <div class="section-title">Pending Chem Sheets by User</div>
+          <div style="font-size:12px; color:var(--gray-600);">${pendingChemSheetCount} pending</div>
+        </div>
+        <div id="workorders-list">
+          ${this.renderPendingChemSheetsByUser()}
+        </div>
+      ` : `
+        <div class="section-header" style="margin-top:4px">
+          <div class="section-title">Chem Sheets</div>
+        </div>
+        <div id="workorders-list">
+          ${this.renderWorkOrdersList()}
+        </div>
+
+        <div class="section-header" style="margin-top:10px">
+          <div class="section-title">Repair Work Orders</div>
+        </div>
+
+        <div class="card">
+          <div class="card-body">
+            ${renderRepairOrdersList(this.adminJobStatusFilter)}
+          </div>
+        </div>
+      `}
     `;
+  }
+
+  renderPendingChemSheetsByUser() {
+    const currentUser = auth.getCurrentUser();
+    const canShare = auth.canShare();
+    const pendingSheets = sortOrdersByUpcomingDate(
+      db.get('workorders', []).filter(order => (order.status || '').toLowerCase() !== 'completed')
+    );
+
+    if (!pendingSheets.length) {
+      return `
+        <div class="empty-state">
+          <div class="empty-icon">🧪</div>
+          <div class="empty-title">No pending chem sheets</div>
+          <div class="empty-subtitle">All technician chem sheets are currently completed.</div>
+        </div>
+      `;
+    }
+
+    const grouped = pendingSheets.reduce((acc, order) => {
+      const key = normalizeTechnicianName(order.technician || 'Unassigned');
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(order);
+      return acc;
+    }, {});
+
+    return Object.entries(grouped)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([techName, items]) => `
+        <div class="card" style="margin: 0 16px 12px;">
+          <div class="card-body">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px;">
+              <div style="font-weight:700; font-size:14px;">${escapeHtml(techName)}</div>
+              <span class="badge badge-pending">${items.length} pending</span>
+            </div>
+            ${items.map(wo => this.renderJobCard(wo, canShare, true, currentUser)).join('')}
+          </div>
+        </div>
+      `).join('');
   }
 
   renderWorkOrdersList() {
@@ -3395,60 +3442,6 @@ function sortOrdersByUpcomingDate(items = []) {
 
     return String(a?.clientName || '').localeCompare(String(b?.clientName || ''));
   });
-}
-
-function renderAdminDailyRouteSummary() {
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-  const clients = db.get('clients', []).filter(client =>
-    Array.isArray(client.serviceDays) && client.serviceDays.includes(today)
-  );
-
-  if (!clients.length) {
-    return `
-      <div class="card" style="margin: 0 16px 12px;">
-        <div class="card-body">
-          <div style="font-weight:600; font-size:14px; margin-bottom:4px;">Daily Chem Sheets by Route</div>
-          <div style="font-size:12px; color:#666;">No route clients are scheduled for ${escapeHtml(today)}.</div>
-        </div>
-      </div>
-    `;
-  }
-
-  const grouped = clients.reduce((acc, client) => {
-    const key = client.technician || 'Unassigned Route';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(client);
-    return acc;
-  }, {});
-
-  const techBlocks = Object.entries(grouped)
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([techName, techClients]) => {
-      const preview = techClients.slice(0, 3).map(item => item.name).join(', ');
-      const extraCount = techClients.length > 3 ? ` +${techClients.length - 3} more` : '';
-      return `
-        <div class="detail-row" style="align-items:flex-start;">
-          <div>
-            <div class="detail-value" style="text-align:left; font-weight:700;">${escapeHtml(techName)}</div>
-            <div class="detail-label" style="margin-top:3px; max-width:230px;">${escapeHtml(preview)}${escapeHtml(extraCount)}</div>
-          </div>
-          <span class="badge badge-in-progress">${techClients.length} route ${techClients.length === 1 ? 'stop' : 'stops'}</span>
-        </div>
-      `;
-    }).join('');
-
-  return `
-    <div class="card" style="margin: 0 16px 12px;">
-      <div class="card-body">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;">
-          <div style="font-weight:600; font-size:14px;">Daily Chem Sheets by Route</div>
-          <button class="btn btn-secondary btn-sm" onclick="router.navigate('routes')">Open Routes</button>
-        </div>
-        <div style="font-size:12px; color:#666; margin-bottom:6px;">${escapeHtml(today)} route schedule grouped by technician.</div>
-        ${techBlocks}
-      </div>
-    </div>
-  `;
 }
 
 function renderRepairOrdersList(statusFilter = 'all') {
@@ -6641,6 +6634,9 @@ function renderRepairOrdersList(statusFilter = 'all') {
   if (isAdmin) {
     if (statusFilter === 'completed') {
       orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+    } else if (statusFilter === 'today-open') {
+      const todayKey = new Date().toISOString().split('T')[0];
+      orders = orders.filter(order => String(order.date || '') === todayKey && (order.status || '').toLowerCase() !== 'completed');
     } else if (statusFilter === 'pending') {
       orders = orders.filter(order => (order.status || '').toLowerCase() !== 'completed');
     }
@@ -6648,7 +6644,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
 
   if (!orders.length) {
     if (isAdmin && statusFilter === 'completed') return '';
-    const emptyTitle = isAdmin && statusFilter === 'pending'
+    const emptyTitle = isAdmin && (statusFilter === 'pending' || statusFilter === 'today-open')
       ? 'No pending or open work orders'
       : 'No repair work orders';
 
