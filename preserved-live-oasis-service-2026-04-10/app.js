@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v222'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v223'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1391,6 +1391,8 @@ class Router {
     const _rcIsAdmin = auth.isAdmin();
     const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.username === 't9' || _rcUser?.username === 't10');
     const _rcIsFieldTech = !_rcIsAdmin && !_rcIsJetOrMark;
+    const openOrder = _rcIsFieldTech ? workOrderManager.getOpenOrderForClient(client.id, getClientTechnician(client)) : null;
+    const chemButtonLabel = openOrder ? 'Open Chem Sheet' : '+ Chem Sheet';
     return `
       <div class="list-item" style="cursor:pointer;">
         <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
@@ -1401,7 +1403,7 @@ class Router {
         </div>
         <div class="list-item-actions">
           <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(client.address)}')" title="Navigate">📍</button>
-          ${_rcIsFieldTech ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); router.createWorkOrder('${escapeHtml(client.id)}')">+ Chem Sheet</button>` : ''}
+          ${_rcIsFieldTech ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); router.createWorkOrder('${escapeHtml(client.id)}')">${chemButtonLabel}</button>` : ''}
         </div>
       </div>
     `;
@@ -2182,6 +2184,25 @@ class WorkOrderManager {
     this.currentOrder = null;
   }
 
+  getOpenOrderForClient(clientId, technician = '') {
+    const todayKey = new Date().toISOString().split('T')[0];
+    const openOrders = db.get('workorders', [])
+      .filter(order => order.clientId === clientId && (order.status || '').toLowerCase() !== 'completed')
+      .filter(order => !technician || userNamesMatch(order.technician || '', technician))
+      .sort((a, b) => {
+        const aDate = String(a?.date || '');
+        const bDate = String(b?.date || '');
+        const aIsToday = aDate === todayKey;
+        const bIsToday = bDate === todayKey;
+
+        if (aIsToday !== bIsToday) return aIsToday ? -1 : 1;
+        if (aDate !== bDate) return bDate.localeCompare(aDate);
+        return compareAlphaNumeric(a?.clientName || '', b?.clientName || '');
+      });
+
+    return openOrders[0] || null;
+  }
+
   createOrder(clientId) {
     const clients = db.get('clients', []);
     const client = clients.find(c => c.id === clientId);
@@ -2189,9 +2210,13 @@ class WorkOrderManager {
 
     const currentUser = auth.getCurrentUser();
     const assignedTechnician = getClientTechnician(client) || currentUser?.name || '';
+    const existingOpenOrder = this.getOpenOrderForClient(clientId, assignedTechnician);
+    if (existingOpenOrder) {
+      return existingOpenOrder;
+    }
 
     const order = {
-      id: Date.now().toString(),
+      id: `wo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       clientId,
       clientName: client.name,
       address: client.address,
@@ -2231,10 +2256,11 @@ class WorkOrderManager {
     const index = orders.findIndex(o => o.id === order.id);
     if (index >= 0) {
       orders[index] = order;
-      db.set('workorders', orders);
-      return true;
+    } else {
+      orders.push(order);
     }
-    return false;
+    db.set('workorders', orders);
+    return true;
   }
 
   getOrder(id) {
