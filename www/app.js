@@ -23,7 +23,7 @@ const firebaseApp = typeof firebase !== 'undefined'
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
 
 // Collections that sync across all devices via Firestore.
-const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'estimates'];
+const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
 const PUSH_TOKEN_COLLECTION = 'push_tokens';
 const PUSH_DISPATCH_COLLECTION = 'push_dispatch_queue';
 
@@ -181,15 +181,13 @@ class DB {
         });
       });
 
-      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-        Notification.requestPermission().catch(() => {});
-      }
+      // Permission requests are deferred to the explicit post-login flow on supported devices.
     });
   }
 }
 
 const db = new DB();
-const DATA_VERSION = 'v194'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v214'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -220,6 +218,9 @@ class Auth {
       if ((username === 't9' || username === 't10') && pin === '1234') {
         this.currentUser = { ...user, username };
         db.set('currentUser', this.currentUser);
+        if (shouldAutoClaimAlertDevice()) {
+          markCurrentDeviceAsPreferred(this.currentUser);
+        }
         return true;
       }
 
@@ -228,6 +229,9 @@ class Auth {
       if (pin === requiredPin) {
         this.currentUser = { ...user, username };
         db.set('currentUser', this.currentUser);
+        if (shouldAutoClaimAlertDevice()) {
+          markCurrentDeviceAsPreferred(this.currentUser);
+        }
         return true;
       }
     }
@@ -318,6 +322,7 @@ async function enqueuePushDispatch(item = {}) {
     broadcast: item.recipient === 'all',
     targetView: item.targetView || '',
     targetId: item.targetId || '',
+    targetDeviceId: item.targetDeviceId || getPreferredNotificationDeviceId(item.recipient || ''),
     senderUsername: currentUser.username || '',
     senderName: currentUser.name || '',
     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -343,7 +348,15 @@ class NotificationManager {
 
   getForUser(user = auth.getCurrentUser()) {
     const userName = user?.name || '';
-    return this.getAll().filter(item => userNamesMatch(item.recipient, userName) || item.recipient === 'all');
+    const currentDeviceId = getCurrentDeviceId();
+    const preferredDeviceId = getPreferredNotificationDeviceId(userName);
+    return this.getAll().filter(item => {
+      const recipientMatches = userNamesMatch(item.recipient, userName) || item.recipient === 'all';
+      const deviceMatches = item.targetDeviceId
+        ? item.targetDeviceId === currentDeviceId
+        : (!preferredDeviceId || preferredDeviceId === currentDeviceId);
+      return recipientMatches && deviceMatches;
+    });
   }
 
   getUnreadForUser(user = auth.getCurrentUser()) {
@@ -367,11 +380,24 @@ class NotificationManager {
     } catch (error) {
       console.warn('Local notification permission request failed', error);
     }
+
+    try {
+      const pushNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.PushNotifications : null;
+      if (pushNotifications?.requestPermissions) {
+        await pushNotifications.requestPermissions();
+      }
+    } catch (error) {
+      console.warn('Native push permission request failed', error);
+    }
   }
 
   async presentLiveNotification(item) {
     const currentUser = auth.getCurrentUser();
+    const currentDeviceId = getCurrentDeviceId();
+    const preferredDeviceId = getPreferredNotificationDeviceId(currentUser?.name || '');
     if (!currentUser || !userNamesMatch(item.recipient, currentUser.name)) return;
+    if (item.targetDeviceId && item.targetDeviceId !== currentDeviceId) return;
+    if (!item.targetDeviceId && preferredDeviceId && preferredDeviceId !== currentDeviceId) return;
 
     try {
       const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
@@ -399,15 +425,32 @@ class NotificationManager {
       console.warn('Browser notification failed', error);
     }
 
-    showToast(item.title);
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate([250, 120, 250]);
+      }
+    } catch (error) {
+      console.warn('Vibration unavailable', error);
+    }
+
+    showToast(`${item.title}: ${item.message}`);
+
+    try {
+      if (typeof alert === 'function') {
+        alert(`${item.title}\n\n${item.message}`);
+      }
+    } catch (error) {
+      console.warn('Alert fallback unavailable', error);
+    }
   }
 
-  async create({ type = 'update', title = 'New update', message = '', recipients = [], targetView = '', targetId = '', actionLabel = 'Open' }) {
+  async create({ type = 'update', title = 'New update', message = '', recipients = [], targetView = '', targetId = '', actionLabel = 'Open', targetDeviceId = '' }) {
     const list = this.getAll();
     const createdAt = new Date().toISOString();
     const targetRecipients = [...new Set((Array.isArray(recipients) ? recipients : [recipients]).filter(Boolean))];
 
     for (const recipient of targetRecipients) {
+      const resolvedTargetDeviceId = targetDeviceId || getPreferredNotificationDeviceId(recipient);
       const item = {
         id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         type,
@@ -417,6 +460,7 @@ class NotificationManager {
         createdAt,
         targetView,
         targetId,
+        targetDeviceId: resolvedTargetDeviceId,
         actionLabel,
         read: false
       };
@@ -545,6 +589,49 @@ function normalizeTechnicianName(name = '') {
   return match || value;
 }
 
+function getCurrentDeviceId() {
+  try {
+    const existing = localStorage.getItem('oasis_device_id');
+    if (existing) return existing;
+
+    const created = `device_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem('oasis_device_id', created);
+    return created;
+  } catch (error) {
+    return 'device_unknown';
+  }
+}
+
+function getNotificationDeviceRegistry() {
+  return db.get('notification_device_registry', {});
+}
+
+function getPreferredNotificationDeviceId(userName = '') {
+  const key = canonicalUserName(userName);
+  const registry = getNotificationDeviceRegistry();
+  return String(registry?.[key]?.deviceId || '').trim();
+}
+
+function markCurrentDeviceAsPreferred(user = auth?.getCurrentUser?.()) {
+  if (!user?.name) return '';
+
+  const deviceId = getCurrentDeviceId();
+  const key = canonicalUserName(user.name);
+  const registry = getNotificationDeviceRegistry();
+  registry[key] = {
+    userName: user.name,
+    deviceId,
+    updatedAt: new Date().toISOString()
+  };
+  db.set('notification_device_registry', registry);
+  return deviceId;
+}
+
+function shouldAutoClaimAlertDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return isIosLikeDevice() || /android/i.test(navigator.userAgent || '') || isStandaloneDisplayMode();
+}
+
 function canonicalUserName(name = '') {
   return String(name || '')
     .trim()
@@ -569,7 +656,154 @@ function getFirebaseMessagingInstance() {
   }
 }
 
-async function initializePushNotificationsForUser() {
+function isIosLikeDevice() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  return /iphone|ipad|ipod/i.test(ua) || (platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isAndroidDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /android/i.test(navigator.userAgent || '');
+}
+
+function isCapacitorNativeApp() {
+  try {
+    if (typeof Capacitor === 'undefined') return false;
+    return typeof Capacitor.isNativePlatform === 'function'
+      ? Capacitor.isNativePlatform()
+      : !!Capacitor.Plugins;
+  } catch (error) {
+    return false;
+  }
+}
+
+function isProbablyAndroidInAppBrowser() {
+  if (!isAndroidDevice() || typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /; wv\)|version\/\d+\.\d+|fbav|fban|instagram|linkedinapp|snapchat|gsa\//i.test(ua);
+}
+
+function isStandaloneDisplayMode() {
+  try {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function getPushSupportDiagnostic() {
+  if (isCapacitorNativeApp()) {
+    return '';
+  }
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return 'Notifications are unavailable in this browser context.';
+  }
+  if (!window.isSecureContext) {
+    return 'Open the secure live Oasis link to enable notifications.';
+  }
+  if (isProbablyAndroidInAppBrowser()) {
+    return 'This looks like an in-app Android browser. Use Chrome for closed-app notifications.';
+  }
+  if (isIosLikeDevice() && !isStandaloneDisplayMode()) {
+    return 'On iPhone or iPad, open Oasis in Safari, tap Share, then Add to Home Screen. Reopen it from the Home Screen and try again.';
+  }
+  if (!('serviceWorker' in navigator)) {
+    return 'This browser does not support background notifications.';
+  }
+  if (!('PushManager' in window)) {
+    return 'Push notifications are not supported on this phone/browser version yet.';
+  }
+  if (typeof Notification === 'undefined') {
+    return 'The Notifications API is not available on this device.';
+  }
+  return '';
+}
+
+function browserSupportsPushNotifications() {
+  return !getPushSupportDiagnostic();
+}
+
+async function registerPushTokenForCurrentUser(token, platform = 'web', permission = 'granted') {
+  const currentUser = auth.getCurrentUser();
+  if (!currentUser || !token) return false;
+
+  try {
+    const response = await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/registerPushToken', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        username: currentUser.username || '',
+        userName: currentUser.name || '',
+        deviceId: getCurrentDeviceId(),
+        platform,
+        permission
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Token registration failed: ${response.status}`);
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Failed to register push token', error);
+    return false;
+  }
+}
+
+function shouldResetPushSubscription() {
+  try {
+    return new URLSearchParams(window.location.search).get('resetPush') === '1';
+  } catch (error) {
+    return false;
+  }
+}
+
+async function resetPushSubscriptionState(messaging, serviceWorkerRegistration) {
+  try {
+    const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+    if (subscription) {
+      await subscription.unsubscribe();
+    }
+  } catch (error) {
+    console.warn('Push subscription cleanup skipped', error);
+  }
+
+  try {
+    if (typeof messaging.deleteToken === 'function') {
+      await messaging.deleteToken();
+    }
+  } catch (error) {
+    console.warn('FCM token cleanup skipped', error);
+  }
+}
+
+async function getMessagingTokenWithRecovery(messaging, serviceWorkerRegistration, vapidKey) {
+  const tokenOptions = vapidKey
+    ? { vapidKey, serviceWorkerRegistration }
+    : { serviceWorkerRegistration };
+
+  if (shouldResetPushSubscription()) {
+    await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
+  }
+
+  try {
+    return await messaging.getToken(tokenOptions);
+  } catch (error) {
+    const message = String(error?.message || error || '').toLowerCase();
+    const shouldRetry = message.includes('410') || message.includes('gone');
+    if (!shouldRetry) throw error;
+
+    console.warn('Retrying push token fetch after stale subscription reset', error);
+    await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
+    return await messaging.getToken(tokenOptions);
+  }
+}
+
+async function initializePushNotificationsForUser(force = false) {
   if (pushInitInFlight) return pushInitInFlight;
 
   pushInitInFlight = (async () => {
@@ -577,6 +811,93 @@ async function initializePushNotificationsForUser() {
     if (!currentUser) return false;
 
     await notificationManager.requestPermission().catch(() => {});
+
+    if (isCapacitorNativeApp()) {
+      const pushNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.PushNotifications : null;
+      if (!pushNotifications) {
+        console.warn('Native push plugin unavailable');
+        return false;
+      }
+
+      try {
+        let permissionState = { receive: 'prompt' };
+        if (pushNotifications.checkPermissions) {
+          permissionState = await pushNotifications.checkPermissions();
+        }
+        if (permissionState.receive !== 'granted' && pushNotifications.requestPermissions) {
+          permissionState = await pushNotifications.requestPermissions();
+        }
+        if (permissionState.receive === 'denied') {
+          console.warn('Native push permission denied', permissionState);
+          alert('Android notifications are currently blocked for Oasis. Please enable them in Settings > Apps > OASIS Service > Notifications, then try again.');
+          return false;
+        }
+
+        showToast('Registering phone notifications...');
+
+        const nativeRegistrationResult = await new Promise(resolve => {
+          let settled = false;
+          const finish = value => {
+            if (settled) return;
+            settled = true;
+            resolve(value);
+          };
+
+          pushNotifications.addListener('registration', async tokenInfo => {
+            const token = String(tokenInfo?.value || '').trim();
+            if (!token) {
+              finish(false);
+              return;
+            }
+            const saved = await registerPushTokenForCurrentUser(token, 'android-native', 'granted');
+            if (saved) {
+              showToast('Phone notifications enabled');
+            }
+            finish(saved);
+          });
+
+          pushNotifications.addListener('registrationError', error => {
+            console.warn('Native push registration error', error);
+            alert(`Phone notification setup failed: ${error?.error || error?.message || 'registration error'}`);
+            finish(false);
+          });
+
+          if (!window.__oasisNativePushBound) {
+            pushNotifications.addListener('pushNotificationReceived', notification => {
+              notificationManager.presentLiveNotification({
+                title: notification?.title || 'New OASIS update',
+                message: notification?.body || 'You have a new update.',
+                recipient: auth.getCurrentUser()?.name || ''
+              });
+            });
+
+            pushNotifications.addListener('pushNotificationActionPerformed', event => {
+              console.log('Push action performed', event);
+            });
+
+            window.__oasisNativePushBound = true;
+          }
+
+          pushNotifications.register().catch(error => {
+            console.warn('Native push register call failed', error);
+            finish(false);
+          });
+
+          setTimeout(() => finish(false), 15000);
+        });
+
+        return nativeRegistrationResult;
+      } catch (error) {
+        console.warn('Native push setup failed', error);
+        return false;
+      }
+    }
+
+    const diagnostic = getPushSupportDiagnostic();
+    if (diagnostic) {
+      console.warn('Push unavailable:', diagnostic);
+      return false;
+    }
 
     if (typeof window === 'undefined' || typeof Notification === 'undefined') return false;
     if (Notification.permission !== 'granted') return false;
@@ -594,9 +915,7 @@ async function initializePushNotificationsForUser() {
     let token = '';
 
     try {
-      token = vapidKey
-        ? await messaging.getToken({ vapidKey, serviceWorkerRegistration })
-        : await messaging.getToken({ serviceWorkerRegistration });
+      token = await getMessagingTokenWithRecovery(messaging, serviceWorkerRegistration, vapidKey);
     } catch (error) {
       console.warn('FCM token fetch failed', error);
       return false;
@@ -604,22 +923,11 @@ async function initializePushNotificationsForUser() {
 
     if (!token) return false;
 
-    // Register token server-side via Cloud Function (bypasses Firestore security rules)
-    try {
-      await fetch('https://us-central1-oasis-service-app-69def.cloudfunctions.net/debugPushStatus?secret=oasis-test-2026', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token,
-          username: currentUser.username || '',
-          userName: currentUser.name || '',
-          platform: /android/i.test(navigator.userAgent) ? 'android-pwa' : 'web',
-          permission: Notification.permission
-        })
-      });
-    } catch (error) {
-      console.warn('Failed to register push token', error);
-    }
+    await registerPushTokenForCurrentUser(
+      token,
+      /android/i.test(navigator.userAgent) ? 'android-pwa' : (isIosLikeDevice() ? 'ios-pwa' : 'web'),
+      Notification.permission
+    );
 
     if (!window.__oasisMessagingOnMessageBound) {
       messaging.onMessage(payload => {
@@ -1401,6 +1709,8 @@ class Router {
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
     const isMainAdmin = user && user.role === 'admin';
+    const appLink = getSavedAppLink();
+    const encodedAppLink = encodeURIComponent(appLink);
 
     content.innerHTML = `
       <div class="section-header">
@@ -1417,11 +1727,25 @@ class Router {
             <div class="detail-label">Role</div>
             <div class="detail-value" style="text-transform: capitalize;">${user.role}</div>
           </div>
+          <div class="detail-row">
+            <div class="detail-label">App Version</div>
+            <div class="detail-value">${DATA_VERSION}</div>
+          </div>
           <button class="btn btn-danger" onclick="auth.logout(); location.reload()" style="width: 100%; margin-top: 10px;">Sign Out</button>
         </div>
       </div>
 
-
+      <div class="card" style="margin-top: 10px;">
+        <div class="card-body">
+          <div style="font-weight:600; font-size:15px; margin-bottom:8px;">🔔 Notification Test</div>
+          <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Send a visible test notification to this device for the current signed-in user.</p>
+          ${getPushSupportDiagnostic() ? `<div style="font-size:12px; color:#9a6a00; background:#fff7e6; border:1px solid #f3d08b; border-radius:8px; padding:10px; margin-bottom:10px;">${getPushSupportDiagnostic()}</div>` : ''}
+          <button class="btn btn-primary" onclick="sendTestNotification()" style="width: 100%;">Send Test Notification</button>
+          <button class="btn btn-secondary" onclick="useThisDeviceForAlerts()" style="width: 100%; margin-top: 8px;">Use This Device For Alerts</button>
+          <button class="btn btn-secondary" onclick="enablePhoneNotifications()" style="width: 100%; margin-top: 8px;">Enable Phone Notifications</button>
+          <button class="btn btn-secondary" onclick="openInChromeForNotifications()" style="width: 100%; margin-top: 8px;">Open In Chrome</button>
+        </div>
+      </div>
 
       ${isMainAdmin ? `
       <div class="section-header" style="margin-top: 20px;">
@@ -1430,23 +1754,27 @@ class Router {
       <div class="card">
         <div class="card-body">
           <p style="font-size: 13px; color: var(--gray-600); margin-bottom: 12px;">
-            To share the app with your team, copy the link below or scan the QR code.
+            To share the app with your team, copy the live link below or scan the QR code.
           </p>
-          <div class="form-group" style="padding:0; margin-bottom:12px; display:none;">
-            <label class="form-label">App Link</label>
-            <input type="text" id="apk-link-input" class="form-control" placeholder="Paste your app link here..." value="https://millzy7665-beep.github.io/oasis-service/">
+          <div class="form-group" style="padding:0; margin-bottom:12px;">
+            <label class="form-label">Live App Link</label>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <input type="text" id="apk-link-input" class="form-control" placeholder="Paste your app link here..." value="${appLink}" style="flex:1; min-width:220px;">
+              <button class="btn btn-secondary btn-sm" onclick="saveApkLink()">Save</button>
+              <button class="btn btn-secondary btn-sm" onclick="useLatestAppLink()">Use Latest</button>
+            </div>
           </div>
 
           <div id="qr-container" style="text-align: center; margin-top: 15px;">
             <div style="background: white; padding: 10px; display: inline-block; border-radius: 8px;">
-              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https%3A%2F%2Fmillzy7665-beep.github.io%2Foasis-service%2F" alt="Scan to Download">
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodedAppLink}" alt="Scan to Open">
             </div>
-            <p style="font-size: 11px; margin-top: 8px; color: var(--champagne-dk);">Scan with technician phone to download App</p>
+            <p style="font-size: 11px; margin-top: 8px; color: var(--champagne-dk);">Scan with technician phone to open the latest live app</p>
             <div style="margin-top: 12px; display: flex; justify-content: center; gap: 8px;">
-              <input type="text" id="apk-link-display" class="form-control form-control-sm" value="https://millzy7665-beep.github.io/oasis-service/" readonly>
+              <input type="text" id="apk-link-display" class="form-control form-control-sm" value="${appLink}" readonly>
               <button class="btn btn-secondary btn-sm" onclick="copyApkLink()">Copy</button>
             </div>
-            <div style="margin-top: 10px;">
+            <div style="margin-top: 10px; display:flex; justify-content:center; gap:8px; flex-wrap:wrap;">
               <button class="btn btn-secondary btn-sm" onclick="shareAppLink()">Share Link</button>
             </div>
           </div>
@@ -3108,15 +3436,17 @@ function saveRepairOrders(orders) {
 
 function getWorkOrderAssigneeOptions() {
   const preferredUsernames = ['t9', 't10'];
-  const assignees = preferredUsernames
+  const officeAssignees = preferredUsernames
     .map(username => auth.users?.[username]?.name)
     .filter(Boolean);
+  const adminAssignees = getAdminNames();
+  const assignees = [...new Set([...officeAssignees, ...adminAssignees])];
 
-  return assignees.length ? assignees : getTechnicianNames();
+  return assignees.length ? assignees : [...new Set([...getTechnicianNames(), ...adminAssignees])];
 }
 
 function isOfficeWorkOrderAssignee(name = '') {
-  return userNamesMatch(name, 'Tech - Jet') || userNamesMatch(name, 'Tech - Mark');
+  return ['Tech - Jet', 'Tech - Mark', ...getAdminNames()].some(candidate => userNamesMatch(name, candidate));
 }
 
 function getRepairClientDisplay(client = {}) {
@@ -8117,10 +8447,19 @@ function sendReport(orderId) {
   shareReport(orderId);
 }
 
+function getDefaultAppLink() {
+  const versionNumber = String(DATA_VERSION || 'v200').replace(/^v/i, '');
+  return `https://millzy7665-beep.github.io/oasis-service/?v=${versionNumber}`;
+}
+
 function getSavedAppLink() {
   const savedLink = String(db.get('apk_download_link') || '').trim();
-  if (!savedLink || /oasis-app\.apk$/i.test(savedLink)) {
-    return 'https://millzy7665-beep.github.io/oasis-service/';
+  if (
+    !savedLink ||
+    /oasis-app\.apk$/i.test(savedLink) ||
+    /^https:\/\/millzy7665-beep\.github\.io\/oasis-service\/?$/i.test(savedLink)
+  ) {
+    return getDefaultAppLink();
   }
   return savedLink;
 }
@@ -8131,7 +8470,7 @@ function saveApkLink() {
 
   const rawLink = input.value.trim();
   const link = (!rawLink || /oasis-app\.apk$/i.test(rawLink))
-    ? 'https://millzy7665-beep.github.io/oasis-service/'
+    ? getDefaultAppLink()
     : rawLink;
   db.set('apk_download_link', link);
 
@@ -8141,6 +8480,106 @@ function saveApkLink() {
   }
 
   showToast(link ? 'App link saved' : 'App link cleared');
+}
+
+function useLatestAppLink() {
+  const input = document.getElementById('apk-link-input');
+  if (!input) return;
+  input.value = getDefaultAppLink();
+  saveApkLink();
+}
+
+function useThisDeviceForAlerts() {
+  const user = auth.getCurrentUser();
+  if (!user?.name) {
+    showToast('Sign in required');
+    return;
+  }
+  markCurrentDeviceAsPreferred(user);
+  showToast('This device is now selected for your alerts');
+}
+
+function openInChromeForNotifications() {
+  const liveUrl = getDefaultAppLink();
+
+  if (isAndroidDevice()) {
+    const stripped = liveUrl.replace(/^https?:\/\//i, '');
+    window.location.href = `intent://${stripped}#Intent;scheme=https;package=com.android.chrome;end`;
+    return;
+  }
+
+  window.open(liveUrl, '_blank', 'noopener');
+}
+
+async function enablePhoneNotifications() {
+  const user = auth.getCurrentUser();
+  if (!user?.name) {
+    showToast('Sign in required');
+    return false;
+  }
+
+  markCurrentDeviceAsPreferred(user);
+
+  const diagnostic = getPushSupportDiagnostic();
+  if (diagnostic) {
+    alert(diagnostic);
+    if (isProbablyAndroidInAppBrowser()) {
+      openInChromeForNotifications();
+    }
+    showToast('Follow the setup steps shown');
+    return false;
+  }
+
+  await notificationManager.requestPermission();
+
+  if (!isCapacitorNativeApp() && typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+    alert('Notifications are currently blocked for Oasis on this phone. Please allow them in the browser or Home Screen app settings, then try again.');
+    showToast('Notifications are blocked on this phone');
+    return false;
+  }
+
+  const enabled = await initializePushNotificationsForUser(true);
+  if (!enabled) {
+    const fallbackMessage = isCapacitorNativeApp()
+      ? 'Push setup did not complete yet. Please make sure Android notifications are allowed for OASIS, then tap Enable Phone Notifications again.'
+      : (isIosLikeDevice()
+        ? 'Push setup did not complete. Please launch Oasis from the Home Screen and try again.'
+        : 'Push setup did not complete. Please allow notifications for this site and try again.');
+    alert(fallbackMessage);
+    showToast('Phone notification setup incomplete');
+    return false;
+  }
+
+  showToast('Waiting for phone registration...');
+  return true;
+}
+
+async function sendTestNotification() {
+  const user = auth.getCurrentUser();
+  if (!user?.name) {
+    showToast('Sign in required');
+    return;
+  }
+
+  const targetDeviceId = getPreferredNotificationDeviceId(user.name) || markCurrentDeviceAsPreferred(user);
+  const item = {
+    type: 'update',
+    title: 'OASIS Test Sheet',
+    message: 'This is a visible in-app test notification.',
+    recipient: user.name,
+    targetView: 'dashboard',
+    targetId: '',
+    targetDeviceId,
+    actionLabel: 'Open'
+  };
+
+  await notificationManager.presentLiveNotification(item);
+  await notificationManager.create({
+    ...item,
+    recipients: [user.name]
+  });
+
+  showToast('Test notification sent to this device');
 }
 
 async function shareAppLink() {
@@ -8367,7 +8806,7 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
   saveRepairOrders(orders);
 
-  if (auth.isAdmin() && order.assignedTo && !userNamesMatch(order.assignedTo, currentUser?.name || '')) {
+  if (auth.isAdmin() && order.assignedTo) {
     const assignmentChanged = !previousOrder || !userNamesMatch(previousOrder.assignedTo || '', order.assignedTo || '');
     const statusChanged = previousStatus !== (order.status || '').toLowerCase();
     const dateChanged = (previousOrder?.date || '') !== (order.date || '');
@@ -8375,6 +8814,7 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
 
     if (shouldNotifyAssignedTech) {
       const scheduledDate = order.date || 'the scheduled date';
+      const targetDeviceId = getPreferredNotificationDeviceId(order.assignedTo || '');
       await notificationManager.create({
         type: 'repair',
         title: 'Work order assigned',
@@ -8382,6 +8822,7 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false) {
         recipients: [order.assignedTo],
         targetView: 'repair',
         targetId: order.id,
+        targetDeviceId,
         actionLabel: 'Open Work Order'
       });
     }

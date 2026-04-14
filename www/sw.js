@@ -1,4 +1,4 @@
-// Oasis Service App — Cache-First SW v196
+// Oasis Service App — Cache-First SW v197
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js');
 
@@ -13,13 +13,13 @@ firebase.initializeApp({
 });
 
 const messaging = firebase.messaging();
-const CACHE = 'oasis-v196';
+const CACHE = 'oasis-v214';
 const PRECACHE = [
-  '/index.html',
-  '/app.js?v=196',
-  '/styles.css?v=196',
-  '/manifest.json',
-  '/oasis-logo.png',
+  './index.html',
+  './app.js?v=214',
+  './styles.css?v=214',
+  './manifest.json',
+  './oasis-logo.png',
 ];
 
 messaging.onBackgroundMessage(payload => {
@@ -29,8 +29,8 @@ messaging.onBackgroundMessage(payload => {
 
   self.registration.showNotification(title, {
     body,
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    icon: 'icon-192.png',
+    badge: 'icon-192.png',
     data
   });
 });

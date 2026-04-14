@@ -78,7 +78,7 @@
 html, body {
   height: 100%;
   font-family: var(--font-body);
-  background: var(--surface-bg);
+  background: #0a1e2e; /* Match login screen navy — prevents white flash on transition */
   color: var(--near-black);
   -webkit-tap-highlight-color: transparent;
   -webkit-font-smoothing: antialiased;
@@ -132,6 +132,7 @@ html, body {
   height: 36px;
   width: auto;
   object-fit: contain;
+  margin-top: 4px;
 }
 
 .header-title {
@@ -1208,7 +1209,7 @@ select.form-control {
   flex-direction: column;
   align-items: stretch;    /* children stretch to 300px wide */
   text-align: center;
-  animation: fadeIn 0.35s ease-out;
+  animation: loginCardIn 0.5s cubic-bezier(.22,1,.36,1) both;
 }
 
 .login-logo {
@@ -1216,10 +1217,6 @@ select.form-control {
   height: auto;
   margin: 0 auto 24px;
   display: block;
-  /* Use screen blend mode to hide the black background and show the original gold logo */
-  mix-blend-mode: screen;
-  filter: none !important;
-  -webkit-filter: none !important;
 }
 
 .login-brand {
@@ -1656,4 +1653,47 @@ select.form-control {
   body { background: #0a1e2e; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
   #app { border-radius: 24px; max-height: 900px; }
   .login-screen { border-radius: 24px; position: absolute; }
+}
+
+/* ============================================================
+   PAGE TRANSITIONS
+   ============================================================ */
+
+/* Login card: elegant fade-up from below */
+@keyframes loginCardIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Full-screen dark curtain used for login↔app transitions */
+#transition-curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: #0a1e2e;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+#transition-curtain.active {
+  opacity: 1;
+}
+
+/* Per-page content: pure opacity dissolve */
+@keyframes pageFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.page-fade {
+  animation: pageFadeIn 0.22s ease both;
+}
+
+/* Fade-out for sign-out overlay */
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+.fade-out {
+  animation: fadeOut 0.22s ease forwards;
+  pointer-events: none;
 }
