@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v218'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v219'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -1111,17 +1111,12 @@ class Router {
 
     const allClients = db.get('clients', []);
     const myRouteClients = isAdmin
-      ? allClients.filter(c => {
-          const days = getClientServiceDays(c);
-          return days.length ? days.includes(todayDay) : !!getClientTechnician(c);
-        })
-      : allClients.filter(c => {
-          if (!userNamesMatch(getClientTechnician(c), userName)) return false;
-          const days = getClientServiceDays(c);
-          return days.length ? days.includes(todayDay) : true;
-        });
-    const myTechClients = isAdmin ? allClients.filter(c => getClientTechnician(c)) : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName));
-    const myTotalClients = myTechClients.length;
+      ? allClients.filter(c => getClientServiceDays(c).includes(todayDay))
+      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).includes(todayDay));
+    const myTechClients = isAdmin
+      ? allClients.filter(c => getClientServiceDays(c).length)
+      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).length);
+    const myTotalClients = myTechClients.reduce((sum, c) => sum + getClientServiceDays(c).length, 0);
 
     // Open and pending work orders
     const myRepairOrders = visibleRepairOrders.filter(r => {
@@ -1329,8 +1324,8 @@ class Router {
     // Admin: can filter by any tech. Field tech: shows only their own clients.
     let techFilter = isAdmin ? (this._routeTechFilter || 'all') : (user ? user.name : '');
     const techClients = techFilter === 'all'
-      ? allClients.filter(c => getClientTechnician(c))
-      : allClients.filter(c => userNamesMatch(getClientTechnician(c), techFilter));
+      ? allClients.filter(c => getClientServiceDays(c).length)
+      : allClients.filter(c => userNamesMatch(getClientTechnician(c), techFilter) && getClientServiceDays(c).length);
 
     const techs = [...new Set(allClients.map(c => getClientTechnician(c)).filter(Boolean))].sort();
 
