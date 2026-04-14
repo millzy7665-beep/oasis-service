@@ -11,6 +11,9 @@
   "background_color": "#000000",
   "theme_color": "#000000",
   "lang": "en",
+  "permissions": [
+    "notifications"
+  ],
   "icons": [
     {
       "src": "icon-192.png",

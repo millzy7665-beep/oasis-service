@@ -13,11 +13,11 @@ firebase.initializeApp({
 });
 
 const messaging = firebase.messaging();
-const CACHE = 'oasis-v223';
+const CACHE = 'oasis-v224';
 const PRECACHE = [
   './index.html',
-  './app.js?v=223',
-  './styles.css?v=223',
+  './app.js?v=224',
+  './styles.css?v=224',
   './manifest.json',
   './oasis-logo.png',
 ];
@@ -33,6 +33,28 @@ messaging.onBackgroundMessage(payload => {
     badge: 'icon-192.png',
     data
   });
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const targetUrl = './index.html?source=notification';
+
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of windows) {
+      if ('focus' in client) {
+        await client.focus();
+        if ('navigate' in client) {
+          await client.navigate(targetUrl);
+        }
+        return;
+      }
+    }
+
+    if (self.clients.openWindow) {
+      await self.clients.openWindow(targetUrl);
+    }
+  })());
 });
 
 self.addEventListener('install', e => {

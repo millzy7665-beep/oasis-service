@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v223'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v224'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -463,6 +463,7 @@ class NotificationManager {
       };
 
       list.unshift(item);
+      this.saveAll(list);
       await this.presentLiveNotification(item);
       await enqueuePushDispatch(item);
     }
@@ -822,24 +823,43 @@ async function resetPushSubscriptionState(messaging, serviceWorkerRegistration) 
 }
 
 async function getMessagingTokenWithRecovery(messaging, serviceWorkerRegistration, vapidKey) {
-  const tokenOptions = vapidKey
-    ? { vapidKey, serviceWorkerRegistration }
-    : { serviceWorkerRegistration };
+  const normalizedVapidKey = String(vapidKey || '').trim();
+  const usableVapidKey = normalizedVapidKey.length >= 80 ? normalizedVapidKey : '';
+
+  if (normalizedVapidKey && !usableVapidKey) {
+    console.warn('Ignoring invalid VAPID key for push registration');
+  }
 
   if (shouldResetPushSubscription()) {
     await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
   }
 
-  try {
-    return await messaging.getToken(tokenOptions);
-  } catch (error) {
-    const message = String(error?.message || error || '').toLowerCase();
-    const shouldRetry = message.includes('410') || message.includes('gone');
-    if (!shouldRetry) throw error;
+  const fetchToken = async (includeVapidKey = false) => {
+    const tokenOptions = includeVapidKey && usableVapidKey
+      ? { vapidKey: usableVapidKey, serviceWorkerRegistration }
+      : { serviceWorkerRegistration };
 
-    console.warn('Retrying push token fetch after stale subscription reset', error);
-    await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
-    return await messaging.getToken(tokenOptions);
+    try {
+      return await messaging.getToken(tokenOptions);
+    } catch (error) {
+      const message = String(error?.message || error || '').toLowerCase();
+      const shouldRetry = message.includes('410') || message.includes('gone');
+      if (!shouldRetry) throw error;
+
+      console.warn('Retrying push token fetch after stale subscription reset', error);
+      await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
+      return await messaging.getToken(tokenOptions);
+    }
+  };
+
+  try {
+    return await fetchToken(!!usableVapidKey);
+  } catch (error) {
+    if (usableVapidKey) {
+      console.warn('Retrying push token fetch without VAPID key', error);
+      return await fetchToken(false);
+    }
+    throw error;
   }
 }
 
@@ -8542,6 +8562,9 @@ function useThisDeviceForAlerts() {
   }
   markCurrentDeviceAsPreferred(user);
   showToast('This device is now selected for your alerts');
+  initializePushNotificationsForUser(true).catch(error => {
+    console.warn('Push refresh after device selection failed', error);
+  });
 }
 
 function openInChromeForNotifications() {

@@ -205,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v223'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v224'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -417,31 +417,7 @@ class NotificationManager {
     if (item.targetDeviceId && item.targetDeviceId !== currentDeviceId) return;
     if (!item.targetDeviceId && preferredDeviceId && preferredDeviceId !== currentDeviceId) return;
 
-    try {
-      const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
-      if (localNotifications?.schedule) {
-        await localNotifications.schedule({
-          notifications: [{
-            id: Number(String(Date.now()).slice(-8)),
-            title: item.title,
-            body: item.message,
-            schedule: { at: new Date(Date.now() + 500) }
-          }]
-        });
-        return;
-      }
-    } catch (error) {
-      console.warn('Capacitor local notification failed', error);
-    }
-
-    try {
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        new Notification(item.title, { body: item.message });
-        return;
-      }
-    } catch (error) {
-      console.warn('Browser notification failed', error);
-    }
+    const summary = `${item.title}: ${item.message}`;
 
     try {
       if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
@@ -451,14 +427,30 @@ class NotificationManager {
       console.warn('Vibration unavailable', error);
     }
 
-    showToast(`${item.title}: ${item.message}`);
+    showToast(summary);
 
     try {
-      if (typeof alert === 'function') {
-        alert(`${item.title}\n\n${item.message}`);
+      const localNotifications = typeof Capacitor !== 'undefined' ? Capacitor.Plugins?.LocalNotifications : null;
+      if (localNotifications?.schedule) {
+        await localNotifications.schedule({
+          notifications: [{
+            id: Number(String(Date.now()).slice(-8)),
+            title: item.title,
+            body: item.message,
+            schedule: { at: new Date(Date.now() + 100) }
+          }]
+        });
       }
     } catch (error) {
-      console.warn('Alert fallback unavailable', error);
+      console.warn('Capacitor local notification failed', error);
+    }
+
+    try {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        new Notification(item.title, { body: item.message });
+      }
+    } catch (error) {
+      console.warn('Browser notification failed', error);
     }
   }
 
@@ -484,6 +476,7 @@ class NotificationManager {
       };
 
       list.unshift(item);
+      this.saveAll(list);
       await this.presentLiveNotification(item);
       await enqueuePushDispatch(item);
     }
@@ -843,24 +836,43 @@ async function resetPushSubscriptionState(messaging, serviceWorkerRegistration) 
 }
 
 async function getMessagingTokenWithRecovery(messaging, serviceWorkerRegistration, vapidKey) {
-  const tokenOptions = vapidKey
-    ? { vapidKey, serviceWorkerRegistration }
-    : { serviceWorkerRegistration };
+  const normalizedVapidKey = String(vapidKey || '').trim();
+  const usableVapidKey = normalizedVapidKey.length >= 80 ? normalizedVapidKey : '';
+
+  if (normalizedVapidKey && !usableVapidKey) {
+    console.warn('Ignoring invalid VAPID key for push registration');
+  }
 
   if (shouldResetPushSubscription()) {
     await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
   }
 
-  try {
-    return await messaging.getToken(tokenOptions);
-  } catch (error) {
-    const message = String(error?.message || error || '').toLowerCase();
-    const shouldRetry = message.includes('410') || message.includes('gone');
-    if (!shouldRetry) throw error;
+  const fetchToken = async (includeVapidKey = false) => {
+    const tokenOptions = includeVapidKey && usableVapidKey
+      ? { vapidKey: usableVapidKey, serviceWorkerRegistration }
+      : { serviceWorkerRegistration };
 
-    console.warn('Retrying push token fetch after stale subscription reset', error);
-    await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
-    return await messaging.getToken(tokenOptions);
+    try {
+      return await messaging.getToken(tokenOptions);
+    } catch (error) {
+      const message = String(error?.message || error || '').toLowerCase();
+      const shouldRetry = message.includes('410') || message.includes('gone');
+      if (!shouldRetry) throw error;
+
+      console.warn('Retrying push token fetch after stale subscription reset', error);
+      await resetPushSubscriptionState(messaging, serviceWorkerRegistration);
+      return await messaging.getToken(tokenOptions);
+    }
+  };
+
+  try {
+    return await fetchToken(!!usableVapidKey);
+  } catch (error) {
+    if (usableVapidKey) {
+      console.warn('Retrying push token fetch without VAPID key', error);
+      return await fetchToken(false);
+    }
+    throw error;
   }
 }
 
@@ -984,11 +996,15 @@ async function initializePushNotificationsForUser(force = false) {
 
     if (!token) return false;
 
-    await registerPushTokenForCurrentUser(
+    const saved = await registerPushTokenForCurrentUser(
       token,
       /android/i.test(navigator.userAgent) ? 'android-pwa' : (isIosLikeDevice() ? 'ios-pwa' : 'web'),
       Notification.permission
     );
+
+    if (saved) {
+      showToast('Phone notifications enabled');
+    }
 
     if (!window.__oasisMessagingOnMessageBound) {
       messaging.onMessage(payload => {
@@ -8629,6 +8645,9 @@ function useThisDeviceForAlerts() {
   }
   markCurrentDeviceAsPreferred(user);
   showToast('This device is now selected for your alerts');
+  initializePushNotificationsForUser(true).catch(error => {
+    console.warn('Push refresh after device selection failed', error);
+  });
 }
 
 function openInChromeForNotifications() {
