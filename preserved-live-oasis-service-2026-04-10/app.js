@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v254';
+const APP_VERSION = 'v255';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -4002,6 +4002,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (loginError) loginError.style.display = 'none';
       curtainTransition(() => {
         setShellSignedInState(true);
+        if (loginScreen?.parentNode) {
+          loginScreen.parentNode.removeChild(loginScreen);
+          window.__oasisLoginDetached = true;
+        }
         try { router.navigate('dashboard'); } catch (err) { location.reload(); }
       });
     } else {
@@ -4051,11 +4055,8 @@ function setShellSignedInState(isSignedIn) {
 }
 
 function signOut() {
-  curtainTransition(() => {
-    auth.logout();
-    setShellSignedInState(false);
-    router.navigate('dashboard');
-  });
+  auth.logout();
+  location.reload();
 }
 
 function quickAddClient() {
@@ -7313,11 +7314,8 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  curtainTransition(() => {
-    auth.logout();
-    setShellSignedInState(false);
-    router.navigate('dashboard');
-  });
+  auth.logout();
+  location.reload();
 }
 
 function quickAddClient() {
@@ -9031,11 +9029,8 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  curtainTransition(() => {
-    auth.logout();
-    setShellSignedInState(false);
-    router.navigate('dashboard');
-  });
+  auth.logout();
+  location.reload();
 }
 
 function quickAddClient() {
