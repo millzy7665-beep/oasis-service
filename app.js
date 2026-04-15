@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v239';
+const APP_VERSION = 'v240';
 
 // Collections that sync across all devices via Firestore.
 const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
@@ -843,6 +843,32 @@ function getClientServiceDays(client = {}) {
   return normalizeServiceDays(client?.serviceDays || client?.serviceDay || []);
 }
 
+function getClientVisitMetricKey(client = {}) {
+  return String(client?.id || '').trim() || `${String(client?.name || '').trim().toLowerCase()}|${String(client?.address || '').trim().toLowerCase()}`;
+}
+
+function getScheduledRouteClients(clients = [], technicianName = '') {
+  return (Array.isArray(clients) ? clients : []).filter(client => {
+    const serviceDays = getClientServiceDays(client);
+    const assignedTechnician = getClientTechnician(client);
+    if (!serviceDays.length || !assignedTechnician) return false;
+    return !technicianName || userNamesMatch(assignedTechnician, technicianName);
+  });
+}
+
+function countScheduledWeeklyVisits(clients = []) {
+  const visitKeys = new Set();
+
+  (Array.isArray(clients) ? clients : []).forEach(client => {
+    const clientKey = getClientVisitMetricKey(client);
+    getClientServiceDays(client).forEach(day => {
+      if (day) visitKeys.add(`${clientKey}::${day}`);
+    });
+  });
+
+  return visitKeys.size;
+}
+
 function formatDisplayDate(value = '') {
   const dateKey = String(value || '').trim();
   if (!dateKey) return '';
@@ -1472,13 +1498,9 @@ class Router {
     const todayStr = `${todayDay}, ${formatDisplayDate(new Date())}`;
 
     const allClients = db.get('clients', []);
-    const myRouteClients = isAdmin
-      ? allClients.filter(c => getClientServiceDays(c).includes(todayDay))
-      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).includes(todayDay));
-    const myTechClients = isAdmin
-      ? allClients.filter(c => getClientServiceDays(c).length)
-      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).length);
-    const myTotalClients = myTechClients.reduce((sum, c) => sum + getClientServiceDays(c).length, 0);
+    const scheduledRouteClients = getScheduledRouteClients(allClients, isAdmin ? '' : userName);
+    const myRouteClients = scheduledRouteClients.filter(c => getClientServiceDays(c).includes(todayDay));
+    const myTotalClients = countScheduledWeeklyVisits(scheduledRouteClients);
 
     // Open and pending work orders
     const myRepairOrders = visibleRepairOrders.filter(r => {
