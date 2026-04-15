@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v244';
+const APP_VERSION = 'v245';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -933,6 +933,40 @@ function getClientRouteDisplayName(client = {}, allClients = []) {
   return address ? `${clientName} — ${address}` : clientName;
 }
 
+function collapseRouteClientsByName(clientList = []) {
+  const collapsedClients = [];
+  const byName = new Map();
+
+  (Array.isArray(clientList) ? clientList : []).forEach(client => {
+    const nameKey = normalizeClientIdentityPart(client?.name || '');
+    if (!nameKey) return;
+
+    const existingIndex = byName.get(nameKey);
+    if (existingIndex === undefined) {
+      byName.set(nameKey, collapsedClients.length);
+      collapsedClients.push({
+        ...client,
+        serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
+      });
+      return;
+    }
+
+    const existingClient = collapsedClients[existingIndex];
+    const existingAddress = String(existingClient.address || '').trim();
+    const nextAddress = String(client.address || '').trim();
+
+    collapsedClients[existingIndex] = {
+      ...existingClient,
+      serviceDays: mergeClientServiceDays(existingClient.serviceDays, client.serviceDays, client.serviceDay),
+      address: existingAddress && nextAddress && normalizeClientIdentityPart(existingAddress) !== normalizeClientIdentityPart(nextAddress)
+        ? 'Multiple properties'
+        : (existingAddress || nextAddress)
+    };
+  });
+
+  return collapsedClients;
+}
+
 function getClientTechnician(client = {}) {
   return normalizeTechnicianName(client?.technician || client?.tech || '');
 }
@@ -1828,6 +1862,7 @@ class Router {
     const dayClients = dayFilter === 'all'
       ? techClients
       : techClients.filter(c => getClientServiceDays(c).includes(dayFilter));
+    const visibleRouteClients = isAdmin ? collapseRouteClientsByName(dayClients) : dayClients;
 
     content.innerHTML = `
       <div class="section-header">
@@ -1835,7 +1870,7 @@ class Router {
           <button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button>
           <div class="section-title">${isAdmin ? 'All Routes' : (user ? user.name + "'s Route" : 'My Route')}</div>
         </div>
-        <div style="font-size:12px; color:#666;">${dayClients.length} client${dayClients.length !== 1 ? 's' : ''} shown</div>
+        <div style="font-size:12px; color:#666;">${visibleRouteClients.length} client${visibleRouteClients.length !== 1 ? 's' : ''} shown</div>
       </div>
 
       ${isAdmin ? `
@@ -1856,11 +1891,11 @@ class Router {
       </div>
 
       <div style="padding:0 16px 8px; color:#666; font-size:13px;">
-        ${dayFilter === 'all' ? `${dayClients.length} total scheduled clients` : `${dayClients.length} clients for ${dayFilter}${dayFilter === today ? ' (today)' : ''}`}
+        ${dayFilter === 'all' ? `${visibleRouteClients.length} total scheduled clients` : `${visibleRouteClients.length} clients for ${dayFilter}${dayFilter === today ? ' (today)' : ''}`}
       </div>
 
       <div id="routes-list">
-        ${this.renderRouteClients(dayClients, dayFilter, techFilter)}
+        ${this.renderRouteClients(visibleRouteClients, dayFilter, techFilter)}
       </div>
     `;
   }
