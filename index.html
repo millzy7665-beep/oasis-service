@@ -17,7 +17,7 @@
 
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
-  <link rel="stylesheet" href="styles.css?v=233">
+  <link rel="stylesheet" href="styles.css?v=234">
 
   <style>
     /* Critical overrides for luxury feel */
@@ -66,6 +66,7 @@
         </div>
         <button type="submit" class="btn-login">Sign In</button>
         <div id="login-error" class="login-error" style="display:none">Invalid name or PIN.</div>
+        <div id="login-version" class="login-version" style="margin-top: 14px; text-align: center; font-size: 12px; color: rgba(201, 168, 124, 0.9); letter-spacing: 0.08em; text-transform: uppercase;">Version</div>
       </form>
     </div>
   </div>
@@ -135,11 +136,11 @@
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"></script>
-  <script src="app.js?v=233"></script>
+  <script src="app.js?v=234"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js?v=233').then(registration => {
+        navigator.serviceWorker.register('sw.js?v=234').then(registration => {
           console.log('SW registered: ', registration);
           registration.update();
 

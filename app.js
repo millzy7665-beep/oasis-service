@@ -21,11 +21,105 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
+const APP_VERSION = 'v234';
 
 // Collections that sync across all devices via Firestore.
 const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
+const MERGE_SYNCED_KEYS = ['workorders', 'repairOrders'];
 const PUSH_TOKEN_COLLECTION = 'push_tokens';
 const PUSH_DISPATCH_COLLECTION = 'push_dispatch_queue';
+
+function cloneSyncedValue(value) {
+  if (value === null || value === undefined) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function isMergeSyncedKey(key = '') {
+  return MERGE_SYNCED_KEYS.includes(String(key || ''));
+}
+
+function getSyncedRecordId(record = {}) {
+  return String(record?.id || '').trim();
+}
+
+function getSyncedTimestampValue(value = '') {
+  if (!value) return 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+
+  const parsed = Date.parse(String(value || '').trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getSyncedRecordTimestamp(record = {}) {
+  return Math.max(
+    getSyncedTimestampValue(record?.updatedAt),
+    getSyncedTimestampValue(record?.completedAt),
+    getSyncedTimestampValue(record?.createdAt),
+    getSyncedTimestampValue(record?.date)
+  );
+}
+
+function shouldPreferIncomingSyncedRecord(currentRecord = {}, incomingRecord = {}) {
+  const currentTimestamp = getSyncedRecordTimestamp(currentRecord);
+  const incomingTimestamp = getSyncedRecordTimestamp(incomingRecord);
+
+  if (incomingTimestamp !== currentTimestamp) {
+    return incomingTimestamp > currentTimestamp;
+  }
+
+  const currentCompleted = String(currentRecord?.status || '').toLowerCase() === 'completed';
+  const incomingCompleted = String(incomingRecord?.status || '').toLowerCase() === 'completed';
+  if (incomingCompleted !== currentCompleted) {
+    return incomingCompleted;
+  }
+
+  return JSON.stringify(incomingRecord).length >= JSON.stringify(currentRecord).length;
+}
+
+function mergeSyncedRecordArrays(key = '', remoteData = [], localData = []) {
+  if (!isMergeSyncedKey(key)) {
+    return cloneSyncedValue(localData);
+  }
+
+  const remoteRecords = Array.isArray(remoteData) ? remoteData : [];
+  const localRecords = Array.isArray(localData) ? localData : [];
+  const mergedById = new Map();
+  const untrackedRecords = [];
+
+  remoteRecords.forEach(record => {
+    const recordId = getSyncedRecordId(record);
+    if (!recordId) {
+      untrackedRecords.push(cloneSyncedValue(record));
+      return;
+    }
+    mergedById.set(recordId, cloneSyncedValue(record));
+  });
+
+  localRecords.forEach(record => {
+    const recordId = getSyncedRecordId(record);
+    if (!recordId) {
+      const serialized = JSON.stringify(record || {});
+      if (!untrackedRecords.some(item => JSON.stringify(item || {}) === serialized)) {
+        untrackedRecords.push(cloneSyncedValue(record));
+      }
+      return;
+    }
+
+    const currentRecord = mergedById.get(recordId);
+    if (!currentRecord || shouldPreferIncomingSyncedRecord(currentRecord, record)) {
+      mergedById.set(recordId, cloneSyncedValue({ ...(currentRecord || {}), ...record }));
+    }
+  });
+
+  return [
+    ...Array.from(mergedById.values()).sort((left, right) => {
+      const timeDelta = getSyncedRecordTimestamp(right) - getSyncedRecordTimestamp(left);
+      if (timeDelta !== 0) return timeDelta;
+      return compareAlphaNumeric(left?.clientName || left?.name || '', right?.clientName || right?.name || '');
+    }),
+    ...untrackedRecords
+  ];
+}
 
 // ==========================================
 // DATA MANAGEMENT (DB)
@@ -36,6 +130,7 @@ class DB {
     this._realtimeSyncStarted = false;
     this._remoteWritesEnabled = false;
     this._storageListenerBound = false;
+    this._pendingRemoteWrites = new Map();
   }
 
   get(key, defaultValue = null) {
@@ -49,18 +144,21 @@ class DB {
 
   set(key, value) {
     let serialized;
+    let parsedValue;
     try {
       serialized = JSON.stringify(value);
       this.storage.setItem(key, serialized);
+      parsedValue = JSON.parse(serialized);
     } catch (e) {
       return false;
     }
 
-    if (this._remoteWritesEnabled && firestore && SYNCED_KEYS.includes(key)) {
-      firestore.collection('app_data').doc(key).set({
-        data: JSON.parse(serialized),
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      }).catch(err => console.warn('Firestore write failed for', key, err));
+    if (firestore && SYNCED_KEYS.includes(key)) {
+      this.queueRemoteWrite(key, parsedValue);
+
+      if (this._remoteWritesEnabled) {
+        this.writeSyncedKey(key, parsedValue);
+      }
     }
 
     return true;
@@ -69,9 +167,12 @@ class DB {
   remove(key) {
     this.storage.removeItem(key);
 
-    if (this._remoteWritesEnabled && firestore && SYNCED_KEYS.includes(key)) {
-      firestore.collection('app_data').doc(key).delete()
-        .catch(err => console.warn('Firestore delete failed for', key, err));
+    if (firestore && SYNCED_KEYS.includes(key)) {
+      this.queueRemoteWrite(key, null);
+
+      if (this._remoteWritesEnabled) {
+        this.writeSyncedKey(key, null);
+      }
     }
   }
 
@@ -113,6 +214,53 @@ class DB {
     });
   }
 
+  queueRemoteWrite(key, value) {
+    this._pendingRemoteWrites.set(key, cloneSyncedValue(value));
+  }
+
+  async writeSyncedKey(key, value) {
+    if (!firestore) return;
+
+    const queuedValue = cloneSyncedValue(value);
+    const docRef = firestore.collection('app_data').doc(key);
+
+    try {
+      if (queuedValue === null) {
+        await docRef.delete();
+        return;
+      }
+
+      if (isMergeSyncedKey(key) && Array.isArray(queuedValue)) {
+        await firestore.runTransaction(async transaction => {
+          const snapshot = await transaction.get(docRef);
+          const remoteValue = snapshot.exists ? snapshot.data()?.data ?? [] : [];
+          const mergedValue = mergeSyncedRecordArrays(key, remoteValue, queuedValue);
+
+          transaction.set(docRef, {
+            data: mergedValue,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        });
+        return;
+      }
+
+      await docRef.set({
+        data: queuedValue,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (err) {
+      console.warn('Firestore write failed for', key, err);
+    }
+  }
+
+  flushPendingRemoteWrites() {
+    if (!this._remoteWritesEnabled || !firestore || !this._pendingRemoteWrites.size) return;
+
+    Array.from(this._pendingRemoteWrites.entries()).forEach(([key, value]) => {
+      this.writeSyncedKey(key, value);
+    });
+  }
+
   startRealtimeSync() {
     if (this._realtimeSyncStarted) return;
 
@@ -135,23 +283,29 @@ class DB {
 
       if (remoteDoc.exists) {
         const remoteData = remoteDoc.data()?.data ?? null;
-        if (remoteData !== null && JSON.stringify(remoteData) !== JSON.stringify(localData)) {
-          this.storage.setItem(key, JSON.stringify(remoteData));
+        const resolvedData = isMergeSyncedKey(key)
+          ? mergeSyncedRecordArrays(key, remoteData, localData)
+          : remoteData;
+
+        if (resolvedData !== null && JSON.stringify(resolvedData) !== JSON.stringify(localData)) {
+          this.storage.setItem(key, JSON.stringify(resolvedData));
+        }
+
+        if (isMergeSyncedKey(key) && JSON.stringify(resolvedData) !== JSON.stringify(remoteData)) {
+          this.queueRemoteWrite(key, resolvedData);
         }
         return;
       }
 
       if (hasMeaningfulValue(localData)) {
-        await docRef.set({
-          data: clone(localData),
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        this.queueRemoteWrite(key, clone(localData));
       }
     })).catch(error => {
       console.warn('Initial Firestore sync failed', error);
     }).finally(() => {
       knownNotificationIds = new Set((this.get('oasis_notifications', []) || []).map(item => item.id));
       this._remoteWritesEnabled = true;
+      this.flushPendingRemoteWrites();
 
       const syncedClients = this.get('clients', []);
       const assignedRouteCount = Array.isArray(syncedClients)
@@ -169,6 +323,25 @@ class DB {
 
           const remoteData = snapshot.data()?.data ?? null;
           const localData = this.get(key, null);
+
+          if (isMergeSyncedKey(key) && this._pendingRemoteWrites.has(key)) {
+            const pendingData = this._pendingRemoteWrites.get(key);
+            const mergedPendingData = mergeSyncedRecordArrays(key, remoteData, pendingData);
+            const mergedPendingSignature = JSON.stringify(mergedPendingData);
+            const remoteSignature = JSON.stringify(remoteData);
+
+            if (mergedPendingSignature !== remoteSignature) {
+              if (mergedPendingSignature !== JSON.stringify(localData)) {
+                this.storage.setItem(key, mergedPendingSignature);
+              }
+              this.queueRemoteWrite(key, mergedPendingData);
+              this.writeSyncedKey(key, mergedPendingData);
+              this.refreshLiveViews(key);
+              return;
+            }
+
+            this._pendingRemoteWrites.delete(key);
+          }
 
           if (JSON.stringify(remoteData) === JSON.stringify(localData)) {
             return;
@@ -205,7 +378,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v232'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v232'; // Bump this only when master schedule clients must be force-refreshed
 
 // ==========================================
 // AUTHENTICATION
@@ -1936,7 +2109,7 @@ class Router {
           </div>
           <div class="detail-row">
             <div class="detail-label">App Version</div>
-            <div class="detail-value">${DATA_VERSION}</div>
+            <div class="detail-value">${APP_VERSION}</div>
           </div>
           <button class="btn btn-danger" onclick="auth.logout(); location.reload()" style="width: 100%; margin-top: 10px;">Sign Out</button>
         </div>
@@ -2352,6 +2525,8 @@ class WorkOrderManager {
       return existingOpenOrder;
     }
 
+    const createdAt = new Date().toISOString();
+
     const order = {
       id: `wo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       clientId,
@@ -2379,7 +2554,9 @@ class WorkOrderManager {
       workPerformed: '',
       followUpNotes: '',
       notes: '',
-      photos: []
+      photos: [],
+      createdAt,
+      updatedAt: createdAt
     };
 
     const orders = db.get('workorders', []);
@@ -2391,10 +2568,19 @@ class WorkOrderManager {
   saveOrder(order) {
     const orders = db.get('workorders', []);
     const index = orders.findIndex(o => o.id === order.id);
+    const currentTimestamp = new Date().toISOString();
+    const existingOrder = index >= 0 ? orders[index] : null;
+    const nextOrder = {
+      ...(existingOrder || {}),
+      ...order,
+      createdAt: order.createdAt || existingOrder?.createdAt || currentTimestamp,
+      updatedAt: order.updatedAt || currentTimestamp
+    };
+
     if (index >= 0) {
-      orders[index] = order;
+      orders[index] = nextOrder;
     } else {
-      orders.push(order);
+      orders.push(nextOrder);
     }
     db.set('workorders', orders);
     return true;
@@ -3304,6 +3490,11 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const loginVersion = document.getElementById('login-version');
+  if (loginVersion) {
+    loginVersion.textContent = `Version ${APP_VERSION}`;
+  }
+
   // Always force login screen on startup
   auth.logout();
   db.startRealtimeSync();
@@ -5881,7 +6072,10 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
 
     const photos = normalizeRepairPhotos(order.photos);
     photos[slotIndex] = dataUrl;
-    order.photos = photos;
+  const updatedAt = new Date().toISOString();
+  order.photos = photos;
+  order.createdAt = order.createdAt || updatedAt;
+  order.updatedAt = updatedAt;
 
     // Persist immediately
     const orders = getRepairOrders();
@@ -5927,6 +6121,8 @@ function removeRepairPhoto(orderId, slotIndex) {
   const photos = normalizeRepairPhotos(order.photos);
   photos[slotIndex] = '';
   order.photos = photos;
+  order.createdAt = order.createdAt || new Date().toISOString();
+  order.updatedAt = new Date().toISOString();
 
   // Persist immediately
   const orders = getRepairOrders();
@@ -8938,12 +9134,14 @@ function saveWorkOrderForm(orderId, forceComplete = true) {
 
   const currentUser = auth.getCurrentUser();
   const previousStatus = (previousOrder?.status || '').toLowerCase();
+  const savedAt = new Date().toISOString();
   order.status = String(forceComplete ? 'completed' : (document.getElementById('wo-status')?.value || order.status || 'pending')).toLowerCase();
   order.technician = normalizeTechnicianName(order.technician || '');
+  order.createdAt = previousOrder?.createdAt || order.createdAt || savedAt;
   if (order.status === 'completed') {
-    order.completedAt = previousOrder?.completedAt || new Date().toISOString();
+    order.completedAt = previousOrder?.completedAt || savedAt;
   }
-  order.updatedAt = new Date().toISOString();
+  order.updatedAt = savedAt;
   order.updatedBy = currentUser?.name || '';
 
   workOrderManager.saveOrder(order);
@@ -9044,10 +9242,12 @@ function persistRepairOrderDraft(orderId = '') {
 
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
+  const draftSavedAt = new Date().toISOString();
   const nextOrder = {
     ...order,
+    createdAt: order.createdAt || orders[index]?.createdAt || draftSavedAt,
     status: order.status || 'open',
-    updatedAt: new Date().toISOString()
+    updatedAt: draftSavedAt
   };
 
   if (index >= 0) {
@@ -9093,12 +9293,14 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
   const orders = getRepairOrders();
   const previousOrder = orders.find(item => item.id === order.id);
   const previousStatus = (previousOrder?.status || '').toLowerCase();
+  const savedAt = new Date().toISOString();
 
   order.status = String(forcedStatus || document.getElementById('repair-status')?.value || order.status || 'open').toLowerCase();
+  order.createdAt = previousOrder?.createdAt || order.createdAt || savedAt;
   if (order.status === 'completed') {
-    order.completedAt = previousOrder?.completedAt || new Date().toISOString();
+    order.completedAt = previousOrder?.completedAt || savedAt;
   }
-  order.updatedAt = new Date().toISOString();
+  order.updatedAt = savedAt;
   order.updatedBy = currentUser?.name || '';
 
   const index = orders.findIndex(item => item.id === order.id);
