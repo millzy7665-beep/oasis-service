@@ -21,11 +21,116 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
+const APP_VERSION = 'v252';
+
+const WEEKLY_CHEM_VISIT_TARGETS = {
+  'service - kadeem': 45,
+  'service - elvin': 49,
+  'service - jermaine': 48,
+  'service - ace': 43,
+  'service - donald': 40,
+  'service - kingsley': 24,
+  'service - ariel': 48,
+  'service - malik': 39
+};
 
 // Collections that sync across all devices via Firestore.
 const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
+const MERGE_SYNCED_KEYS = ['workorders', 'repairOrders'];
 const PUSH_TOKEN_COLLECTION = 'push_tokens';
 const PUSH_DISPATCH_COLLECTION = 'push_dispatch_queue';
+
+function cloneSyncedValue(value) {
+  if (value === null || value === undefined) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function isMergeSyncedKey(key = '') {
+  return MERGE_SYNCED_KEYS.includes(String(key || ''));
+}
+
+function getSyncedRecordId(record = {}) {
+  return String(record?.id || '').trim();
+}
+
+function getSyncedTimestampValue(value = '') {
+  if (!value) return 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+
+  const parsed = Date.parse(String(value || '').trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getSyncedRecordTimestamp(record = {}) {
+  return Math.max(
+    getSyncedTimestampValue(record?.updatedAt),
+    getSyncedTimestampValue(record?.completedAt),
+    getSyncedTimestampValue(record?.createdAt),
+    getSyncedTimestampValue(record?.date)
+  );
+}
+
+function shouldPreferIncomingSyncedRecord(currentRecord = {}, incomingRecord = {}) {
+  const currentTimestamp = getSyncedRecordTimestamp(currentRecord);
+  const incomingTimestamp = getSyncedRecordTimestamp(incomingRecord);
+
+  if (incomingTimestamp !== currentTimestamp) {
+    return incomingTimestamp > currentTimestamp;
+  }
+
+  const currentCompleted = String(currentRecord?.status || '').toLowerCase() === 'completed';
+  const incomingCompleted = String(incomingRecord?.status || '').toLowerCase() === 'completed';
+  if (incomingCompleted !== currentCompleted) {
+    return incomingCompleted;
+  }
+
+  return JSON.stringify(incomingRecord).length >= JSON.stringify(currentRecord).length;
+}
+
+function mergeSyncedRecordArrays(key = '', remoteData = [], localData = []) {
+  if (!isMergeSyncedKey(key)) {
+    return cloneSyncedValue(localData);
+  }
+
+  const remoteRecords = Array.isArray(remoteData) ? remoteData : [];
+  const localRecords = Array.isArray(localData) ? localData : [];
+  const mergedById = new Map();
+  const untrackedRecords = [];
+
+  remoteRecords.forEach(record => {
+    const recordId = getSyncedRecordId(record);
+    if (!recordId) {
+      untrackedRecords.push(cloneSyncedValue(record));
+      return;
+    }
+    mergedById.set(recordId, cloneSyncedValue(record));
+  });
+
+  localRecords.forEach(record => {
+    const recordId = getSyncedRecordId(record);
+    if (!recordId) {
+      const serialized = JSON.stringify(record || {});
+      if (!untrackedRecords.some(item => JSON.stringify(item || {}) === serialized)) {
+        untrackedRecords.push(cloneSyncedValue(record));
+      }
+      return;
+    }
+
+    const currentRecord = mergedById.get(recordId);
+    if (!currentRecord || shouldPreferIncomingSyncedRecord(currentRecord, record)) {
+      mergedById.set(recordId, cloneSyncedValue({ ...(currentRecord || {}), ...record }));
+    }
+  });
+
+  return [
+    ...Array.from(mergedById.values()).sort((left, right) => {
+      const timeDelta = getSyncedRecordTimestamp(right) - getSyncedRecordTimestamp(left);
+      if (timeDelta !== 0) return timeDelta;
+      return compareAlphaNumeric(left?.clientName || left?.name || '', right?.clientName || right?.name || '');
+    }),
+    ...untrackedRecords
+  ];
+}
 
 // ==========================================
 // DATA MANAGEMENT (DB)
@@ -36,6 +141,8 @@ class DB {
     this._realtimeSyncStarted = false;
     this._remoteWritesEnabled = false;
     this._storageListenerBound = false;
+    this._pendingRemoteWrites = new Map();
+    this._pendingRemoteWriteModes = new Map();
   }
 
   get(key, defaultValue = null) {
@@ -49,18 +156,50 @@ class DB {
 
   set(key, value) {
     let serialized;
+    let parsedValue;
     try {
       serialized = JSON.stringify(value);
       this.storage.setItem(key, serialized);
+      parsedValue = JSON.parse(serialized);
     } catch (e) {
       return false;
     }
 
-    if (this._remoteWritesEnabled && firestore && SYNCED_KEYS.includes(key)) {
-      firestore.collection('app_data').doc(key).set({
-        data: JSON.parse(serialized),
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      }).catch(err => console.warn('Firestore write failed for', key, err));
+    if (firestore && SYNCED_KEYS.includes(key)) {
+      this.queueRemoteWrite(key, parsedValue, 'merge');
+
+      if (this._remoteWritesEnabled) {
+        this.writeSyncedKey(key, parsedValue);
+      }
+    }
+
+    return true;
+  }
+
+  async setExact(key, value) {
+    let serialized;
+    let parsedValue;
+    try {
+      serialized = JSON.stringify(value);
+      this.storage.setItem(key, serialized);
+      parsedValue = JSON.parse(serialized);
+    } catch (e) {
+      return false;
+    }
+
+    if (firestore && SYNCED_KEYS.includes(key)) {
+      this.queueRemoteWrite(key, parsedValue, 'exact');
+
+      if (this._remoteWritesEnabled) {
+        try {
+          await firestore.collection('app_data').doc(key).set({
+            data: parsedValue,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        } catch (err) {
+          console.warn('Firestore exact write failed for', key, err);
+        }
+      }
     }
 
     return true;
@@ -69,9 +208,12 @@ class DB {
   remove(key) {
     this.storage.removeItem(key);
 
-    if (this._remoteWritesEnabled && firestore && SYNCED_KEYS.includes(key)) {
-      firestore.collection('app_data').doc(key).delete()
-        .catch(err => console.warn('Firestore delete failed for', key, err));
+    if (firestore && SYNCED_KEYS.includes(key)) {
+      this.queueRemoteWrite(key, null, 'merge');
+
+      if (this._remoteWritesEnabled) {
+        this.writeSyncedKey(key, null);
+      }
     }
   }
 
@@ -85,12 +227,17 @@ class DB {
     try {
       if (router.currentView === 'dashboard') {
         router.renderDashboard();
-      } else if (router.currentView === 'routes' && typeof router.renderRoutes === 'function') {
+      } else if (router.currentView === 'routes' && key === 'clients' && typeof router.renderRoutes === 'function') {
         router.renderRoutes();
       } else if (router.currentView === 'clients' && document.getElementById('clients-list')) {
         router.renderClients();
       } else if (router.currentView === 'workorders' && document.getElementById('workorders-list')) {
         router.renderWorkOrders();
+      } else if (router.currentView === 'workorders' && document.querySelector('.wo-form') && workOrderManager?.currentOrder?.id) {
+        const refreshedOrder = workOrderManager.getOrder(workOrderManager.currentOrder.id);
+        if (refreshedOrder) {
+          router.openWorkOrderDetail(refreshedOrder, false);
+        }
       } else if (router.currentView === 'quotes' && typeof router.renderQuotes === 'function' && document.getElementById('quotes-list')) {
         router.renderQuotes();
       }
@@ -110,6 +257,59 @@ class DB {
     window.addEventListener('storage', event => {
       if (!event.key || !SYNCED_KEYS.includes(event.key)) return;
       this.refreshLiveViews(event.key);
+    });
+  }
+
+  queueRemoteWrite(key, value, mode = 'merge') {
+    this._pendingRemoteWrites.set(key, cloneSyncedValue(value));
+    this._pendingRemoteWriteModes.set(key, mode === 'exact' ? 'exact' : 'merge');
+  }
+
+  async writeSyncedKey(key, value) {
+    if (!firestore) return;
+
+    const queuedValue = cloneSyncedValue(value);
+    const docRef = firestore.collection('app_data').doc(key);
+
+    try {
+      if (queuedValue === null) {
+        await docRef.delete();
+        return;
+      }
+
+      if (isMergeSyncedKey(key) && Array.isArray(queuedValue)) {
+        await firestore.runTransaction(async transaction => {
+          const snapshot = await transaction.get(docRef);
+          const remoteValue = snapshot.exists ? snapshot.data()?.data ?? [] : [];
+          const mergedValue = mergeSyncedRecordArrays(key, remoteValue, queuedValue);
+
+          transaction.set(docRef, {
+            data: mergedValue,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        });
+        return;
+      }
+
+      await docRef.set({
+        data: queuedValue,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (err) {
+      console.warn('Firestore write failed for', key, err);
+    }
+  }
+
+  flushPendingRemoteWrites() {
+    if (!this._remoteWritesEnabled || !firestore || !this._pendingRemoteWrites.size) return;
+
+    Array.from(this._pendingRemoteWrites.entries()).forEach(([key, value]) => {
+      if (this._pendingRemoteWriteModes.get(key) === 'exact') {
+        this.setExact(key, value);
+        return;
+      }
+
+      this.writeSyncedKey(key, value);
     });
   }
 
@@ -135,23 +335,34 @@ class DB {
 
       if (remoteDoc.exists) {
         const remoteData = remoteDoc.data()?.data ?? null;
-        if (remoteData !== null && JSON.stringify(remoteData) !== JSON.stringify(localData)) {
-          this.storage.setItem(key, JSON.stringify(remoteData));
+        const mergedData = isMergeSyncedKey(key)
+          ? mergeSyncedRecordArrays(key, remoteData, localData)
+          : remoteData;
+        const resolvedData = key === 'clients' && Array.isArray(mergedData)
+          ? cleanupDuplicateMasterScheduleClients(mergedData)
+          : mergedData;
+
+        if (resolvedData !== null && JSON.stringify(resolvedData) !== JSON.stringify(localData)) {
+          this.storage.setItem(key, JSON.stringify(resolvedData));
+        }
+
+        if (key === 'clients' && JSON.stringify(resolvedData) !== JSON.stringify(remoteData)) {
+          this.queueRemoteWrite(key, resolvedData, 'exact');
+        } else if (isMergeSyncedKey(key) && JSON.stringify(resolvedData) !== JSON.stringify(remoteData)) {
+          this.queueRemoteWrite(key, resolvedData, 'merge');
         }
         return;
       }
 
       if (hasMeaningfulValue(localData)) {
-        await docRef.set({
-          data: clone(localData),
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        this.queueRemoteWrite(key, clone(localData), 'merge');
       }
     })).catch(error => {
       console.warn('Initial Firestore sync failed', error);
     }).finally(() => {
       knownNotificationIds = new Set((this.get('oasis_notifications', []) || []).map(item => item.id));
       this._remoteWritesEnabled = true;
+      this.flushPendingRemoteWrites();
 
       const syncedClients = this.get('clients', []);
       const assignedRouteCount = Array.isArray(syncedClients)
@@ -170,23 +381,73 @@ class DB {
           const remoteData = snapshot.data()?.data ?? null;
           const localData = this.get(key, null);
 
-          if (JSON.stringify(remoteData) === JSON.stringify(localData)) {
+          if (this._pendingRemoteWrites.has(key) && this._pendingRemoteWriteModes.get(key) === 'exact') {
+            const pendingData = this._pendingRemoteWrites.get(key);
+            const pendingSignature = JSON.stringify(pendingData);
+            const remoteSignature = JSON.stringify(remoteData);
+
+            if (pendingSignature !== remoteSignature) {
+              if (pendingSignature !== JSON.stringify(localData)) {
+                this.storage.setItem(key, pendingSignature);
+              }
+              this.setExact(key, pendingData);
+              this.refreshLiveViews(key);
+              return;
+            }
+
+            this._pendingRemoteWrites.delete(key);
+            this._pendingRemoteWriteModes.delete(key);
+          }
+
+          if (isMergeSyncedKey(key) && this._pendingRemoteWrites.has(key)) {
+            const pendingData = this._pendingRemoteWrites.get(key);
+            const mergedPendingData = mergeSyncedRecordArrays(key, remoteData, pendingData);
+            const mergedPendingSignature = JSON.stringify(mergedPendingData);
+            const remoteSignature = JSON.stringify(remoteData);
+
+            if (mergedPendingSignature !== remoteSignature) {
+              if (mergedPendingSignature !== JSON.stringify(localData)) {
+                this.storage.setItem(key, mergedPendingSignature);
+              }
+              this.queueRemoteWrite(key, mergedPendingData);
+              this.writeSyncedKey(key, mergedPendingData);
+              this.refreshLiveViews(key);
+              return;
+            }
+
+            this._pendingRemoteWrites.delete(key);
+            this._pendingRemoteWriteModes.delete(key);
+          }
+
+          const normalizedRemoteData = key === 'clients' && Array.isArray(remoteData)
+            ? cleanupDuplicateMasterScheduleClients(remoteData)
+            : remoteData;
+
+          if (key === 'clients' && JSON.stringify(normalizedRemoteData) !== JSON.stringify(remoteData)) {
+            this.storage.setItem(key, JSON.stringify(normalizedRemoteData));
+            this.queueRemoteWrite(key, normalizedRemoteData, 'exact');
+            this.setExact(key, normalizedRemoteData);
+            this.refreshLiveViews(key);
             return;
           }
 
-          this.storage.setItem(key, JSON.stringify(remoteData));
+          if (JSON.stringify(normalizedRemoteData) === JSON.stringify(localData)) {
+            return;
+          }
+
+          this.storage.setItem(key, JSON.stringify(normalizedRemoteData));
           console.log(`[Sync] ${key} updated from Firestore`);
 
-          if (key === 'clients' && Array.isArray(remoteData)) {
-            const routeCount = remoteData.filter(client => getClientTechnician(client) && getClientServiceDays(client).length).length;
-            if (routeCount < Math.max(20, Math.floor((remoteData.length || 0) * 0.25)) && typeof initMasterSchedule === 'function') {
+          if (key === 'clients' && Array.isArray(normalizedRemoteData)) {
+            const routeCount = normalizedRemoteData.filter(client => getClientTechnician(client) && getClientServiceDays(client).length).length;
+            if (routeCount < Math.max(20, Math.floor((normalizedRemoteData.length || 0) * 0.25)) && typeof initMasterSchedule === 'function') {
               this.set('masterScheduleLoaded', false);
               setTimeout(() => initMasterSchedule(), 0);
             }
           }
 
           if (key === 'oasis_notifications' && typeof notificationManager !== 'undefined') {
-            const newItems = (remoteData || []).filter(item => item?.id && !knownNotificationIds.has(item.id));
+            const newItems = (normalizedRemoteData || []).filter(item => item?.id && !knownNotificationIds.has(item.id));
             newItems.forEach(item => {
               knownNotificationIds.add(item.id);
               notificationManager.presentLiveNotification(item);
@@ -205,7 +466,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v232'; // Bump this to force-refresh all master schedule clients
+const DATA_VERSION = 'v232'; // Bump this only when master schedule clients must be force-refreshed
 
 // ==========================================
 // AUTHENTICATION
@@ -225,7 +486,7 @@ class Auth {
       't9': { role: 'technician', name: 'Tech - Jet' },
       't10': { role: 'technician', name: 'Tech - Mark' },
       'admin': { role: 'admin', name: 'Chris Mills' },
-      'admin2': { role: 'admin', name: 'James Bussey', disableNotifications: true }
+      'admin2': { role: 'admin', name: 'James Bussey' }
     };
   }
 
@@ -366,14 +627,8 @@ class NotificationManager {
 
   getForUser(user = auth.getCurrentUser()) {
     const userName = user?.name || '';
-    const currentDeviceId = getCurrentDeviceId();
-    const preferredDeviceId = getPreferredNotificationDeviceId(userName);
     return this.getAll().filter(item => {
-      const recipientMatches = userNamesMatch(item.recipient, userName) || item.recipient === 'all';
-      const deviceMatches = item.targetDeviceId
-        ? item.targetDeviceId === currentDeviceId
-        : (!preferredDeviceId || preferredDeviceId === currentDeviceId);
-      return recipientMatches && deviceMatches;
+      return userNamesMatch(item.recipient, userName) || item.recipient === 'all';
     });
   }
 
@@ -572,7 +827,7 @@ const notificationManager = new NotificationManager();
 
 function getAdminNames() {
   return Object.values(auth.users)
-    .filter(user => user.role === 'admin' && !user.disableNotifications)
+    .filter(user => user.role === 'admin')
     .map(user => user.name)
     .sort((a, b) => a.localeCompare(b));
 }
@@ -592,11 +847,24 @@ function getTechnicianNames() {
     .sort((a, b) => a.localeCompare(b));
 }
 
+function getAllUserNames() {
+  return Object.values(auth.users)
+    .map(user => user.name)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
+
 function normalizeTechnicianName(name = '') {
   const value = String(name || '').trim();
   if (!value) return '';
 
-  const match = getTechnicianNames().find(item => item.toLowerCase() === value.toLowerCase());
+  const exactMatch = getAllUserNames().find(item => item.toLowerCase() === value.toLowerCase());
+  if (exactMatch) return exactMatch;
+
+  const canonicalMatch = getAllUserNames().find(item => canonicalUserName(item) === canonicalUserName(value));
+  if (canonicalMatch) return canonicalMatch;
+
+  const match = getTechnicianNames().find(item => canonicalUserName(item) === canonicalUserName(value));
   return match || value;
 }
 
@@ -621,12 +889,328 @@ function normalizeServiceDays(value = []) {
     .map(day => dayMap[day.toLowerCase()] || day))];
 }
 
+function normalizeClientIdentityPart(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.,#'()]/g, '')
+    .replace(/\s*-\s*/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function getNormalizedClientIdentity(client = {}, includeTechnician = true) {
+  const parts = [
+    normalizeClientIdentityPart(client?.name || ''),
+    normalizeClientIdentityPart(client?.address || '')
+  ];
+
+  if (includeTechnician) {
+    parts.push(canonicalUserName(getClientTechnician(client) || client?.technician || client?.tech || ''));
+  }
+
+  return parts.join('||');
+}
+
+function getNormalizedClientAddressTechIdentity(client = {}) {
+  return [
+    normalizeClientIdentityPart(client?.address || ''),
+    canonicalUserName(getClientTechnician(client) || client?.technician || client?.tech || '')
+  ].join('||');
+}
+
+function shouldMergeClientNameVariants(leftClient = {}, rightClient = {}) {
+  const leftName = normalizeClientIdentityPart(leftClient?.name || '');
+  const rightName = normalizeClientIdentityPart(rightClient?.name || '');
+  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
+  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
+  if (!leftName || !rightName) return false;
+  if ((leftName === leftAddress && rightName !== rightAddress) || (rightName === rightAddress && leftName !== leftAddress)) {
+    return true;
+  }
+  if (leftName === rightAddress || rightName === leftAddress) {
+    return true;
+  }
+  if ((leftAddress && rightName.includes(leftAddress)) || (rightAddress && leftName.includes(rightAddress))) {
+    return true;
+  }
+  return leftName.includes(rightName) || rightName.includes(leftName);
+}
+
+function choosePreferredClientName(leftClient = {}, rightClient = {}) {
+  const leftName = String(leftClient?.name || '').trim();
+  const rightName = String(rightClient?.name || '').trim();
+  const normalizedLeftName = normalizeClientIdentityPart(leftName);
+  const normalizedRightName = normalizeClientIdentityPart(rightName);
+  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
+  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
+
+  if (normalizedLeftName === leftAddress && normalizedRightName !== rightAddress) {
+    return rightName || leftName;
+  }
+
+  if (normalizedRightName === rightAddress && normalizedLeftName !== leftAddress) {
+    return leftName || rightName;
+  }
+
+  if (normalizedLeftName === rightAddress && normalizedRightName !== leftAddress) {
+    return rightName || leftName;
+  }
+
+  if (normalizedRightName === leftAddress && normalizedLeftName !== rightAddress) {
+    return leftName || rightName;
+  }
+
+  if (leftAddress && normalizedRightName.includes(leftAddress) && !normalizedLeftName.includes(leftAddress)) {
+    return rightName || leftName;
+  }
+
+  if (rightAddress && normalizedLeftName.includes(rightAddress) && !normalizedRightName.includes(rightAddress)) {
+    return leftName || rightName;
+  }
+
+  return rightName.length > leftName.length ? rightName : leftName || rightName;
+}
+
+function extractClientUnitMarkers(client = {}) {
+  const text = `${String(client?.name || '')} ${String(client?.address || '')}`.toLowerCase();
+  const matches = text.match(/#\s*[a-z0-9]+|\b\d+[a-z]?\b/g) || [];
+  return [...new Set(matches.map(marker => marker.replace(/\s+/g, '')))].sort();
+}
+
+function haveOverlappingServiceDays(leftClient = {}, rightClient = {}) {
+  const leftDays = getClientServiceDays(leftClient);
+  const rightDays = getClientServiceDays(rightClient);
+  if (!leftDays.length || !rightDays.length) return true;
+  return leftDays.some(day => rightDays.includes(day));
+}
+
+function hasConflictingUnitMarkers(leftClient = {}, rightClient = {}) {
+  const leftMarkers = extractClientUnitMarkers(leftClient);
+  const rightMarkers = extractClientUnitMarkers(rightClient);
+
+  if (!leftMarkers.length && !rightMarkers.length) return false;
+  if (!leftMarkers.length || !rightMarkers.length) return true;
+
+  return !leftMarkers.some(marker => rightMarkers.includes(marker));
+}
+
+function doesClientAddressDescribeOther(containerClient = {}, targetClient = {}) {
+  const containerAddress = normalizeClientIdentityPart(containerClient?.address || '');
+  const targetName = normalizeClientIdentityPart(targetClient?.name || '');
+  const targetAddress = normalizeClientIdentityPart(targetClient?.address || '');
+
+  if (!containerAddress || !targetName || !targetAddress) return false;
+  return containerAddress.includes(targetName) && containerAddress.includes(targetAddress);
+}
+
+function isLegacySplitPropertyMatch(leftClient = {}, rightClient = {}) {
+  if (!userNamesMatch(getClientTechnician(leftClient), getClientTechnician(rightClient))) {
+    return false;
+  }
+
+  if (!haveOverlappingServiceDays(leftClient, rightClient)) {
+    return false;
+  }
+
+  const leftName = normalizeClientIdentityPart(leftClient?.name || '');
+  const rightName = normalizeClientIdentityPart(rightClient?.name || '');
+  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
+  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
+
+  const exactCrossFieldMatch = (leftName && leftName === rightAddress) || (rightName && rightName === leftAddress);
+  if (exactCrossFieldMatch) {
+    return true;
+  }
+
+  const embeddedSplitMatch = doesClientAddressDescribeOther(leftClient, rightClient)
+    || doesClientAddressDescribeOther(rightClient, leftClient);
+  if (!embeddedSplitMatch) {
+    return false;
+  }
+
+  return !hasConflictingUnitMarkers(leftClient, rightClient);
+}
+
+function choosePreferredClientAddress(leftClient = {}, rightClient = {}) {
+  const leftAddress = String(leftClient?.address || '').trim();
+  const rightAddress = String(rightClient?.address || '').trim();
+  const normalizedLeftName = normalizeClientIdentityPart(leftClient?.name || '');
+  const normalizedRightName = normalizeClientIdentityPart(rightClient?.name || '');
+  const normalizedLeftAddress = normalizeClientIdentityPart(leftAddress);
+  const normalizedRightAddress = normalizeClientIdentityPart(rightAddress);
+
+  if (normalizedLeftName && normalizedLeftName === normalizedRightAddress && normalizedRightName !== normalizedLeftAddress) {
+    return rightAddress || leftAddress;
+  }
+
+  if (normalizedRightName && normalizedRightName === normalizedLeftAddress && normalizedLeftName !== normalizedRightAddress) {
+    return leftAddress || rightAddress;
+  }
+
+  if (doesClientAddressDescribeOther(rightClient, leftClient) && !hasConflictingUnitMarkers(leftClient, rightClient)) {
+    return rightAddress || leftAddress;
+  }
+
+  if (doesClientAddressDescribeOther(leftClient, rightClient) && !hasConflictingUnitMarkers(leftClient, rightClient)) {
+    return leftAddress || rightAddress;
+  }
+
+  return rightAddress.length > leftAddress.length ? rightAddress : leftAddress || rightAddress;
+}
+
+function mergeClientRecords(existingClient = {}, client = {}) {
+  const normalizedTechnician = normalizeTechnicianName(
+    existingClient.technician || client.technician || existingClient.tech || client.tech || ''
+  );
+
+  return {
+    ...existingClient,
+    ...client,
+    id: existingClient.id || client.id || `c_${Math.random().toString(36).substr(2, 9)}`,
+    name: choosePreferredClientName(existingClient, client),
+    address: choosePreferredClientAddress(existingClient, client),
+    technician: normalizedTechnician,
+    serviceDays: mergeClientServiceDays(existingClient.serviceDays, client.serviceDays, client.serviceDay)
+  };
+}
+
+function shouldMergeStoredClientVariants(leftClient = {}, rightClient = {}) {
+  if (!userNamesMatch(getClientTechnician(leftClient), getClientTechnician(rightClient))) {
+    return false;
+  }
+
+  const sameAddressTech = getNormalizedClientAddressTechIdentity(leftClient) === getNormalizedClientAddressTechIdentity(rightClient);
+  if (sameAddressTech && shouldMergeClientNameVariants(leftClient, rightClient)) {
+    return true;
+  }
+
+  return isLegacySplitPropertyMatch(leftClient, rightClient);
+}
+
+function shouldMergeRouteVisitVariants(leftClient = {}, rightClient = {}) {
+  return shouldMergeStoredClientVariants(leftClient, rightClient);
+}
+
+function mergeClientServiceDays(...values) {
+  return normalizeServiceDays(values.flatMap(value => normalizeServiceDays(value)));
+}
+
+function cleanupDuplicateMasterScheduleClients(clientList = []) {
+  const clients = Array.isArray(clientList) ? clientList : [];
+  const mergedClients = [];
+
+  clients.forEach(client => {
+    const normalizedClient = {
+      ...client,
+      name: String(client?.name || '').trim(),
+      address: String(client?.address || '').trim(),
+      technician: normalizeTechnicianName(client?.technician || client?.tech || ''),
+      serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
+    };
+
+    const existingIndex = mergedClients.findIndex(existingClient => shouldMergeStoredClientVariants(existingClient, normalizedClient));
+    if (existingIndex >= 0) {
+      mergedClients[existingIndex] = mergeClientRecords(mergedClients[existingIndex], normalizedClient);
+    } else {
+      mergedClients.push(normalizedClient);
+    }
+  });
+
+  return mergedClients;
+}
+
+function getDuplicateClientNameKeys(clients = []) {
+  const grouped = new Map();
+
+  (Array.isArray(clients) ? clients : []).forEach(client => {
+    const nameKey = normalizeClientIdentityPart(client?.name || '');
+    if (!nameKey) return;
+    if (!grouped.has(nameKey)) grouped.set(nameKey, new Set());
+    grouped.get(nameKey).add(getNormalizedClientIdentity(client, false));
+  });
+
+  return new Set(
+    [...grouped.entries()]
+      .filter(([, identities]) => identities.size > 1)
+      .map(([nameKey]) => nameKey)
+  );
+}
+
+function getClientRouteDisplayName(client = {}, allClients = []) {
+  const duplicateNames = getDuplicateClientNameKeys(allClients);
+  const clientName = String(client?.name || '').trim() || 'Client';
+
+  if (!duplicateNames.has(normalizeClientIdentityPart(clientName))) {
+    return clientName;
+  }
+
+  const address = String(client?.address || '').trim();
+  return address ? `${clientName} — ${address}` : clientName;
+}
+
+function collapseRouteClientsByName(clientList = []) {
+  const collapsedClients = [];
+
+  (Array.isArray(clientList) ? clientList : []).forEach(client => {
+    const normalizedClient = {
+      ...client,
+      technician: normalizeTechnicianName(client?.technician || client?.tech || ''),
+      serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
+    };
+
+    const existingIndex = collapsedClients.findIndex(existingClient => shouldMergeRouteVisitVariants(existingClient, normalizedClient));
+    if (existingIndex === -1) {
+      collapsedClients.push(normalizedClient);
+      return;
+    }
+
+    collapsedClients[existingIndex] = mergeClientRecords(collapsedClients[existingIndex], normalizedClient);
+  });
+
+  return collapsedClients;
+}
+
 function getClientTechnician(client = {}) {
   return normalizeTechnicianName(client?.technician || client?.tech || '');
 }
 
 function getClientServiceDays(client = {}) {
   return normalizeServiceDays(client?.serviceDays || client?.serviceDay || []);
+}
+
+function getClientVisitMetricKey(client = {}) {
+  return String(client?.id || '').trim() || `${String(client?.name || '').trim().toLowerCase()}|${String(client?.address || '').trim().toLowerCase()}`;
+}
+
+function getWeeklyChemVisitTarget(name = '') {
+  const normalizedName = normalizeTechnicianName(name || '');
+  return WEEKLY_CHEM_VISIT_TARGETS[String(normalizedName || '').trim().toLowerCase()] || 0;
+}
+
+function getTotalWeeklyChemVisitTarget() {
+  return Object.values(WEEKLY_CHEM_VISIT_TARGETS).reduce((sum, count) => sum + count, 0);
+}
+
+function getScheduledRouteClients(clients = [], technicianName = '') {
+  return (Array.isArray(clients) ? clients : []).filter(client => {
+    const serviceDays = getClientServiceDays(client);
+    const assignedTechnician = getClientTechnician(client);
+    if (!serviceDays.length || !assignedTechnician) return false;
+    return !technicianName || userNamesMatch(assignedTechnician, technicianName);
+  });
+}
+
+function countScheduledWeeklyVisits(clients = []) {
+  const visitKeys = new Set();
+
+  (Array.isArray(clients) ? clients : []).forEach(client => {
+    const clientKey = getClientVisitMetricKey(client);
+    getClientServiceDays(client).forEach(day => {
+      if (day) visitKeys.add(`${clientKey}::${day}`);
+    });
+  });
+
+  return visitKeys.size;
 }
 
 function formatDisplayDate(value = '') {
@@ -1257,14 +1841,12 @@ class Router {
     const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
     const todayStr = `${todayDay}, ${formatDisplayDate(new Date())}`;
 
-    const allClients = db.get('clients', []);
-    const myRouteClients = isAdmin
-      ? allClients.filter(c => getClientServiceDays(c).includes(todayDay))
-      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).includes(todayDay));
-    const myTechClients = isAdmin
-      ? allClients.filter(c => getClientServiceDays(c).length)
-      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).length);
-    const myTotalClients = myTechClients.reduce((sum, c) => sum + getClientServiceDays(c).length, 0);
+    const allClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
+    const scheduledRouteClients = getScheduledRouteClients(allClients, isAdmin ? '' : userName);
+    const myRouteClients = scheduledRouteClients.filter(c => getClientServiceDays(c).includes(todayDay));
+    const myTotalClients = isAdmin
+      ? getTotalWeeklyChemVisitTarget()
+      : (getWeeklyChemVisitTarget(userName) || countScheduledWeeklyVisits(scheduledRouteClients));
 
     // Open and pending work orders
     const myRepairOrders = visibleRepairOrders.filter(r => {
@@ -1465,7 +2047,7 @@ class Router {
       return this.renderWorkOrders();
     }
 
-    const allClients = db.get('clients', []);
+    const allClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
     const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
@@ -1483,6 +2065,7 @@ class Router {
     const dayClients = dayFilter === 'all'
       ? techClients
       : techClients.filter(c => getClientServiceDays(c).includes(dayFilter));
+    const visibleRouteClients = collapseRouteClientsByName(dayClients);
 
     content.innerHTML = `
       <div class="section-header">
@@ -1490,7 +2073,7 @@ class Router {
           <button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button>
           <div class="section-title">${isAdmin ? 'All Routes' : (user ? user.name + "'s Route" : 'My Route')}</div>
         </div>
-        <div style="font-size:12px; color:#666;">${dayClients.length} client${dayClients.length !== 1 ? 's' : ''} shown</div>
+        <div style="font-size:12px; color:#666;">${visibleRouteClients.length} client${visibleRouteClients.length !== 1 ? 's' : ''} shown</div>
       </div>
 
       ${isAdmin ? `
@@ -1511,11 +2094,11 @@ class Router {
       </div>
 
       <div style="padding:0 16px 8px; color:#666; font-size:13px;">
-        ${dayFilter === 'all' ? `${dayClients.length} total scheduled clients` : `${dayClients.length} clients for ${dayFilter}${dayFilter === today ? ' (today)' : ''}`}
+        ${dayFilter === 'all' ? `${visibleRouteClients.length} total scheduled clients` : `${visibleRouteClients.length} clients for ${dayFilter}${dayFilter === today ? ' (today)' : ''}`}
       </div>
 
       <div id="routes-list">
-        ${this.renderRouteClients(dayClients, dayFilter, techFilter)}
+        ${this.renderRouteClients(visibleRouteClients, dayFilter, techFilter)}
       </div>
     `;
   }
@@ -1535,6 +2118,7 @@ class Router {
 
   renderRouteCard(client) {
     const daysLabel = getClientServiceDays(client).map(d => d.substring(0, 3)).join(', ') || 'Unscheduled';
+    const routeDisplayName = getClientRouteDisplayName(client, cleanupDuplicateMasterScheduleClients(db.get('clients', [])));
     const _rcUser = auth.getCurrentUser();
     const _rcIsAdmin = auth.isAdmin();
     const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.username === 't9' || _rcUser?.username === 't10');
@@ -1545,7 +2129,7 @@ class Router {
       <div class="list-item" style="cursor:pointer;">
         <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
         <div class="list-item-info">
-          <div class="list-item-name">${escapeHtml(client.name)}</div>
+          <div class="list-item-name">${escapeHtml(routeDisplayName)}</div>
           <div class="list-item-sub">${escapeHtml(client.address)}</div>
           ${daysLabel ? `<div class="list-item-sub" style="font-size:11px; color:#2196F3;">${escapeHtml(daysLabel)}</div>` : ''}
         </div>
@@ -1936,7 +2520,7 @@ class Router {
           </div>
           <div class="detail-row">
             <div class="detail-label">App Version</div>
-            <div class="detail-value">${DATA_VERSION}</div>
+            <div class="detail-value">${APP_VERSION}</div>
           </div>
           <button class="btn btn-danger" onclick="auth.logout(); location.reload()" style="width: 100%; margin-top: 10px;">Sign Out</button>
         </div>
@@ -2013,7 +2597,7 @@ class Router {
     const chemClientList = (_woIsAdmin || _woIsJetOrMark)
       ? clients
       : clients.filter(c => userNamesMatch((c.technician || ''), (_woCurUser?.name || '')));
-    const technician = order.technician || auth.getCurrentUser()?.name || '';
+    const technician = normalizeTechnicianName(order.technician || auth.getCurrentUser()?.name || '');
     const timeIn = order.timeIn || order.time || '';
     const timeOut = order.timeOut || '';
     const timeSpent = calculateTimeSpent(timeIn, timeOut);
@@ -2047,7 +2631,7 @@ class Router {
               <select id="wo-tech">
                 ${Object.entries(auth.users)
                   .sort((a, b) => a[1].name.localeCompare(b[1].name))
-                  .map(([id, user]) => `<option value="${user.name}" ${user.name === technician ? 'selected' : ''}>${user.name}</option>`).join('')}
+                  .map(([id, user]) => `<option value="${user.name}" ${userNamesMatch(user.name, technician) ? 'selected' : ''}>${user.name}</option>`).join('')}
               </select>
             </div>
 
@@ -2191,6 +2775,18 @@ class Router {
   // Quick actions
   createRoute() { showToast('Route planning can be added next.'); }
   viewRoute(id) { showToast(`Route ${id} selected`); }
+  openWorkOrderDetail(order, pushHistory = true) {
+    if (!order) return;
+
+    this.currentView = 'workorders';
+    workOrderManager.currentOrder = order;
+    if (pushHistory && this.history[this.history.length - 1] !== 'workorders') {
+      this.history.push('workorders');
+    }
+
+    this.renderWorkOrderDetail(order);
+    this.updateNav();
+  }
   createWorkOrder(clientId = '') {
     const clients = db.get('clients', []);
     if (!clients.length) {
@@ -2199,10 +2795,15 @@ class Router {
       return;
     }
 
+    this.currentView = 'workorders';
+    if (this.history[this.history.length - 1] !== 'workorders') {
+      this.history.push('workorders');
+    }
+
     const selectedClientId = clientId || clients[0].id;
     const order = workOrderManager.createOrder(selectedClientId);
     if (order) {
-      this.renderWorkOrderDetail(order);
+      this.openWorkOrderDetail(order, false);
       showToast('Chem sheet created');
     }
   }
@@ -2235,7 +2836,7 @@ class Router {
       showToast('Work order not found');
       return;
     }
-    this.renderWorkOrderDetail(order);
+    this.openWorkOrderDetail(order);
   }
   editWorkOrder(id) {
     const order = workOrderManager.getOrder(id);
@@ -2243,7 +2844,7 @@ class Router {
       showToast('Work order not found');
       return;
     }
-    this.renderWorkOrderDetail(order);
+    this.openWorkOrderDetail(order);
   }
   editClient(id) {
     const _ecUser = auth.getCurrentUser();
@@ -2352,6 +2953,8 @@ class WorkOrderManager {
       return existingOpenOrder;
     }
 
+    const createdAt = new Date().toISOString();
+
     const order = {
       id: `wo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       clientId,
@@ -2379,7 +2982,9 @@ class WorkOrderManager {
       workPerformed: '',
       followUpNotes: '',
       notes: '',
-      photos: []
+      photos: [],
+      createdAt,
+      updatedAt: createdAt
     };
 
     const orders = db.get('workorders', []);
@@ -2391,10 +2996,19 @@ class WorkOrderManager {
   saveOrder(order) {
     const orders = db.get('workorders', []);
     const index = orders.findIndex(o => o.id === order.id);
+    const currentTimestamp = new Date().toISOString();
+    const existingOrder = index >= 0 ? orders[index] : null;
+    const nextOrder = {
+      ...(existingOrder || {}),
+      ...order,
+      createdAt: order.createdAt || existingOrder?.createdAt || currentTimestamp,
+      updatedAt: order.updatedAt || currentTimestamp
+    };
+
     if (index >= 0) {
-      orders[index] = order;
+      orders[index] = nextOrder;
     } else {
-      orders.push(order);
+      orders.push(nextOrder);
     }
     db.set('workorders', orders);
     return true;
@@ -3251,7 +3865,7 @@ function initMasterSchedule() {
     { name: "Zoe Foster", address: "47 Latana Way", tech: "Service - Elvin", serviceDays: ["Friday", "Monday"] }
 
   ];
-  const existingClients = db.get('clients', []);
+  const existingClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
   // Migrate existing stored technician names to new prefix format
   const _techNameRemap = {
     'Ace': 'Service - Ace', 'Ariel': 'Service - Ariel', 'Donald': 'Service - Donald',
@@ -3264,13 +3878,17 @@ function initMasterSchedule() {
     const mergedClients = [...existingClients];
 
   clients.forEach(c => {
-    const existingIdx = mergedClients.findIndex(
-      e => e.address === c.address && e.technician === c.tech
-    );
+    const existingIdx = mergedClients.findIndex(e => getNormalizedClientIdentity(e) === getNormalizedClientIdentity({
+      name: c.name,
+      address: c.address,
+      technician: c.tech
+    }));
     if (existingIdx >= 0) {
-      // Update name and serviceDays so master data corrections take effect
+      // Merge repeated weekly visits into one client record with combined service days.
       mergedClients[existingIdx].name = c.name;
-      mergedClients[existingIdx].serviceDays = c.serviceDays;
+      mergedClients[existingIdx].address = mergedClients[existingIdx].address || c.address;
+      mergedClients[existingIdx].technician = c.tech;
+      mergedClients[existingIdx].serviceDays = mergeClientServiceDays(mergedClients[existingIdx].serviceDays, c.serviceDays);
     } else {
       mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
@@ -3282,7 +3900,7 @@ function initMasterSchedule() {
     }
   });
 
-  db.set('clients', mergedClients);
+  db.set('clients', cleanupDuplicateMasterScheduleClients(mergedClients));
   db.set('masterScheduleLoaded', true);
 }
 
@@ -3304,9 +3922,20 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const loginVersion = document.getElementById('login-version');
+  if (loginVersion) {
+    loginVersion.textContent = `Version ${APP_VERSION}`;
+  }
+
   // Always force login screen on startup
   auth.logout();
   db.startRealtimeSync();
+
+  const currentClients = db.get('clients', []);
+  const dedupedClients = cleanupDuplicateMasterScheduleClients(currentClients);
+  if (JSON.stringify(dedupedClients) !== JSON.stringify(currentClients)) {
+    db.setExact('clients', dedupedClients);
+  }
 
   cleanupTestClients();
   // Data version check: if version changed, wipe & reseed all master-schedule clients
@@ -3528,7 +4157,7 @@ function collectWorkOrderForm(orderId) {
     ...order,
     clientId: selectedClientId || order.clientId,
     clientName: selectedClient?.name || order.clientName,
-    technician: canonicalUserName(getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || '')),
+    technician: normalizeTechnicianName(getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || '')),
     date: getValue('wo-date', order.date),
     time: getValue('wo-time-in', order.timeIn || order.time || ''),
     timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
@@ -4201,25 +4830,27 @@ function toggleAccordion(header) {
   }
 }
 
-function deleteRepairOrder(orderId) {
+async function deleteRepairOrder(orderId) {
   if (!auth.isAdmin()) {
     showToast('Only admins can delete work orders');
     return;
   }
   if (!confirm('Delete this repair work order?')) return;
-  saveRepairOrders(getRepairOrders().filter(order => order.id !== orderId));
+
+  await db.setExact('repairOrders', getRepairOrders().filter(order => order.id !== orderId));
   showToast('Work order deleted');
   router.renderWorkOrders();
 }
 
-function deleteWorkOrder(orderId) {
+async function deleteWorkOrder(orderId) {
   if (!auth.isAdmin()) {
     showToast('Only admins can delete chem sheets');
     return;
   }
   if (!confirm('Delete this chem sheet?')) return;
   const orders = db.get('workorders', []).filter(o => o.id !== orderId);
-  db.set('workorders', orders);
+
+  await db.setExact('workorders', orders);
   showToast('Chem sheet deleted');
   router.renderWorkOrders();
 }
@@ -5881,7 +6512,10 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
 
     const photos = normalizeRepairPhotos(order.photos);
     photos[slotIndex] = dataUrl;
-    order.photos = photos;
+  const updatedAt = new Date().toISOString();
+  order.photos = photos;
+  order.createdAt = order.createdAt || updatedAt;
+  order.updatedAt = updatedAt;
 
     // Persist immediately
     const orders = getRepairOrders();
@@ -5927,6 +6561,8 @@ function removeRepairPhoto(orderId, slotIndex) {
   const photos = normalizeRepairPhotos(order.photos);
   photos[slotIndex] = '';
   order.photos = photos;
+  order.createdAt = order.createdAt || new Date().toISOString();
+  order.updatedAt = new Date().toISOString();
 
   // Persist immediately
   const orders = getRepairOrders();
@@ -8938,12 +9574,14 @@ function saveWorkOrderForm(orderId, forceComplete = true) {
 
   const currentUser = auth.getCurrentUser();
   const previousStatus = (previousOrder?.status || '').toLowerCase();
+  const savedAt = new Date().toISOString();
   order.status = String(forceComplete ? 'completed' : (document.getElementById('wo-status')?.value || order.status || 'pending')).toLowerCase();
   order.technician = normalizeTechnicianName(order.technician || '');
+  order.createdAt = previousOrder?.createdAt || order.createdAt || savedAt;
   if (order.status === 'completed') {
-    order.completedAt = previousOrder?.completedAt || new Date().toISOString();
+    order.completedAt = previousOrder?.completedAt || savedAt;
   }
-  order.updatedAt = new Date().toISOString();
+  order.updatedAt = savedAt;
   order.updatedBy = currentUser?.name || '';
 
   workOrderManager.saveOrder(order);
@@ -8976,7 +9614,8 @@ function saveWorkOrderForm(orderId, forceComplete = true) {
     }
   }
 
-  router.navigate('workorders');
+  const nextView = !auth.isAdmin() && order.status === 'completed' ? 'dashboard' : 'workorders';
+  router.navigate(nextView);
   showToast(order.status === 'completed'
     ? 'Completed chem sheet saved for admin export'
     : 'Chem sheet saved');
@@ -9044,10 +9683,12 @@ function persistRepairOrderDraft(orderId = '') {
 
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
+  const draftSavedAt = new Date().toISOString();
   const nextOrder = {
     ...order,
+    createdAt: order.createdAt || orders[index]?.createdAt || draftSavedAt,
     status: order.status || 'open',
-    updatedAt: new Date().toISOString()
+    updatedAt: draftSavedAt
   };
 
   if (index >= 0) {
@@ -9093,12 +9734,14 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
   const orders = getRepairOrders();
   const previousOrder = orders.find(item => item.id === order.id);
   const previousStatus = (previousOrder?.status || '').toLowerCase();
+  const savedAt = new Date().toISOString();
 
   order.status = String(forcedStatus || document.getElementById('repair-status')?.value || order.status || 'open').toLowerCase();
+  order.createdAt = previousOrder?.createdAt || order.createdAt || savedAt;
   if (order.status === 'completed') {
-    order.completedAt = previousOrder?.completedAt || new Date().toISOString();
+    order.completedAt = previousOrder?.completedAt || savedAt;
   }
-  order.updatedAt = new Date().toISOString();
+  order.updatedAt = savedAt;
   order.updatedBy = currentUser?.name || '';
 
   const index = orders.findIndex(item => item.id === order.id);
@@ -9151,6 +9794,15 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
+    return;
+  }
+
+  const shouldReturnOfficeTechToHome = !auth.isAdmin()
+    && isOfficeWorkOrderAssignee(currentUser?.name || '')
+    && order.status === 'completed';
+
+  if (shouldReturnOfficeTechToHome) {
+    router.navigate('dashboard');
     return;
   }
 

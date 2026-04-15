@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v251';
+const APP_VERSION = 'v252';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -939,26 +939,156 @@ function shouldMergeClientNameVariants(leftClient = {}, rightClient = {}) {
 function choosePreferredClientName(leftClient = {}, rightClient = {}) {
   const leftName = String(leftClient?.name || '').trim();
   const rightName = String(rightClient?.name || '').trim();
+  const normalizedLeftName = normalizeClientIdentityPart(leftName);
+  const normalizedRightName = normalizeClientIdentityPart(rightName);
   const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
   const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
 
-  if (normalizeClientIdentityPart(leftName) === leftAddress && normalizeClientIdentityPart(rightName) !== rightAddress) {
+  if (normalizedLeftName === leftAddress && normalizedRightName !== rightAddress) {
     return rightName || leftName;
   }
 
-  if (normalizeClientIdentityPart(rightName) === rightAddress && normalizeClientIdentityPart(leftName) !== leftAddress) {
+  if (normalizedRightName === rightAddress && normalizedLeftName !== leftAddress) {
     return leftName || rightName;
   }
 
-  if (leftAddress && normalizeClientIdentityPart(rightName).includes(leftAddress) && !normalizeClientIdentityPart(leftName).includes(leftAddress)) {
+  if (normalizedLeftName === rightAddress && normalizedRightName !== leftAddress) {
     return rightName || leftName;
   }
 
-  if (rightAddress && normalizeClientIdentityPart(leftName).includes(rightAddress) && !normalizeClientIdentityPart(rightName).includes(rightAddress)) {
+  if (normalizedRightName === leftAddress && normalizedLeftName !== rightAddress) {
+    return leftName || rightName;
+  }
+
+  if (leftAddress && normalizedRightName.includes(leftAddress) && !normalizedLeftName.includes(leftAddress)) {
+    return rightName || leftName;
+  }
+
+  if (rightAddress && normalizedLeftName.includes(rightAddress) && !normalizedRightName.includes(rightAddress)) {
     return leftName || rightName;
   }
 
   return rightName.length > leftName.length ? rightName : leftName || rightName;
+}
+
+function extractClientUnitMarkers(client = {}) {
+  const text = `${String(client?.name || '')} ${String(client?.address || '')}`.toLowerCase();
+  const matches = text.match(/#\s*[a-z0-9]+|\b\d+[a-z]?\b/g) || [];
+  return [...new Set(matches.map(marker => marker.replace(/\s+/g, '')))].sort();
+}
+
+function haveOverlappingServiceDays(leftClient = {}, rightClient = {}) {
+  const leftDays = getClientServiceDays(leftClient);
+  const rightDays = getClientServiceDays(rightClient);
+  if (!leftDays.length || !rightDays.length) return true;
+  return leftDays.some(day => rightDays.includes(day));
+}
+
+function hasConflictingUnitMarkers(leftClient = {}, rightClient = {}) {
+  const leftMarkers = extractClientUnitMarkers(leftClient);
+  const rightMarkers = extractClientUnitMarkers(rightClient);
+
+  if (!leftMarkers.length && !rightMarkers.length) return false;
+  if (!leftMarkers.length || !rightMarkers.length) return true;
+
+  return !leftMarkers.some(marker => rightMarkers.includes(marker));
+}
+
+function doesClientAddressDescribeOther(containerClient = {}, targetClient = {}) {
+  const containerAddress = normalizeClientIdentityPart(containerClient?.address || '');
+  const targetName = normalizeClientIdentityPart(targetClient?.name || '');
+  const targetAddress = normalizeClientIdentityPart(targetClient?.address || '');
+
+  if (!containerAddress || !targetName || !targetAddress) return false;
+  return containerAddress.includes(targetName) && containerAddress.includes(targetAddress);
+}
+
+function isLegacySplitPropertyMatch(leftClient = {}, rightClient = {}) {
+  if (!userNamesMatch(getClientTechnician(leftClient), getClientTechnician(rightClient))) {
+    return false;
+  }
+
+  if (!haveOverlappingServiceDays(leftClient, rightClient)) {
+    return false;
+  }
+
+  const leftName = normalizeClientIdentityPart(leftClient?.name || '');
+  const rightName = normalizeClientIdentityPart(rightClient?.name || '');
+  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
+  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
+
+  const exactCrossFieldMatch = (leftName && leftName === rightAddress) || (rightName && rightName === leftAddress);
+  if (exactCrossFieldMatch) {
+    return true;
+  }
+
+  const embeddedSplitMatch = doesClientAddressDescribeOther(leftClient, rightClient)
+    || doesClientAddressDescribeOther(rightClient, leftClient);
+  if (!embeddedSplitMatch) {
+    return false;
+  }
+
+  return !hasConflictingUnitMarkers(leftClient, rightClient);
+}
+
+function choosePreferredClientAddress(leftClient = {}, rightClient = {}) {
+  const leftAddress = String(leftClient?.address || '').trim();
+  const rightAddress = String(rightClient?.address || '').trim();
+  const normalizedLeftName = normalizeClientIdentityPart(leftClient?.name || '');
+  const normalizedRightName = normalizeClientIdentityPart(rightClient?.name || '');
+  const normalizedLeftAddress = normalizeClientIdentityPart(leftAddress);
+  const normalizedRightAddress = normalizeClientIdentityPart(rightAddress);
+
+  if (normalizedLeftName && normalizedLeftName === normalizedRightAddress && normalizedRightName !== normalizedLeftAddress) {
+    return rightAddress || leftAddress;
+  }
+
+  if (normalizedRightName && normalizedRightName === normalizedLeftAddress && normalizedLeftName !== normalizedRightAddress) {
+    return leftAddress || rightAddress;
+  }
+
+  if (doesClientAddressDescribeOther(rightClient, leftClient) && !hasConflictingUnitMarkers(leftClient, rightClient)) {
+    return rightAddress || leftAddress;
+  }
+
+  if (doesClientAddressDescribeOther(leftClient, rightClient) && !hasConflictingUnitMarkers(leftClient, rightClient)) {
+    return leftAddress || rightAddress;
+  }
+
+  return rightAddress.length > leftAddress.length ? rightAddress : leftAddress || rightAddress;
+}
+
+function mergeClientRecords(existingClient = {}, client = {}) {
+  const normalizedTechnician = normalizeTechnicianName(
+    existingClient.technician || client.technician || existingClient.tech || client.tech || ''
+  );
+
+  return {
+    ...existingClient,
+    ...client,
+    id: existingClient.id || client.id || `c_${Math.random().toString(36).substr(2, 9)}`,
+    name: choosePreferredClientName(existingClient, client),
+    address: choosePreferredClientAddress(existingClient, client),
+    technician: normalizedTechnician,
+    serviceDays: mergeClientServiceDays(existingClient.serviceDays, client.serviceDays, client.serviceDay)
+  };
+}
+
+function shouldMergeStoredClientVariants(leftClient = {}, rightClient = {}) {
+  if (!userNamesMatch(getClientTechnician(leftClient), getClientTechnician(rightClient))) {
+    return false;
+  }
+
+  const sameAddressTech = getNormalizedClientAddressTechIdentity(leftClient) === getNormalizedClientAddressTechIdentity(rightClient);
+  if (sameAddressTech && shouldMergeClientNameVariants(leftClient, rightClient)) {
+    return true;
+  }
+
+  return isLegacySplitPropertyMatch(leftClient, rightClient);
+}
+
+function shouldMergeRouteVisitVariants(leftClient = {}, rightClient = {}) {
+  return shouldMergeStoredClientVariants(leftClient, rightClient);
 }
 
 function mergeClientServiceDays(...values) {
@@ -968,48 +1098,21 @@ function mergeClientServiceDays(...values) {
 function cleanupDuplicateMasterScheduleClients(clientList = []) {
   const clients = Array.isArray(clientList) ? clientList : [];
   const mergedClients = [];
-  const exactIdentityIndex = new Map();
-  const addressTechIndex = new Map();
-
-  const mergeIntoIndex = (index, client, preferLongerName = false) => {
-    const existingClient = mergedClients[index];
-    mergedClients[index] = {
-      ...existingClient,
-      ...client,
-      id: existingClient.id || client.id || `c_${Math.random().toString(36).substr(2, 9)}`,
-      name: preferLongerName ? choosePreferredClientName(existingClient, client) : (existingClient.name || client.name),
-      address: existingClient.address || client.address,
-      technician: existingClient.technician || client.technician || client.tech || '',
-      serviceDays: mergeClientServiceDays(existingClient.serviceDays, client.serviceDays, client.serviceDay)
-    };
-  };
 
   clients.forEach(client => {
     const normalizedClient = {
       ...client,
+      name: String(client?.name || '').trim(),
+      address: String(client?.address || '').trim(),
+      technician: normalizeTechnicianName(client?.technician || client?.tech || ''),
       serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
     };
-    const exactIdentity = getNormalizedClientIdentity(normalizedClient);
-    const addressTechIdentity = getNormalizedClientAddressTechIdentity(normalizedClient);
 
-    const exactIndex = exactIdentityIndex.get(exactIdentity);
-    if (exactIndex !== undefined) {
-      mergeIntoIndex(exactIndex, normalizedClient);
-      return;
-    }
-
-    const addressTechMatchIndex = addressTechIndex.get(addressTechIdentity);
-    if (addressTechMatchIndex !== undefined && shouldMergeClientNameVariants(mergedClients[addressTechMatchIndex], normalizedClient)) {
-      mergeIntoIndex(addressTechMatchIndex, normalizedClient, true);
-      exactIdentityIndex.set(exactIdentity, addressTechMatchIndex);
-      return;
-    }
-
-    const nextIndex = mergedClients.length;
-    mergedClients.push(normalizedClient);
-    exactIdentityIndex.set(exactIdentity, nextIndex);
-    if (addressTechIdentity !== '||') {
-      addressTechIndex.set(addressTechIdentity, nextIndex);
+    const existingIndex = mergedClients.findIndex(existingClient => shouldMergeStoredClientVariants(existingClient, normalizedClient));
+    if (existingIndex >= 0) {
+      mergedClients[existingIndex] = mergeClientRecords(mergedClients[existingIndex], normalizedClient);
+    } else {
+      mergedClients.push(normalizedClient);
     }
   });
 
@@ -1047,33 +1150,21 @@ function getClientRouteDisplayName(client = {}, allClients = []) {
 
 function collapseRouteClientsByName(clientList = []) {
   const collapsedClients = [];
-  const byName = new Map();
 
   (Array.isArray(clientList) ? clientList : []).forEach(client => {
-    const nameKey = normalizeClientIdentityPart(client?.name || '');
-    if (!nameKey) return;
+    const normalizedClient = {
+      ...client,
+      technician: normalizeTechnicianName(client?.technician || client?.tech || ''),
+      serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
+    };
 
-    const existingIndex = byName.get(nameKey);
-    if (existingIndex === undefined) {
-      byName.set(nameKey, collapsedClients.length);
-      collapsedClients.push({
-        ...client,
-        serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
-      });
+    const existingIndex = collapsedClients.findIndex(existingClient => shouldMergeRouteVisitVariants(existingClient, normalizedClient));
+    if (existingIndex === -1) {
+      collapsedClients.push(normalizedClient);
       return;
     }
 
-    const existingClient = collapsedClients[existingIndex];
-    const existingAddress = String(existingClient.address || '').trim();
-    const nextAddress = String(client.address || '').trim();
-
-    collapsedClients[existingIndex] = {
-      ...existingClient,
-      serviceDays: mergeClientServiceDays(existingClient.serviceDays, client.serviceDays, client.serviceDay),
-      address: existingAddress && nextAddress && normalizeClientIdentityPart(existingAddress) !== normalizeClientIdentityPart(nextAddress)
-        ? 'Multiple properties'
-        : (existingAddress || nextAddress)
-    };
+    collapsedClients[existingIndex] = mergeClientRecords(collapsedClients[existingIndex], normalizedClient);
   });
 
   return collapsedClients;
@@ -1974,7 +2065,7 @@ class Router {
     const dayClients = dayFilter === 'all'
       ? techClients
       : techClients.filter(c => getClientServiceDays(c).includes(dayFilter));
-    const visibleRouteClients = isAdmin ? collapseRouteClientsByName(dayClients) : dayClients;
+    const visibleRouteClients = collapseRouteClientsByName(dayClients);
 
     content.innerHTML = `
       <div class="section-header">
