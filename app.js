@@ -192,6 +192,11 @@ class DB {
         router.renderClients();
       } else if (router.currentView === 'workorders' && document.getElementById('workorders-list')) {
         router.renderWorkOrders();
+      } else if (router.currentView === 'workorders' && document.querySelector('.wo-form') && workOrderManager?.currentOrder?.id) {
+        const refreshedOrder = workOrderManager.getOrder(workOrderManager.currentOrder.id);
+        if (refreshedOrder) {
+          router.openWorkOrderDetail(refreshedOrder, false);
+        }
       } else if (router.currentView === 'quotes' && typeof router.renderQuotes === 'function' && document.getElementById('quotes-list')) {
         router.renderQuotes();
       }
@@ -2358,6 +2363,18 @@ class Router {
   // Quick actions
   createRoute() { showToast('Route planning can be added next.'); }
   viewRoute(id) { showToast(`Route ${id} selected`); }
+  openWorkOrderDetail(order, pushHistory = true) {
+    if (!order) return;
+
+    this.currentView = 'workorders';
+    workOrderManager.currentOrder = order;
+    if (pushHistory && this.history[this.history.length - 1] !== 'workorders') {
+      this.history.push('workorders');
+    }
+
+    this.renderWorkOrderDetail(order);
+    this.updateNav();
+  }
   createWorkOrder(clientId = '') {
     const clients = db.get('clients', []);
     if (!clients.length) {
@@ -2366,10 +2383,15 @@ class Router {
       return;
     }
 
+    this.currentView = 'workorders';
+    if (this.history[this.history.length - 1] !== 'workorders') {
+      this.history.push('workorders');
+    }
+
     const selectedClientId = clientId || clients[0].id;
     const order = workOrderManager.createOrder(selectedClientId);
     if (order) {
-      this.renderWorkOrderDetail(order);
+      this.openWorkOrderDetail(order, false);
       showToast('Chem sheet created');
     }
   }
@@ -2402,7 +2424,7 @@ class Router {
       showToast('Work order not found');
       return;
     }
-    this.renderWorkOrderDetail(order);
+    this.openWorkOrderDetail(order);
   }
   editWorkOrder(id) {
     const order = workOrderManager.getOrder(id);
@@ -2410,7 +2432,7 @@ class Router {
       showToast('Work order not found');
       return;
     }
-    this.renderWorkOrderDetail(order);
+    this.openWorkOrderDetail(order);
   }
   editClient(id) {
     const _ecUser = auth.getCurrentUser();
