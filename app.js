@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v252';
+const APP_VERSION = 'v253';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -3922,6 +3922,9 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  if (window.__oasisDomBootstrapped) return;
+  window.__oasisDomBootstrapped = true;
+
   const loginVersion = document.getElementById('login-version');
   if (loginVersion) {
     loginVersion.textContent = `Version ${APP_VERSION}`;
@@ -7206,6 +7209,9 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  if (window.__oasisDomBootstrapped) return;
+  window.__oasisDomBootstrapped = true;
+
   // Always force login screen on startup
   auth.logout();
   db.startRealtimeSync();
@@ -8921,6 +8927,9 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  if (window.__oasisDomBootstrapped) return;
+  window.__oasisDomBootstrapped = true;
+
   // Always force login screen on startup
   auth.logout();
   db.startRealtimeSync();
