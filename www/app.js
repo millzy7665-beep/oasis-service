@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v249';
+const APP_VERSION = 'v250';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -142,6 +142,7 @@ class DB {
     this._remoteWritesEnabled = false;
     this._storageListenerBound = false;
     this._pendingRemoteWrites = new Map();
+    this._pendingRemoteWriteModes = new Map();
   }
 
   get(key, defaultValue = null) {
@@ -165,7 +166,7 @@ class DB {
     }
 
     if (firestore && SYNCED_KEYS.includes(key)) {
-      this.queueRemoteWrite(key, parsedValue);
+      this.queueRemoteWrite(key, parsedValue, 'merge');
 
       if (this._remoteWritesEnabled) {
         this.writeSyncedKey(key, parsedValue);
@@ -187,7 +188,7 @@ class DB {
     }
 
     if (firestore && SYNCED_KEYS.includes(key)) {
-      this.queueRemoteWrite(key, parsedValue);
+      this.queueRemoteWrite(key, parsedValue, 'exact');
 
       if (this._remoteWritesEnabled) {
         try {
@@ -208,7 +209,7 @@ class DB {
     this.storage.removeItem(key);
 
     if (firestore && SYNCED_KEYS.includes(key)) {
-      this.queueRemoteWrite(key, null);
+      this.queueRemoteWrite(key, null, 'merge');
 
       if (this._remoteWritesEnabled) {
         this.writeSyncedKey(key, null);
@@ -259,8 +260,9 @@ class DB {
     });
   }
 
-  queueRemoteWrite(key, value) {
+  queueRemoteWrite(key, value, mode = 'merge') {
     this._pendingRemoteWrites.set(key, cloneSyncedValue(value));
+    this._pendingRemoteWriteModes.set(key, mode === 'exact' ? 'exact' : 'merge');
   }
 
   async writeSyncedKey(key, value) {
@@ -302,6 +304,11 @@ class DB {
     if (!this._remoteWritesEnabled || !firestore || !this._pendingRemoteWrites.size) return;
 
     Array.from(this._pendingRemoteWrites.entries()).forEach(([key, value]) => {
+      if (this._pendingRemoteWriteModes.get(key) === 'exact') {
+        this.setExact(key, value);
+        return;
+      }
+
       this.writeSyncedKey(key, value);
     });
   }
@@ -328,22 +335,27 @@ class DB {
 
       if (remoteDoc.exists) {
         const remoteData = remoteDoc.data()?.data ?? null;
-        const resolvedData = isMergeSyncedKey(key)
+        const mergedData = isMergeSyncedKey(key)
           ? mergeSyncedRecordArrays(key, remoteData, localData)
           : remoteData;
+        const resolvedData = key === 'clients' && Array.isArray(mergedData)
+          ? cleanupDuplicateMasterScheduleClients(mergedData)
+          : mergedData;
 
         if (resolvedData !== null && JSON.stringify(resolvedData) !== JSON.stringify(localData)) {
           this.storage.setItem(key, JSON.stringify(resolvedData));
         }
 
-        if (isMergeSyncedKey(key) && JSON.stringify(resolvedData) !== JSON.stringify(remoteData)) {
-          this.queueRemoteWrite(key, resolvedData);
+        if (key === 'clients' && JSON.stringify(resolvedData) !== JSON.stringify(remoteData)) {
+          this.queueRemoteWrite(key, resolvedData, 'exact');
+        } else if (isMergeSyncedKey(key) && JSON.stringify(resolvedData) !== JSON.stringify(remoteData)) {
+          this.queueRemoteWrite(key, resolvedData, 'merge');
         }
         return;
       }
 
       if (hasMeaningfulValue(localData)) {
-        this.queueRemoteWrite(key, clone(localData));
+        this.queueRemoteWrite(key, clone(localData), 'merge');
       }
     })).catch(error => {
       console.warn('Initial Firestore sync failed', error);
@@ -369,6 +381,24 @@ class DB {
           const remoteData = snapshot.data()?.data ?? null;
           const localData = this.get(key, null);
 
+          if (this._pendingRemoteWrites.has(key) && this._pendingRemoteWriteModes.get(key) === 'exact') {
+            const pendingData = this._pendingRemoteWrites.get(key);
+            const pendingSignature = JSON.stringify(pendingData);
+            const remoteSignature = JSON.stringify(remoteData);
+
+            if (pendingSignature !== remoteSignature) {
+              if (pendingSignature !== JSON.stringify(localData)) {
+                this.storage.setItem(key, pendingSignature);
+              }
+              this.setExact(key, pendingData);
+              this.refreshLiveViews(key);
+              return;
+            }
+
+            this._pendingRemoteWrites.delete(key);
+            this._pendingRemoteWriteModes.delete(key);
+          }
+
           if (isMergeSyncedKey(key) && this._pendingRemoteWrites.has(key)) {
             const pendingData = this._pendingRemoteWrites.get(key);
             const mergedPendingData = mergeSyncedRecordArrays(key, remoteData, pendingData);
@@ -386,25 +416,38 @@ class DB {
             }
 
             this._pendingRemoteWrites.delete(key);
+            this._pendingRemoteWriteModes.delete(key);
           }
 
-          if (JSON.stringify(remoteData) === JSON.stringify(localData)) {
+          const normalizedRemoteData = key === 'clients' && Array.isArray(remoteData)
+            ? cleanupDuplicateMasterScheduleClients(remoteData)
+            : remoteData;
+
+          if (key === 'clients' && JSON.stringify(normalizedRemoteData) !== JSON.stringify(remoteData)) {
+            this.storage.setItem(key, JSON.stringify(normalizedRemoteData));
+            this.queueRemoteWrite(key, normalizedRemoteData, 'exact');
+            this.setExact(key, normalizedRemoteData);
+            this.refreshLiveViews(key);
             return;
           }
 
-          this.storage.setItem(key, JSON.stringify(remoteData));
+          if (JSON.stringify(normalizedRemoteData) === JSON.stringify(localData)) {
+            return;
+          }
+
+          this.storage.setItem(key, JSON.stringify(normalizedRemoteData));
           console.log(`[Sync] ${key} updated from Firestore`);
 
-          if (key === 'clients' && Array.isArray(remoteData)) {
-            const routeCount = remoteData.filter(client => getClientTechnician(client) && getClientServiceDays(client).length).length;
-            if (routeCount < Math.max(20, Math.floor((remoteData.length || 0) * 0.25)) && typeof initMasterSchedule === 'function') {
+          if (key === 'clients' && Array.isArray(normalizedRemoteData)) {
+            const routeCount = normalizedRemoteData.filter(client => getClientTechnician(client) && getClientServiceDays(client).length).length;
+            if (routeCount < Math.max(20, Math.floor((normalizedRemoteData.length || 0) * 0.25)) && typeof initMasterSchedule === 'function') {
               this.set('masterScheduleLoaded', false);
               setTimeout(() => initMasterSchedule(), 0);
             }
           }
 
           if (key === 'oasis_notifications' && typeof notificationManager !== 'undefined') {
-            const newItems = (remoteData || []).filter(item => item?.id && !knownNotificationIds.has(item.id));
+            const newItems = (normalizedRemoteData || []).filter(item => item?.id && !knownNotificationIds.has(item.id));
             newItems.forEach(item => {
               knownNotificationIds.add(item.id);
               notificationManager.presentLiveNotification(item);
