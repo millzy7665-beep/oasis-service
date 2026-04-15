@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v248';
+const APP_VERSION = 'v249';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -878,13 +878,29 @@ function getNormalizedClientAddressTechIdentity(client = {}) {
 function shouldMergeClientNameVariants(leftClient = {}, rightClient = {}) {
   const leftName = normalizeClientIdentityPart(leftClient?.name || '');
   const rightName = normalizeClientIdentityPart(rightClient?.name || '');
+  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
+  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
   if (!leftName || !rightName) return false;
+  if ((leftName === leftAddress && rightName !== rightAddress) || (rightName === rightAddress && leftName !== leftAddress)) {
+    return true;
+  }
   return leftName.includes(rightName) || rightName.includes(leftName);
 }
 
 function choosePreferredClientName(leftClient = {}, rightClient = {}) {
   const leftName = String(leftClient?.name || '').trim();
   const rightName = String(rightClient?.name || '').trim();
+  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
+  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
+
+  if (normalizeClientIdentityPart(leftName) === leftAddress && normalizeClientIdentityPart(rightName) !== rightAddress) {
+    return rightName || leftName;
+  }
+
+  if (normalizeClientIdentityPart(rightName) === rightAddress && normalizeClientIdentityPart(leftName) !== leftAddress) {
+    return leftName || rightName;
+  }
+
   return rightName.length > leftName.length ? rightName : leftName || rightName;
 }
 
