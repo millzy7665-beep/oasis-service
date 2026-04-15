@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v237';
+const APP_VERSION = 'v238';
 
 // Collections that sync across all devices via Firestore.
 const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
@@ -9383,6 +9383,15 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
+    return;
+  }
+
+  const shouldReturnOfficeTechToHome = !auth.isAdmin()
+    && isOfficeWorkOrderAssignee(currentUser?.name || '')
+    && order.status === 'completed';
+
+  if (shouldReturnOfficeTechToHome) {
+    router.navigate('dashboard');
     return;
   }
 
