@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v255';
+const APP_VERSION = 'v256';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -1726,6 +1726,7 @@ class Router {
         this.routes[view]();
         const mc = document.getElementById('main-content');
         if (mc) { mc.classList.remove('page-fade'); void mc.offsetWidth; mc.classList.add('page-fade'); }
+        if (auth.isLoggedIn()) unlockAppShellInteraction();
       } catch (e) {
         console.error('Navigation error for view:', view, e);
         // Fallback UI if rendering fails
@@ -2913,6 +2914,7 @@ class Router {
 }
 
 const router = new Router();
+window.router = router;
 
 // ==========================================
 // WORK ORDER MANAGEMENT
@@ -4006,6 +4008,9 @@ document.addEventListener('DOMContentLoaded', () => {
           loginScreen.parentNode.removeChild(loginScreen);
           window.__oasisLoginDetached = true;
         }
+        unlockAppShellInteraction();
+        requestAnimationFrame(() => unlockAppShellInteraction());
+        setTimeout(() => unlockAppShellInteraction(), 80);
         try { router.navigate('dashboard'); } catch (err) { location.reload(); }
       });
     } else {
@@ -4051,6 +4056,54 @@ function setShellSignedInState(isSignedIn) {
     loginScreen.style.visibility = isSignedIn ? 'hidden' : 'visible';
     loginScreen.style.opacity = isSignedIn ? '0' : '1';
     loginScreen.setAttribute('aria-hidden', isSignedIn ? 'true' : 'false');
+  }
+}
+
+function unlockAppShellInteraction() {
+  const appShell = document.getElementById('app');
+  const shell = document.getElementById('app-shell');
+  const header = document.querySelector('.app-header');
+  const mainContent = document.getElementById('main-content');
+  const bottomNav = document.querySelector('.bottom-nav');
+  const loginScreen = document.getElementById('login-screen');
+  const transitionCurtain = document.getElementById('transition-curtain');
+
+  if (appShell) {
+    appShell.classList.remove('hidden');
+    appShell.style.display = 'flex';
+    appShell.style.pointerEvents = 'auto';
+    appShell.style.visibility = 'visible';
+    appShell.style.opacity = '1';
+    appShell.setAttribute('aria-hidden', 'false');
+  }
+
+  [shell, header, mainContent, bottomNav].forEach(element => {
+    if (!element) return;
+    element.style.pointerEvents = 'auto';
+    element.style.visibility = 'visible';
+  });
+
+  document.querySelectorAll('#app .nav-item, #app .signout-btn, #app button, #app a').forEach(element => {
+    element.style.pointerEvents = 'auto';
+  });
+
+  document.querySelectorAll('.modal-overlay.hidden').forEach(overlay => {
+    overlay.style.display = 'none';
+    overlay.style.pointerEvents = 'none';
+    overlay.setAttribute('aria-hidden', 'true');
+  });
+
+  if (transitionCurtain) {
+    transitionCurtain.classList.remove('active');
+    transitionCurtain.style.pointerEvents = 'none';
+  }
+
+  if (loginScreen) {
+    loginScreen.classList.add('hidden');
+    loginScreen.style.display = 'none';
+    loginScreen.style.pointerEvents = 'none';
+    loginScreen.style.visibility = 'hidden';
+    loginScreen.setAttribute('aria-hidden', 'true');
   }
 }
 
@@ -7182,17 +7235,46 @@ function initMasterSchedule() {
     { name: "Zoe Foster", address: "47 Latana Way", tech: "Service - Elvin", serviceDays: ["Friday", "Monday"] }
 
   ];
-  const existingClients = db.get('clients', []);
+  const existingClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
+  const techNameRemap = {
+    'Ace': 'Service - Ace',
+    'Ariel': 'Service - Ariel',
+    'Donald': 'Service - Donald',
+    'Elvin': 'Service - Elvin',
+    'Jermaine': 'Service - Jermaine',
+    'Kadeem': 'Service - Kadeem',
+    'Kingsley': 'Service - Kingsley',
+    'Malik': 'Service - Malik',
+    'Jet': 'Tech - Jet',
+    'Mark': 'Tech - Mark'
+  };
+  existingClients.forEach(client => {
+    if (client.technician && techNameRemap[client.technician]) {
+      client.technician = techNameRemap[client.technician];
+    }
+  });
+
   const mergedClients = [...existingClients];
 
   clients.forEach(c => {
-    const existingIdx = mergedClients.findIndex(
-      e => e.address === c.address && e.technician === c.tech
+    const incomingClient = {
+      name: c.name,
+      address: c.address,
+      technician: c.tech,
+      serviceDays: c.serviceDays
+    };
+    const existingIdx = mergedClients.findIndex(existingClient =>
+      getNormalizedClientIdentity(existingClient) === getNormalizedClientIdentity(incomingClient)
     );
+
     if (existingIdx >= 0) {
-      // Update name and serviceDays so master data corrections take effect
       mergedClients[existingIdx].name = c.name;
-      mergedClients[existingIdx].serviceDays = c.serviceDays;
+      mergedClients[existingIdx].address = mergedClients[existingIdx].address || c.address;
+      mergedClients[existingIdx].technician = c.tech;
+      mergedClients[existingIdx].serviceDays = mergeClientServiceDays(
+        mergedClients[existingIdx].serviceDays,
+        c.serviceDays
+      );
     } else {
       mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
@@ -7204,7 +7286,7 @@ function initMasterSchedule() {
     }
   });
 
-  db.set('clients', mergedClients);
+  db.set('clients', cleanupDuplicateMasterScheduleClients(mergedClients));
   db.set('masterScheduleLoaded', true);
 }
 
