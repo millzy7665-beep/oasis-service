@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v245';
+const APP_VERSION = 'v246';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -967,6 +967,37 @@ function collapseRouteClientsByName(clientList = []) {
   return collapsedClients;
 }
 
+function collapseRouteClientsForAdmin(clientList = []) {
+  const clients = collapseRouteClientsByName(clientList);
+  const collapsedClients = [];
+  const byAddress = new Map();
+
+  clients.forEach(client => {
+    const addressKey = normalizeClientIdentityPart(client?.address || '');
+    const fallbackKey = normalizeClientIdentityPart(client?.name || '');
+    const identity = addressKey || fallbackKey;
+    if (!identity) return;
+
+    const existingIndex = byAddress.get(identity);
+    if (existingIndex === undefined) {
+      byAddress.set(identity, collapsedClients.length);
+      collapsedClients.push({
+        ...client,
+        serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
+      });
+      return;
+    }
+
+    const existingClient = collapsedClients[existingIndex];
+    collapsedClients[existingIndex] = {
+      ...existingClient,
+      serviceDays: mergeClientServiceDays(existingClient.serviceDays, client.serviceDays, client.serviceDay)
+    };
+  });
+
+  return collapsedClients;
+}
+
 function getClientTechnician(client = {}) {
   return normalizeTechnicianName(client?.technician || client?.tech || '');
 }
@@ -1862,7 +1893,7 @@ class Router {
     const dayClients = dayFilter === 'all'
       ? techClients
       : techClients.filter(c => getClientServiceDays(c).includes(dayFilter));
-    const visibleRouteClients = isAdmin ? collapseRouteClientsByName(dayClients) : dayClients;
+    const visibleRouteClients = isAdmin ? collapseRouteClientsForAdmin(dayClients) : dayClients;
 
     content.innerHTML = `
       <div class="section-header">
