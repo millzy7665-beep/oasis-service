@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v241';
+const APP_VERSION = 'v242';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -846,6 +846,98 @@ function normalizeServiceDays(value = []) {
     .map(day => dayMap[day.toLowerCase()] || day))];
 }
 
+function normalizeClientIdentityPart(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.,#'()]/g, '')
+    .replace(/\s*-\s*/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function getNormalizedClientIdentity(client = {}, includeTechnician = true) {
+  const parts = [
+    normalizeClientIdentityPart(client?.name || ''),
+    normalizeClientIdentityPart(client?.address || '')
+  ];
+
+  if (includeTechnician) {
+    parts.push(canonicalUserName(getClientTechnician(client) || client?.technician || client?.tech || ''));
+  }
+
+  return parts.join('||');
+}
+
+function mergeClientServiceDays(...values) {
+  return normalizeServiceDays(values.flatMap(value => normalizeServiceDays(value)));
+}
+
+function cleanupDuplicateMasterScheduleClients(clientList = []) {
+  const clients = Array.isArray(clientList) ? clientList : [];
+  const mergedClients = [];
+  const masterClientIndex = new Map();
+
+  clients.forEach(client => {
+    if (!String(client?.id || '').startsWith('c_')) {
+      mergedClients.push(client);
+      return;
+    }
+
+    const identity = getNormalizedClientIdentity(client);
+    const existingIndex = masterClientIndex.get(identity);
+    if (existingIndex === undefined) {
+      masterClientIndex.set(identity, mergedClients.length);
+      mergedClients.push({
+        ...client,
+        serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
+      });
+      return;
+    }
+
+    const existingClient = mergedClients[existingIndex];
+    mergedClients[existingIndex] = {
+      ...existingClient,
+      ...client,
+      id: existingClient.id,
+      name: existingClient.name || client.name,
+      address: existingClient.address || client.address,
+      technician: existingClient.technician || client.technician || client.tech || '',
+      serviceDays: mergeClientServiceDays(existingClient.serviceDays, client.serviceDays, client.serviceDay)
+    };
+  });
+
+  return mergedClients;
+}
+
+function getDuplicateClientNameKeys(clients = []) {
+  const grouped = new Map();
+
+  (Array.isArray(clients) ? clients : []).forEach(client => {
+    const nameKey = normalizeClientIdentityPart(client?.name || '');
+    if (!nameKey) return;
+    if (!grouped.has(nameKey)) grouped.set(nameKey, new Set());
+    grouped.get(nameKey).add(getNormalizedClientIdentity(client, false));
+  });
+
+  return new Set(
+    [...grouped.entries()]
+      .filter(([, identities]) => identities.size > 1)
+      .map(([nameKey]) => nameKey)
+  );
+}
+
+function getClientRouteDisplayName(client = {}, allClients = []) {
+  const duplicateNames = getDuplicateClientNameKeys(allClients);
+  const clientName = String(client?.name || '').trim() || 'Client';
+
+  if (!duplicateNames.has(normalizeClientIdentityPart(clientName))) {
+    return clientName;
+  }
+
+  const address = String(client?.address || '').trim();
+  return address ? `${clientName} — ${address}` : clientName;
+}
+
 function getClientTechnician(client = {}) {
   return normalizeTechnicianName(client?.technician || client?.tech || '');
 }
@@ -1517,7 +1609,7 @@ class Router {
     const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
     const todayStr = `${todayDay}, ${formatDisplayDate(new Date())}`;
 
-    const allClients = db.get('clients', []);
+    const allClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
     const scheduledRouteClients = getScheduledRouteClients(allClients, isAdmin ? '' : userName);
     const myRouteClients = scheduledRouteClients.filter(c => getClientServiceDays(c).includes(todayDay));
     const myTotalClients = isAdmin
@@ -1793,6 +1885,7 @@ class Router {
 
   renderRouteCard(client) {
     const daysLabel = getClientServiceDays(client).map(d => d.substring(0, 3)).join(', ') || 'Unscheduled';
+    const routeDisplayName = getClientRouteDisplayName(client, db.get('clients', []));
     const _rcUser = auth.getCurrentUser();
     const _rcIsAdmin = auth.isAdmin();
     const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.username === 't9' || _rcUser?.username === 't10');
@@ -1803,7 +1896,7 @@ class Router {
       <div class="list-item" style="cursor:pointer;">
         <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
         <div class="list-item-info">
-          <div class="list-item-name">${escapeHtml(client.name)}</div>
+          <div class="list-item-name">${escapeHtml(routeDisplayName)}</div>
           <div class="list-item-sub">${escapeHtml(client.address)}</div>
           ${daysLabel ? `<div class="list-item-sub" style="font-size:11px; color:#2196F3;">${escapeHtml(daysLabel)}</div>` : ''}
         </div>
@@ -3539,7 +3632,7 @@ function initMasterSchedule() {
     { name: "Zoe Foster", address: "47 Latana Way", tech: "Service - Elvin", serviceDays: ["Friday", "Monday"] }
 
   ];
-  const existingClients = db.get('clients', []);
+  const existingClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
   // Migrate existing stored technician names to new prefix format
   const _techNameRemap = {
     'Ace': 'Service - Ace', 'Ariel': 'Service - Ariel', 'Donald': 'Service - Donald',
@@ -3552,13 +3645,17 @@ function initMasterSchedule() {
     const mergedClients = [...existingClients];
 
   clients.forEach(c => {
-    const existingIdx = mergedClients.findIndex(
-      e => e.address === c.address && e.technician === c.tech
-    );
+    const existingIdx = mergedClients.findIndex(e => getNormalizedClientIdentity(e) === getNormalizedClientIdentity({
+      name: c.name,
+      address: c.address,
+      technician: c.tech
+    }));
     if (existingIdx >= 0) {
-      // Update name and serviceDays so master data corrections take effect
+      // Merge repeated weekly visits into one client record with combined service days.
       mergedClients[existingIdx].name = c.name;
-      mergedClients[existingIdx].serviceDays = c.serviceDays;
+      mergedClients[existingIdx].address = mergedClients[existingIdx].address || c.address;
+      mergedClients[existingIdx].technician = c.tech;
+      mergedClients[existingIdx].serviceDays = mergeClientServiceDays(mergedClients[existingIdx].serviceDays, c.serviceDays);
     } else {
       mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
@@ -3570,7 +3667,7 @@ function initMasterSchedule() {
     }
   });
 
-  db.set('clients', mergedClients);
+  db.set('clients', cleanupDuplicateMasterScheduleClients(mergedClients));
   db.set('masterScheduleLoaded', true);
 }
 
@@ -3600,6 +3697,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Always force login screen on startup
   auth.logout();
   db.startRealtimeSync();
+
+  const dedupedClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
+  if (JSON.stringify(dedupedClients) !== JSON.stringify(db.get('clients', []))) {
+    db.set('clients', dedupedClients);
+  }
 
   cleanupTestClients();
   // Data version check: if version changed, wipe & reseed all master-schedule clients
