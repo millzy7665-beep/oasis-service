@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v235';
+const APP_VERSION = 'v236';
 
 // Collections that sync across all devices via Firestore.
 const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
@@ -764,11 +764,24 @@ function getTechnicianNames() {
     .sort((a, b) => a.localeCompare(b));
 }
 
+function getAllUserNames() {
+  return Object.values(auth.users)
+    .map(user => user.name)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
+
 function normalizeTechnicianName(name = '') {
   const value = String(name || '').trim();
   if (!value) return '';
 
-  const match = getTechnicianNames().find(item => item.toLowerCase() === value.toLowerCase());
+  const exactMatch = getAllUserNames().find(item => item.toLowerCase() === value.toLowerCase());
+  if (exactMatch) return exactMatch;
+
+  const canonicalMatch = getAllUserNames().find(item => canonicalUserName(item) === canonicalUserName(value));
+  if (canonicalMatch) return canonicalMatch;
+
+  const match = getTechnicianNames().find(item => canonicalUserName(item) === canonicalUserName(value));
   return match || value;
 }
 
@@ -2185,7 +2198,7 @@ class Router {
     const chemClientList = (_woIsAdmin || _woIsJetOrMark)
       ? clients
       : clients.filter(c => userNamesMatch((c.technician || ''), (_woCurUser?.name || '')));
-    const technician = order.technician || auth.getCurrentUser()?.name || '';
+    const technician = normalizeTechnicianName(order.technician || auth.getCurrentUser()?.name || '');
     const timeIn = order.timeIn || order.time || '';
     const timeOut = order.timeOut || '';
     const timeSpent = calculateTimeSpent(timeIn, timeOut);
@@ -2219,7 +2232,7 @@ class Router {
               <select id="wo-tech">
                 ${Object.entries(auth.users)
                   .sort((a, b) => a[1].name.localeCompare(b[1].name))
-                  .map(([id, user]) => `<option value="${user.name}" ${user.name === technician ? 'selected' : ''}>${user.name}</option>`).join('')}
+                  .map(([id, user]) => `<option value="${user.name}" ${userNamesMatch(user.name, technician) ? 'selected' : ''}>${user.name}</option>`).join('')}
               </select>
             </div>
 
@@ -3735,7 +3748,7 @@ function collectWorkOrderForm(orderId) {
     ...order,
     clientId: selectedClientId || order.clientId,
     clientName: selectedClient?.name || order.clientName,
-    technician: canonicalUserName(getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || '')),
+    technician: normalizeTechnicianName(getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || '')),
     date: getValue('wo-date', order.date),
     time: getValue('wo-time-in', order.timeIn || order.time || ''),
     timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
