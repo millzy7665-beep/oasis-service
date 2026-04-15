@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v242';
+const APP_VERSION = 'v243';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -226,7 +226,7 @@ class DB {
     try {
       if (router.currentView === 'dashboard') {
         router.renderDashboard();
-      } else if (router.currentView === 'routes' && typeof router.renderRoutes === 'function') {
+      } else if (router.currentView === 'routes' && key === 'clients' && typeof router.renderRoutes === 'function') {
         router.renderRoutes();
       } else if (router.currentView === 'clients' && document.getElementById('clients-list')) {
         router.renderClients();
@@ -878,11 +878,6 @@ function cleanupDuplicateMasterScheduleClients(clientList = []) {
   const masterClientIndex = new Map();
 
   clients.forEach(client => {
-    if (!String(client?.id || '').startsWith('c_')) {
-      mergedClients.push(client);
-      return;
-    }
-
     const identity = getNormalizedClientIdentity(client);
     const existingIndex = masterClientIndex.get(identity);
     if (existingIndex === undefined) {
@@ -898,7 +893,7 @@ function cleanupDuplicateMasterScheduleClients(clientList = []) {
     mergedClients[existingIndex] = {
       ...existingClient,
       ...client,
-      id: existingClient.id,
+      id: existingClient.id || client.id || `c_${Math.random().toString(36).substr(2, 9)}`,
       name: existingClient.name || client.name,
       address: existingClient.address || client.address,
       technician: existingClient.technician || client.technician || client.tech || '',
@@ -3698,9 +3693,10 @@ document.addEventListener('DOMContentLoaded', () => {
   auth.logout();
   db.startRealtimeSync();
 
-  const dedupedClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
-  if (JSON.stringify(dedupedClients) !== JSON.stringify(db.get('clients', []))) {
-    db.set('clients', dedupedClients);
+  const currentClients = db.get('clients', []);
+  const dedupedClients = cleanupDuplicateMasterScheduleClients(currentClients);
+  if (JSON.stringify(dedupedClients) !== JSON.stringify(currentClients)) {
+    db.setExact('clients', dedupedClients);
   }
 
   cleanupTestClients();
