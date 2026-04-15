@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v253';
+const APP_VERSION = 'v254';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -3932,6 +3932,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Always force login screen on startup
   auth.logout();
+  setShellSignedInState(false);
   db.startRealtimeSync();
 
   const currentClients = db.get('clients', []);
@@ -4000,11 +4001,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (loginError) loginError.style.display = 'none';
       curtainTransition(() => {
-        if (loginScreen) loginScreen.style.setProperty('display', 'none', 'important');
-        if (appShell) {
-          appShell.classList.remove('hidden');
-          appShell.style.setProperty('display', 'flex', 'important');
-        }
+        setShellSignedInState(true);
         try { router.navigate('dashboard'); } catch (err) { location.reload(); }
       });
     } else {
@@ -4031,13 +4028,32 @@ function curtainTransition(callback, duration = 320) {
   }, duration / 2);
 }
 
+function setShellSignedInState(isSignedIn) {
+  const appShell = document.getElementById('app');
+  const loginScreen = document.getElementById('login-screen');
+
+  if (appShell) {
+    appShell.classList.toggle('hidden', !isSignedIn);
+    appShell.style.display = isSignedIn ? 'flex' : 'none';
+    appShell.style.pointerEvents = isSignedIn ? 'auto' : 'none';
+    appShell.style.visibility = isSignedIn ? 'visible' : 'hidden';
+    appShell.setAttribute('aria-hidden', isSignedIn ? 'false' : 'true');
+  }
+
+  if (loginScreen) {
+    loginScreen.classList.toggle('hidden', isSignedIn);
+    loginScreen.style.display = isSignedIn ? 'none' : 'flex';
+    loginScreen.style.pointerEvents = isSignedIn ? 'none' : 'auto';
+    loginScreen.style.visibility = isSignedIn ? 'hidden' : 'visible';
+    loginScreen.style.opacity = isSignedIn ? '0' : '1';
+    loginScreen.setAttribute('aria-hidden', isSignedIn ? 'true' : 'false');
+  }
+}
+
 function signOut() {
   curtainTransition(() => {
     auth.logout();
-    const appShell = document.getElementById('app');
-    const loginScreen = document.getElementById('login-screen');
-    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
-    if (loginScreen) { loginScreen.style.display = 'flex'; }
+    setShellSignedInState(false);
     router.navigate('dashboard');
   });
 }
@@ -7299,10 +7315,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function signOut() {
   curtainTransition(() => {
     auth.logout();
-    const appShell = document.getElementById('app');
-    const loginScreen = document.getElementById('login-screen');
-    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
-    if (loginScreen) { loginScreen.style.display = 'flex'; }
+    setShellSignedInState(false);
     router.navigate('dashboard');
   });
 }
@@ -9020,10 +9033,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function signOut() {
   curtainTransition(() => {
     auth.logout();
-    const appShell = document.getElementById('app');
-    const loginScreen = document.getElementById('login-screen');
-    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
-    if (loginScreen) { loginScreen.style.display = 'flex'; }
+    setShellSignedInState(false);
     router.navigate('dashboard');
   });
 }
