@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v238';
+const APP_VERSION = 'v239';
 
 // Collections that sync across all devices via Firestore.
 const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
@@ -158,6 +158,35 @@ class DB {
 
       if (this._remoteWritesEnabled) {
         this.writeSyncedKey(key, parsedValue);
+      }
+    }
+
+    return true;
+  }
+
+  async setExact(key, value) {
+    let serialized;
+    let parsedValue;
+    try {
+      serialized = JSON.stringify(value);
+      this.storage.setItem(key, serialized);
+      parsedValue = JSON.parse(serialized);
+    } catch (e) {
+      return false;
+    }
+
+    if (firestore && SYNCED_KEYS.includes(key)) {
+      this.queueRemoteWrite(key, parsedValue);
+
+      if (this._remoteWritesEnabled) {
+        try {
+          await firestore.collection('app_data').doc(key).set({
+            data: parsedValue,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        } catch (err) {
+          console.warn('Firestore exact write failed for', key, err);
+        }
       }
     }
 
@@ -4421,25 +4450,27 @@ function toggleAccordion(header) {
   }
 }
 
-function deleteRepairOrder(orderId) {
+async function deleteRepairOrder(orderId) {
   if (!auth.isAdmin()) {
     showToast('Only admins can delete work orders');
     return;
   }
   if (!confirm('Delete this repair work order?')) return;
-  saveRepairOrders(getRepairOrders().filter(order => order.id !== orderId));
+
+  await db.setExact('repairOrders', getRepairOrders().filter(order => order.id !== orderId));
   showToast('Work order deleted');
   router.renderWorkOrders();
 }
 
-function deleteWorkOrder(orderId) {
+async function deleteWorkOrder(orderId) {
   if (!auth.isAdmin()) {
     showToast('Only admins can delete chem sheets');
     return;
   }
   if (!confirm('Delete this chem sheet?')) return;
   const orders = db.get('workorders', []).filter(o => o.id !== orderId);
-  db.set('workorders', orders);
+
+  await db.setExact('workorders', orders);
   showToast('Chem sheet deleted');
   router.renderWorkOrders();
 }
