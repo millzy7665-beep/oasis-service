@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v247';
+const APP_VERSION = 'v248';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -868,6 +868,26 @@ function getNormalizedClientIdentity(client = {}, includeTechnician = true) {
   return parts.join('||');
 }
 
+function getNormalizedClientAddressTechIdentity(client = {}) {
+  return [
+    normalizeClientIdentityPart(client?.address || ''),
+    canonicalUserName(getClientTechnician(client) || client?.technician || client?.tech || '')
+  ].join('||');
+}
+
+function shouldMergeClientNameVariants(leftClient = {}, rightClient = {}) {
+  const leftName = normalizeClientIdentityPart(leftClient?.name || '');
+  const rightName = normalizeClientIdentityPart(rightClient?.name || '');
+  if (!leftName || !rightName) return false;
+  return leftName.includes(rightName) || rightName.includes(leftName);
+}
+
+function choosePreferredClientName(leftClient = {}, rightClient = {}) {
+  const leftName = String(leftClient?.name || '').trim();
+  const rightName = String(rightClient?.name || '').trim();
+  return rightName.length > leftName.length ? rightName : leftName || rightName;
+}
+
 function mergeClientServiceDays(...values) {
   return normalizeServiceDays(values.flatMap(value => normalizeServiceDays(value)));
 }
@@ -875,30 +895,49 @@ function mergeClientServiceDays(...values) {
 function cleanupDuplicateMasterScheduleClients(clientList = []) {
   const clients = Array.isArray(clientList) ? clientList : [];
   const mergedClients = [];
-  const masterClientIndex = new Map();
+  const exactIdentityIndex = new Map();
+  const addressTechIndex = new Map();
 
-  clients.forEach(client => {
-    const identity = getNormalizedClientIdentity(client);
-    const existingIndex = masterClientIndex.get(identity);
-    if (existingIndex === undefined) {
-      masterClientIndex.set(identity, mergedClients.length);
-      mergedClients.push({
-        ...client,
-        serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
-      });
-      return;
-    }
-
-    const existingClient = mergedClients[existingIndex];
-    mergedClients[existingIndex] = {
+  const mergeIntoIndex = (index, client, preferLongerName = false) => {
+    const existingClient = mergedClients[index];
+    mergedClients[index] = {
       ...existingClient,
       ...client,
       id: existingClient.id || client.id || `c_${Math.random().toString(36).substr(2, 9)}`,
-      name: existingClient.name || client.name,
+      name: preferLongerName ? choosePreferredClientName(existingClient, client) : (existingClient.name || client.name),
       address: existingClient.address || client.address,
       technician: existingClient.technician || client.technician || client.tech || '',
       serviceDays: mergeClientServiceDays(existingClient.serviceDays, client.serviceDays, client.serviceDay)
     };
+  };
+
+  clients.forEach(client => {
+    const normalizedClient = {
+      ...client,
+      serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
+    };
+    const exactIdentity = getNormalizedClientIdentity(normalizedClient);
+    const addressTechIdentity = getNormalizedClientAddressTechIdentity(normalizedClient);
+
+    const exactIndex = exactIdentityIndex.get(exactIdentity);
+    if (exactIndex !== undefined) {
+      mergeIntoIndex(exactIndex, normalizedClient);
+      return;
+    }
+
+    const addressTechMatchIndex = addressTechIndex.get(addressTechIdentity);
+    if (addressTechMatchIndex !== undefined && shouldMergeClientNameVariants(mergedClients[addressTechMatchIndex], normalizedClient)) {
+      mergeIntoIndex(addressTechMatchIndex, normalizedClient, true);
+      exactIdentityIndex.set(exactIdentity, addressTechMatchIndex);
+      return;
+    }
+
+    const nextIndex = mergedClients.length;
+    mergedClients.push(normalizedClient);
+    exactIdentityIndex.set(exactIdentity, nextIndex);
+    if (addressTechIdentity !== '||') {
+      addressTechIndex.set(addressTechIdentity, nextIndex);
+    }
   });
 
   return mergedClients;
