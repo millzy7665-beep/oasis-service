@@ -163,6 +163,157 @@ function canonicalUserName(name) {
     .replace(/^(service|tech)\s*-\s*/i, '');
 }
 
+function normalizeText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeTechnicianName(name) {
+  const value = String(name || '').trim();
+  if (!value) return '';
+
+  const knownNames = [
+    'Service - Ace',
+    'Service - Ariel',
+    'Service - Donald',
+    'Service - Elvin',
+    'Service - Jermaine',
+    'Service - Kadeem',
+    'Service - Kingsley',
+    'Service - Malik',
+    'Tech - Jet',
+    'Tech - Mark'
+  ];
+
+  const canonical = canonicalUserName(value);
+  return knownNames.find(item => canonicalUserName(item) === canonical) || value;
+}
+
+function normalizeServiceDays(value) {
+  const rawDays = Array.isArray(value)
+    ? value
+    : String(value || '').split(',');
+
+  const dayMap = {
+    mon: 'Monday', monday: 'Monday',
+    tue: 'Tuesday', tues: 'Tuesday', tuesday: 'Tuesday',
+    wed: 'Wednesday', weds: 'Wednesday', wednesday: 'Wednesday',
+    thu: 'Thursday', thur: 'Thursday', thurs: 'Thursday', thursday: 'Thursday',
+    fri: 'Friday', friday: 'Friday',
+    sat: 'Saturday', saturday: 'Saturday',
+    sun: 'Sunday', sunday: 'Sunday'
+  };
+
+  return [...new Set(rawDays
+    .map(day => String(day || '').trim())
+    .filter(Boolean)
+    .map(day => dayMap[day.toLowerCase()] || day))];
+}
+
+exports.repairClientRoutes = functions.https.onRequest(async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') { res.status(204).send(''); return; }
+
+  const secret = String(req.query.secret || req.body?.secret || '').trim();
+  if (secret !== 'oasis-test-2026') {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+
+  const repairs = Array.isArray(req.body?.repairs) ? req.body.repairs : [];
+  if (!repairs.length) {
+    res.status(400).json({ error: 'repairs array required' });
+    return;
+  }
+
+  const clientsRef = admin.firestore().collection('app_data').doc('clients');
+  const snapshot = await clientsRef.get();
+  if (!snapshot.exists) {
+    res.status(404).json({ error: 'clients document not found' });
+    return;
+  }
+
+  const currentClients = Array.isArray(snapshot.data()?.data) ? snapshot.data().data : [];
+  const repairMap = new Map();
+  repairs.forEach(item => {
+    const technician = normalizeTechnicianName(item?.technician || item?.tech || '');
+    const address = normalizeText(item?.address || '');
+    const serviceDays = normalizeServiceDays(item?.serviceDays || item?.serviceDay || []);
+    if (!technician || !address || !serviceDays.length) return;
+    repairMap.set(`${address}__${canonicalUserName(technician)}`, {
+      technician,
+      serviceDays,
+      name: String(item?.name || '').trim()
+    });
+  });
+
+  let updatedCount = 0;
+  let alreadyCorrectCount = 0;
+  let missingMatchCount = 0;
+  const matchedKeys = new Set();
+
+  const nextClients = currentClients.map(client => {
+    const technician = normalizeTechnicianName(client?.technician || client?.tech || '');
+    const address = normalizeText(client?.address || '');
+    const key = `${address}__${canonicalUserName(technician)}`;
+    const repair = repairMap.get(key);
+
+    if (!repair) {
+      missingMatchCount += 1;
+      return client;
+    }
+
+    matchedKeys.add(key);
+    const currentDays = normalizeServiceDays(client?.serviceDays || client?.serviceDay || []);
+    const nextDays = repair.serviceDays;
+    const currentSignature = JSON.stringify(currentDays);
+    const nextSignature = JSON.stringify(nextDays);
+
+    if (currentSignature === nextSignature && technician === repair.technician) {
+      alreadyCorrectCount += 1;
+      return { ...client, technician: repair.technician, serviceDays: nextDays };
+    }
+
+    updatedCount += 1;
+    return {
+      ...client,
+      technician: repair.technician,
+      serviceDays: nextDays
+    };
+  });
+
+  const unmatchedRepairs = repairs.filter(item => {
+    const technician = normalizeTechnicianName(item?.technician || item?.tech || '');
+    const address = normalizeText(item?.address || '');
+    const key = `${address}__${canonicalUserName(technician)}`;
+    return key && !matchedKeys.has(key);
+  }).length;
+
+  await clientsRef.set({
+    data: nextClients,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    routeRepair: {
+      updatedCount,
+      alreadyCorrectCount,
+      unmatchedRepairs,
+      executedAt: admin.firestore.FieldValue.serverTimestamp()
+    }
+  }, { merge: true });
+
+  res.json({
+    ok: true,
+    clientCount: nextClients.length,
+    updatedCount,
+    alreadyCorrectCount,
+    missingMatchCount,
+    unmatchedRepairs
+  });
+});
+
 exports.dispatchQueuedPush = functions.firestore
   .document('push_dispatch_queue/{dispatchId}')
   .onCreate(async (snapshot) => {
