@@ -398,7 +398,7 @@ class Auth {
       't9': { role: 'technician', name: 'Tech - Jet' },
       't10': { role: 'technician', name: 'Tech - Mark' },
       'admin': { role: 'admin', name: 'Chris Mills' },
-      'admin2': { role: 'admin', name: 'James Bussey', disableNotifications: true }
+      'admin2': { role: 'admin', name: 'James Bussey' }
     };
   }
 
@@ -539,14 +539,8 @@ class NotificationManager {
 
   getForUser(user = auth.getCurrentUser()) {
     const userName = user?.name || '';
-    const currentDeviceId = getCurrentDeviceId();
-    const preferredDeviceId = getPreferredNotificationDeviceId(userName);
     return this.getAll().filter(item => {
-      const recipientMatches = userNamesMatch(item.recipient, userName) || item.recipient === 'all';
-      const deviceMatches = item.targetDeviceId
-        ? item.targetDeviceId === currentDeviceId
-        : (!preferredDeviceId || preferredDeviceId === currentDeviceId);
-      return recipientMatches && deviceMatches;
+      return userNamesMatch(item.recipient, userName) || item.recipient === 'all';
     });
   }
 
@@ -745,7 +739,7 @@ const notificationManager = new NotificationManager();
 
 function getAdminNames() {
   return Object.values(auth.users)
-    .filter(user => user.role === 'admin' && !user.disableNotifications)
+    .filter(user => user.role === 'admin')
     .map(user => user.name)
     .sort((a, b) => a.localeCompare(b));
 }
