@@ -21,7 +21,18 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v240';
+const APP_VERSION = 'v241';
+
+const WEEKLY_CHEM_VISIT_TARGETS = {
+  'service - kadeem': 45,
+  'service - elvin': 49,
+  'service - jermaine': 48,
+  'service - ace': 43,
+  'service - donald': 40,
+  'service - kingsley': 24,
+  'service - ariel': 48,
+  'service - malik': 39
+};
 
 // Collections that sync across all devices via Firestore.
 const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
@@ -847,6 +858,15 @@ function getClientVisitMetricKey(client = {}) {
   return String(client?.id || '').trim() || `${String(client?.name || '').trim().toLowerCase()}|${String(client?.address || '').trim().toLowerCase()}`;
 }
 
+function getWeeklyChemVisitTarget(name = '') {
+  const normalizedName = normalizeTechnicianName(name || '');
+  return WEEKLY_CHEM_VISIT_TARGETS[String(normalizedName || '').trim().toLowerCase()] || 0;
+}
+
+function getTotalWeeklyChemVisitTarget() {
+  return Object.values(WEEKLY_CHEM_VISIT_TARGETS).reduce((sum, count) => sum + count, 0);
+}
+
 function getScheduledRouteClients(clients = [], technicianName = '') {
   return (Array.isArray(clients) ? clients : []).filter(client => {
     const serviceDays = getClientServiceDays(client);
@@ -1500,7 +1520,9 @@ class Router {
     const allClients = db.get('clients', []);
     const scheduledRouteClients = getScheduledRouteClients(allClients, isAdmin ? '' : userName);
     const myRouteClients = scheduledRouteClients.filter(c => getClientServiceDays(c).includes(todayDay));
-    const myTotalClients = countScheduledWeeklyVisits(scheduledRouteClients);
+    const myTotalClients = isAdmin
+      ? getTotalWeeklyChemVisitTarget()
+      : (getWeeklyChemVisitTarget(userName) || countScheduledWeeklyVisits(scheduledRouteClients));
 
     // Open and pending work orders
     const myRepairOrders = visibleRepairOrders.filter(r => {
