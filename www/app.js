@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v243';
+const APP_VERSION = 'v244';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -1810,7 +1810,7 @@ class Router {
       return this.renderWorkOrders();
     }
 
-    const allClients = db.get('clients', []);
+    const allClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
     const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
@@ -1880,7 +1880,7 @@ class Router {
 
   renderRouteCard(client) {
     const daysLabel = getClientServiceDays(client).map(d => d.substring(0, 3)).join(', ') || 'Unscheduled';
-    const routeDisplayName = getClientRouteDisplayName(client, db.get('clients', []));
+    const routeDisplayName = getClientRouteDisplayName(client, cleanupDuplicateMasterScheduleClients(db.get('clients', [])));
     const _rcUser = auth.getCurrentUser();
     const _rcIsAdmin = auth.isAdmin();
     const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.username === 't9' || _rcUser?.username === 't10');
