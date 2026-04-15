@@ -1,4 +1,4 @@
-// Oasis Service App — Refresh SW v250
+// Oasis Service App — Refresh SW v251
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js');
 
@@ -13,11 +13,11 @@ firebase.initializeApp({
 });
 
 const messaging = firebase.messaging();
-const CACHE = 'oasis-v250';
+const CACHE = 'oasis-v251';
 const PRECACHE = [
   './index.html',
-  './app.js?v=250',
-  './styles.css?v=250',
+  './app.js?v=251',
+  './styles.css?v=251',
   './manifest.json',
   './oasis-logo.png',
 ];
