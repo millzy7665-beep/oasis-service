@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v236';
+const APP_VERSION = 'v237';
 
 // Collections that sync across all devices via Firestore.
 const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
@@ -9203,7 +9203,8 @@ function saveWorkOrderForm(orderId, forceComplete = true) {
     }
   }
 
-  router.navigate('workorders');
+  const nextView = !auth.isAdmin() && order.status === 'completed' ? 'dashboard' : 'workorders';
+  router.navigate(nextView);
   showToast(order.status === 'completed'
     ? 'Completed chem sheet saved for admin export'
     : 'Chem sheet saved');
