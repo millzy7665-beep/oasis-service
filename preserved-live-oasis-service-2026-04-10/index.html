@@ -41,10 +41,10 @@
       <img class="login-logo" src="oasis-logo.png" alt="OASIS">
       <div class="login-brand">OASIS</div>
       <div class="login-tagline">Luxury Pool &amp; Watershape Service</div>
-      <form id="login-form" class="login-form">
+      <form id="login-form" class="login-form" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
         <div class="login-field-group">
           <label class="login-label">Select Your Name</label>
-          <select id="login-tech" required>
+          <select id="login-tech" name="login-tech" required autocomplete="off" data-lpignore="true" data-1p-ignore="true">
             <option value="" disabled selected>— Select your name —</option>
             <option value="t1">Service - Ace</option>
             <option value="t2">Service - Ariel</option>
@@ -62,7 +62,7 @@
         </div>
         <div class="login-field-group">
           <label class="login-label">Enter PIN</label>
-          <input type="password" id="login-pin" required maxlength="4" inputmode="numeric" pattern="[0-9]*" placeholder="••••" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ddd; font-size: 18px; text-align: center; letter-spacing: 4px;">
+          <input type="password" id="login-pin" name="access-pin" required maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="••••" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ddd; font-size: 18px; text-align: center; letter-spacing: 4px;">
         </div>
         <button type="submit" class="btn-login">Sign In</button>
         <div id="login-error" class="login-error" style="display:none">Invalid name or PIN.</div>
