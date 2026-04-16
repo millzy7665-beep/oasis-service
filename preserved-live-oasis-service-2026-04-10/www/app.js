@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v271';
+const APP_VERSION = 'v272';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -3177,9 +3177,9 @@ class Router {
         <div class="card" style="margin:12px;">
           <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
             <button class="btn btn-secondary" onclick="saveWorkOrderForm('${order.id}', false)">Save</button>
-            <button class="btn btn-primary" onclick="sendReport('${order.id}')">Send to Admin</button>
+            <button class="btn btn-primary" onclick="sendReport('${order.id}')">Complete and Send</button>
             ${auth.canShare() ? `<button class="btn send-report-btn" onclick="shareReport('${order.id}')">Share Report</button>` : ''}
-            <div class="wo-hint" style="flex-basis:100%;margin:0;">Save progress any time. Use Send to Admin once the chem sheet is complete.</div>
+            <div class="wo-hint" style="flex-basis:100%;margin:0;">Save progress any time. Use Complete and Send once the chem sheet is complete.</div>
           </div>
         </div>
       </div>
@@ -8058,7 +8058,7 @@ function shareReport(orderId) {
 }
 
 function sendReport(orderId) {
-  shareReport(orderId);
+  saveWorkOrderForm(orderId, true);
 }
 
 function getRepairOrders() {
@@ -10186,7 +10186,7 @@ function updateRepairCompletionState() {
   const existingOrder = existingId ? getRepairOrders().find(item => item.id === existingId) : null;
   if (status === 'completed' && isOrderSubmittedToAdmin(existingOrder || {})) {
     button.disabled = true;
-    button.textContent = 'Sent to Admin';
+    button.textContent = 'Completed and Sent';
     hint.textContent = 'This work order has already been sent to admin.';
     return;
   }
@@ -10194,10 +10194,10 @@ function updateRepairCompletionState() {
   const draft = collectRepairOrderFromForm();
   const ready = isRepairOrderReadyToComplete(draft || {});
   button.disabled = !ready;
-  button.textContent = 'Send to Admin';
+  button.textContent = 'Complete and Send';
   hint.textContent = ready
-    ? 'Save progress any time. Use Send to Admin when the job is complete.'
-    : 'Fill in client, address, date, assigned tech, work order type, and summary before sending to admin.';
+    ? 'Save progress any time. Use Complete and Send when the job is complete.'
+    : 'Fill in client, address, date, assigned tech, work order type, and summary before completing and sending.';
 }
 
 function isRepairOrderReadyToComplete(order = {}) {
