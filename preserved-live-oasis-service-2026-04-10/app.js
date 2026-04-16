@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v270';
+const APP_VERSION = 'v271';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -6568,7 +6568,11 @@ async function sharePDF(doc, filename) {
 }
 
 async function shareFileByEmail(base64Data, filename, contentType = 'application/octet-stream') {
-  const subject = filename.toLowerCase().endsWith('.xlsx') ? 'OASIS Completed Orders Spreadsheet' : 'OASIS File';
+  const isSpreadsheet = filename.toLowerCase().endsWith('.xlsx');
+  const isPdf = filename.toLowerCase().endsWith('.pdf');
+  const subject = isSpreadsheet
+    ? 'OASIS Completed Orders Spreadsheet'
+    : (isPdf ? 'OASIS Daily Work Orders PDF' : 'OASIS File');
   const body = `Please send the attached file:\n\n${filename}`;
 
   try {
@@ -6586,10 +6590,10 @@ async function shareFileByEmail(base64Data, filename, contentType = 'application
         title: subject,
         text: body,
         files: [saveResult.uri],
-        dialogTitle: 'Choose Email to send the spreadsheet'
+        dialogTitle: isPdf ? 'Choose Email to send the PDF' : 'Choose Email to send the file'
       });
 
-      showToast('Choose Email to send the spreadsheet');
+      showToast(isPdf ? 'Choose Email to send the PDF' : 'Choose Email to send the file');
       return;
     }
   } catch (error) {
@@ -6609,7 +6613,7 @@ async function shareFileByEmail(base64Data, filename, contentType = 'application
 
       if (!navigator.canShare || navigator.canShare(shareData)) {
         await navigator.share(shareData);
-        showToast('Choose Email to send the spreadsheet');
+        showToast(isPdf ? 'Choose Email to send the PDF' : 'Choose Email to send the file');
         return;
       }
     }
@@ -6618,8 +6622,8 @@ async function shareFileByEmail(base64Data, filename, contentType = 'application
   }
 
   downloadBase64File(base64Data, filename, contentType);
-  openEmailShare(subject, `${body}\n\nThe spreadsheet has also been downloaded to your device if it needs attaching manually.`);
-  showToast('Email draft opened with spreadsheet download ready');
+  openEmailShare(subject, `${body}\n\nThe file has also been downloaded to your device if it needs attaching manually.`);
+  showToast('Email draft opened with file download ready');
 }
 
 async function exportRepairToExcel(orderId) {
@@ -10580,8 +10584,9 @@ async function exportDailyWorkOrders() {
     }
 
     const filename = `OASIS_Daily_Work_Orders_${selectedDate}.pdf`;
-    await sharePDF(doc, filename);
-    showToast(`${orders.length} daily work order${orders.length !== 1 ? 's' : ''} ready`);
+    const base64Pdf = doc.output('datauristring').split(',')[1];
+    await shareFileByEmail(base64Pdf, filename, 'application/pdf');
+    showToast(`${orders.length} daily work order${orders.length !== 1 ? 's' : ''} bundled into one PDF`);
   } catch (error) {
     console.error('Daily work order export failed:', error);
     showToast('Daily work order export failed');
