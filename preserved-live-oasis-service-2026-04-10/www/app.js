@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v256';
+const APP_VERSION = 'v257';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -1966,14 +1966,14 @@ class Router {
       <div id="today-route">
         ${myRouteClients.length > 0
           ? myRouteClients.sort((a, b) => a.name.localeCompare(b.name)).map(c => `
-            <div class="list-item" onclick="router.editClient('${escapeHtml(c.id)}')" style="cursor:pointer;">
+            <div class="list-item" onclick="router.editClient('${escapeJsString(c.id)}')" style="cursor:pointer;">
               <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
               <div class="list-item-info">
                 <div class="list-item-name">${escapeHtml(c.name)}</div>
                 <div class="list-item-sub">${escapeHtml(c.address)}</div>
               </div>
               <div class="list-item-actions">
-                <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(c.address)}')" title="Navigate">📍</button>
+                <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeJsString(c.address)}')" title="Navigate">📍</button>
               </div>
             </div>
           `).join('')
@@ -2135,8 +2135,8 @@ class Router {
           ${daysLabel ? `<div class="list-item-sub" style="font-size:11px; color:#2196F3;">${escapeHtml(daysLabel)}</div>` : ''}
         </div>
         <div class="list-item-actions">
-          <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(client.address)}')" title="Navigate">📍</button>
-          ${_rcIsFieldTech ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); router.createWorkOrder('${escapeHtml(client.id)}')">${chemButtonLabel}</button>` : ''}
+          <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeJsString(client.address)}')" title="Navigate">📍</button>
+          ${_rcIsFieldTech ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); router.createWorkOrder('${escapeJsString(client.id)}')">${chemButtonLabel}</button>` : ''}
         </div>
       </div>
     `;
@@ -2178,7 +2178,7 @@ class Router {
   }
 
   renderClientsList(query = '') {
-    const allClients = db.get('clients', []);
+    const allClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
     const isAdmin = auth.isAdmin();
     const currentUser = auth.getCurrentUser();
     const isJetOrMark = !isAdmin && (currentUser?.username === 't9' || currentUser?.username === 't10');
@@ -2212,9 +2212,9 @@ class Router {
           <div class="list-item-sub">${client.address}</div>
         </div>
         <div class="list-item-actions">
-          <button class="btn btn-icon" onclick="openMap('${client.address}')" title="View on Map">📍</button>
-          ${canManageClients ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
-          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${client.id}')">Delete</button>` : ''}
+          <button class="btn btn-icon" onclick="openMap('${escapeJsString(client.address)}')" title="View on Map">📍</button>
+          ${canManageClients ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${escapeJsString(client.id)}')">Edit</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${escapeJsString(client.id)}')">Delete</button>` : ''}
         </div>
       </div>
     `).join('');
@@ -2416,13 +2416,13 @@ class Router {
               ${currentUser.role === 'admin' ? `<div class="job-meta-item">👤 ${wo.technician || 'Unknown'}</div>` : ''}
             </div>
           </div>
-          <button class="btn btn-icon" onclick="openMap('${wo.address}')" title="View on Map">📍</button>
+          <button class="btn btn-icon" onclick="openMap('${escapeJsString(wo.address)}')" title="View on Map">📍</button>
         </div>
         <div class="job-card-body">
           <div class="badge badge-${status}">${status.replace('-', ' ')}</div>
         </div>
         <div class="job-card-footer">
-          <button class="btn ${isCompleted ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="router.viewWorkOrder('${wo.id}')">${isCompleted ? 'Completed' : 'Open'}</button>
+          <button class="btn ${isCompleted ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="router.viewWorkOrder('${escapeJsString(wo.id)}')">${isCompleted ? 'Completed' : 'Open'}</button>
           ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareReport('${wo.id}')">Share</button>` : ''}
           ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteWorkOrder('${wo.id}')">Delete</button>` : ''}
         </div>
@@ -5585,6 +5585,18 @@ function escapeHtml(value = '') {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function escapeJsString(value = '') {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function showToast(message) {
