@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v267';
+const APP_VERSION = 'v268';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -1995,13 +1995,67 @@ class Router {
     this.currentView = 'dashboard';
     this.history = ['dashboard'];
     this.adminJobStatusFilter = 'all';
+    this._browserHistoryReady = false;
+    this._handlingBrowserPop = false;
   }
 
-  navigate(view, pushHistory = true) {
+  pushHistoryEntry(view, allowDuplicate = false, syncBrowser = true) {
+    if (!allowDuplicate && this.history[this.history.length - 1] === view) {
+      return false;
+    }
+
+    this.history.push(view);
+
+    if (syncBrowser) {
+      this.syncBrowserHistory('push');
+    }
+
+    return true;
+  }
+
+  syncBrowserHistory(mode = 'push') {
+    if (this._handlingBrowserPop || typeof window === 'undefined' || !window.history?.pushState) {
+      return;
+    }
+
+    const state = {
+      oasisView: this.currentView || this.history[this.history.length - 1] || 'dashboard',
+      oasisDepth: this.history.length
+    };
+
+    if (mode === 'replace') {
+      window.history.replaceState(state, '', window.location.href);
+      return;
+    }
+
+    window.history.pushState(state, '', window.location.href);
+  }
+
+  initBrowserHistory() {
+    if (this._browserHistoryReady || typeof window === 'undefined' || !window.history?.replaceState) {
+      return;
+    }
+
+    this._browserHistoryReady = true;
+    this.syncBrowserHistory('replace');
+
+    window.addEventListener('popstate', () => {
+      if (!auth.isLoggedIn()) return;
+
+      this._handlingBrowserPop = true;
+      try {
+        this.goBack(false);
+      } finally {
+        this._handlingBrowserPop = false;
+      }
+    });
+  }
+
+  navigate(view, pushHistory = true, syncBrowser = true) {
     console.log('Navigating to:', view);
     this.currentView = view;
-    if (pushHistory && this.history[this.history.length - 1] !== view) {
-      this.history.push(view);
+    if (pushHistory) {
+      this.pushHistoryEntry(view, false, syncBrowser);
     }
     if (this.routes[view]) {
       try {
@@ -2024,11 +2078,18 @@ class Router {
     this.updateNav();
   }
 
-  goBack() {
+  goBack(syncBrowser = true) {
+    if (syncBrowser && this._browserHistoryReady && !this._handlingBrowserPop && this.history.length > 1) {
+      window.history.back();
+      return;
+    }
+
     if (this.history.length > 1) {
       this.history.pop(); // Remove current view
       const prevView = this.history[this.history.length - 1];
-      this.navigate(prevView, false);
+      this.navigate(prevView, false, false);
+    } else if (this.currentView !== 'dashboard') {
+      this.navigate('dashboard', false, false);
     }
   }
 
@@ -3063,8 +3124,8 @@ class Router {
 
     this.currentView = 'workorders';
     workOrderManager.currentOrder = order;
-    if (pushHistory && this.history[this.history.length - 1] !== 'workorders') {
-      this.history.push('workorders');
+    if (pushHistory) {
+      this.pushHistoryEntry('workorders', true);
     }
 
     this.renderWorkOrderDetail(order);
@@ -3078,15 +3139,10 @@ class Router {
       return;
     }
 
-    this.currentView = 'workorders';
-    if (this.history[this.history.length - 1] !== 'workorders') {
-      this.history.push('workorders');
-    }
-
     const selectedClientId = clientId || clients[0].id;
     const order = workOrderManager.createOrder(selectedClientId);
     if (order) {
-      this.openWorkOrderDetail(order, false);
+      this.openWorkOrderDetail(order, true);
       showToast('Chem sheet created');
     }
   }
@@ -3143,6 +3199,9 @@ class Router {
       showToast('Client not found');
       return;
     }
+
+    this.currentView = 'clients';
+    this.pushHistoryEntry('clients', true);
     this.renderClientDetail(client);
   }
 
@@ -4218,16 +4277,16 @@ document.addEventListener('DOMContentLoaded', () => {
   setShellSignedInState(!!savedUser);
   scheduleDeferredStartupTask(runDeferredStartupWork, savedUser ? 180 : 60);
 
-  // Android Back Button Handling
-  if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
+  router.initBrowserHistory();
+
+  if (!window.__oasisNativeBackButtonBound && typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
+    window.__oasisNativeBackButtonBound = true;
     Capacitor.Plugins.App.addListener('backButton', () => {
-      if (router.currentView === 'dashboard') {
-        // Stop at home page, don't exit if logged in (though we force login above)
+      if (!auth.isLoggedIn()) {
         return;
       }
 
-      if (!auth.isLoggedIn()) {
-        // If at login screen, maybe let it exit or do nothing
+      if (router.currentView === 'dashboard' && router.history.length <= 1) {
         return;
       }
 
@@ -5396,11 +5455,17 @@ function renderEstimateItemRow(estimateId, item, index) {
   `;
 }
 
-function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate = null) {
+function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate = null, pushHistory = true) {
   if (!auth.isAdmin()) {
     showToast('Only admins can create estimate sheets');
     router.renderWorkOrders();
     return;
+  }
+
+  if (pushHistory && !draftEstimate && typeof router !== 'undefined') {
+    router.currentView = 'quotes';
+    router.pushHistoryEntry('quotes', true);
+    router.updateNav();
   }
 
   const clients = getSortedClients(getCachedUiClients());
@@ -7619,16 +7684,16 @@ document.addEventListener('DOMContentLoaded', () => {
   rollOverPendingJobs();
   populateLoginTechOptions();
 
-  // Android Back Button Handling
-  if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
+  router.initBrowserHistory();
+
+  if (!window.__oasisNativeBackButtonBound && typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
+    window.__oasisNativeBackButtonBound = true;
     Capacitor.Plugins.App.addListener('backButton', () => {
-      if (router.currentView === 'dashboard') {
-        // Stop at home page, don't exit if logged in (though we force login above)
+      if (!auth.isLoggedIn()) {
         return;
       }
 
-      if (!auth.isLoggedIn()) {
-        // If at login screen, maybe let it exit or do nothing
+      if (router.currentView === 'dashboard' && router.history.length <= 1) {
         return;
       }
 
@@ -7989,8 +8054,13 @@ function renderRepairOrdersList(statusFilter = 'all') {
   `).join('');
 }
 
-function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = null) {
+function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = null, pushHistory = true) {
   const content = document.getElementById('main-content');
+  if (pushHistory && !draftOrder && typeof router !== 'undefined') {
+    router.currentView = 'workorders';
+    router.pushHistoryEntry('workorders', true);
+    router.updateNav();
+  }
   const existing = !draftOrder && orderId ? getRepairOrders().find(order => order.id === orderId) : null;
   const clients = db.get('clients', []);
   const assigneeOptions = getWorkOrderAssigneeOptions();
@@ -9331,16 +9401,16 @@ document.addEventListener('DOMContentLoaded', () => {
   rollOverPendingJobs();
   populateLoginTechOptions();
 
-  // Android Back Button Handling
-  if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
+  router.initBrowserHistory();
+
+  if (!window.__oasisNativeBackButtonBound && typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
+    window.__oasisNativeBackButtonBound = true;
     Capacitor.Plugins.App.addListener('backButton', () => {
-      if (router.currentView === 'dashboard') {
-        // Stop at home page, don't exit if logged in (though we force login above)
+      if (!auth.isLoggedIn()) {
         return;
       }
 
-      if (!auth.isLoggedIn()) {
-        // If at login screen, maybe let it exit or do nothing
+      if (router.currentView === 'dashboard' && router.history.length <= 1) {
         return;
       }
 
