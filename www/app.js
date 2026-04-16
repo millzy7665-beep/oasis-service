@@ -21,124 +21,11 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v264';
-
-const WEEKLY_CHEM_VISIT_TARGETS = {
-  'service - kadeem': 45,
-  'service - elvin': 49,
-  'service - jermaine': 48,
-  'service - ace': 43,
-  'service - donald': 40,
-  'service - kingsley': 24,
-  'service - ariel': 48,
-  'service - malik': 39
-};
 
 // Collections that sync across all devices via Firestore.
 const SYNCED_KEYS = ['clients', 'workorders', 'repairOrders', 'oasis_notifications', 'notification_device_registry', 'estimates'];
-const MERGE_SYNCED_KEYS = ['workorders', 'repairOrders'];
 const PUSH_TOKEN_COLLECTION = 'push_tokens';
 const PUSH_DISPATCH_COLLECTION = 'push_dispatch_queue';
-
-function cloneSyncedValue(value) {
-  if (value === null || value === undefined) return value;
-  return JSON.parse(JSON.stringify(value));
-}
-
-function normalizeStoredValue(key, value) {
-  if (key === 'clients' && Array.isArray(value)) {
-    return cleanupDuplicateMasterScheduleClients(value);
-  }
-
-  return value;
-}
-
-function isMergeSyncedKey(key = '') {
-  return MERGE_SYNCED_KEYS.includes(String(key || ''));
-}
-
-function getSyncedRecordId(record = {}) {
-  return String(record?.id || '').trim();
-}
-
-function getSyncedTimestampValue(value = '') {
-  if (!value) return 0;
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-
-  const parsed = Date.parse(String(value || '').trim());
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function getSyncedRecordTimestamp(record = {}) {
-  return Math.max(
-    getSyncedTimestampValue(record?.updatedAt),
-    getSyncedTimestampValue(record?.completedAt),
-    getSyncedTimestampValue(record?.createdAt),
-    getSyncedTimestampValue(record?.date)
-  );
-}
-
-function shouldPreferIncomingSyncedRecord(currentRecord = {}, incomingRecord = {}) {
-  const currentTimestamp = getSyncedRecordTimestamp(currentRecord);
-  const incomingTimestamp = getSyncedRecordTimestamp(incomingRecord);
-
-  if (incomingTimestamp !== currentTimestamp) {
-    return incomingTimestamp > currentTimestamp;
-  }
-
-  const currentCompleted = String(currentRecord?.status || '').toLowerCase() === 'completed';
-  const incomingCompleted = String(incomingRecord?.status || '').toLowerCase() === 'completed';
-  if (incomingCompleted !== currentCompleted) {
-    return incomingCompleted;
-  }
-
-  return JSON.stringify(incomingRecord).length >= JSON.stringify(currentRecord).length;
-}
-
-function mergeSyncedRecordArrays(key = '', remoteData = [], localData = []) {
-  if (!isMergeSyncedKey(key)) {
-    return cloneSyncedValue(localData);
-  }
-
-  const remoteRecords = Array.isArray(remoteData) ? remoteData : [];
-  const localRecords = Array.isArray(localData) ? localData : [];
-  const mergedById = new Map();
-  const untrackedRecords = [];
-
-  remoteRecords.forEach(record => {
-    const recordId = getSyncedRecordId(record);
-    if (!recordId) {
-      untrackedRecords.push(cloneSyncedValue(record));
-      return;
-    }
-    mergedById.set(recordId, cloneSyncedValue(record));
-  });
-
-  localRecords.forEach(record => {
-    const recordId = getSyncedRecordId(record);
-    if (!recordId) {
-      const serialized = JSON.stringify(record || {});
-      if (!untrackedRecords.some(item => JSON.stringify(item || {}) === serialized)) {
-        untrackedRecords.push(cloneSyncedValue(record));
-      }
-      return;
-    }
-
-    const currentRecord = mergedById.get(recordId);
-    if (!currentRecord || shouldPreferIncomingSyncedRecord(currentRecord, record)) {
-      mergedById.set(recordId, cloneSyncedValue({ ...(currentRecord || {}), ...record }));
-    }
-  });
-
-  return [
-    ...Array.from(mergedById.values()).sort((left, right) => {
-      const timeDelta = getSyncedRecordTimestamp(right) - getSyncedRecordTimestamp(left);
-      if (timeDelta !== 0) return timeDelta;
-      return compareAlphaNumeric(left?.clientName || left?.name || '', right?.clientName || right?.name || '');
-    }),
-    ...untrackedRecords
-  ];
-}
 
 // ==========================================
 // DATA MANAGEMENT (DB)
@@ -149,8 +36,6 @@ class DB {
     this._realtimeSyncStarted = false;
     this._remoteWritesEnabled = false;
     this._storageListenerBound = false;
-    this._pendingRemoteWrites = new Map();
-    this._pendingRemoteWriteModes = new Map();
   }
 
   get(key, defaultValue = null) {
@@ -164,53 +49,18 @@ class DB {
 
   set(key, value) {
     let serialized;
-    let parsedValue;
-    const normalizedValue = normalizeStoredValue(key, value);
     try {
-      serialized = JSON.stringify(normalizedValue);
+      serialized = JSON.stringify(value);
       this.storage.setItem(key, serialized);
-      parsedValue = JSON.parse(serialized);
     } catch (e) {
       return false;
     }
 
-    if (firestore && SYNCED_KEYS.includes(key)) {
-      const writeMode = key === 'clients' ? 'exact' : 'merge';
-      this.queueRemoteWrite(key, parsedValue, writeMode);
-
-      if (this._remoteWritesEnabled) {
-        this.writeSyncedKey(key, parsedValue);
-      }
-    }
-
-    return true;
-  }
-
-  async setExact(key, value) {
-    let serialized;
-    let parsedValue;
-    const normalizedValue = normalizeStoredValue(key, value);
-    try {
-      serialized = JSON.stringify(normalizedValue);
-      this.storage.setItem(key, serialized);
-      parsedValue = JSON.parse(serialized);
-    } catch (e) {
-      return false;
-    }
-
-    if (firestore && SYNCED_KEYS.includes(key)) {
-      this.queueRemoteWrite(key, parsedValue, 'exact');
-
-      if (this._remoteWritesEnabled) {
-        try {
-          await firestore.collection('app_data').doc(key).set({
-            data: parsedValue,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: true });
-        } catch (err) {
-          console.warn('Firestore exact write failed for', key, err);
-        }
-      }
+    if (this._remoteWritesEnabled && firestore && SYNCED_KEYS.includes(key)) {
+      firestore.collection('app_data').doc(key).set({
+        data: JSON.parse(serialized),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }).catch(err => console.warn('Firestore write failed for', key, err));
     }
 
     return true;
@@ -219,12 +69,9 @@ class DB {
   remove(key) {
     this.storage.removeItem(key);
 
-    if (firestore && SYNCED_KEYS.includes(key)) {
-      this.queueRemoteWrite(key, null, 'merge');
-
-      if (this._remoteWritesEnabled) {
-        this.writeSyncedKey(key, null);
-      }
+    if (this._remoteWritesEnabled && firestore && SYNCED_KEYS.includes(key)) {
+      firestore.collection('app_data').doc(key).delete()
+        .catch(err => console.warn('Firestore delete failed for', key, err));
     }
   }
 
@@ -238,17 +85,12 @@ class DB {
     try {
       if (router.currentView === 'dashboard') {
         router.renderDashboard();
-      } else if (router.currentView === 'routes' && key === 'clients' && typeof router.renderRoutes === 'function') {
+      } else if (router.currentView === 'routes' && typeof router.renderRoutes === 'function') {
         router.renderRoutes();
       } else if (router.currentView === 'clients' && document.getElementById('clients-list')) {
         router.renderClients();
       } else if (router.currentView === 'workorders' && document.getElementById('workorders-list')) {
         router.renderWorkOrders();
-      } else if (router.currentView === 'workorders' && document.querySelector('.wo-form') && workOrderManager?.currentOrder?.id) {
-        const refreshedOrder = workOrderManager.getOrder(workOrderManager.currentOrder.id);
-        if (refreshedOrder) {
-          router.openWorkOrderDetail(refreshedOrder, false);
-        }
       } else if (router.currentView === 'quotes' && typeof router.renderQuotes === 'function' && document.getElementById('quotes-list')) {
         router.renderQuotes();
       }
@@ -268,61 +110,6 @@ class DB {
     window.addEventListener('storage', event => {
       if (!event.key || !SYNCED_KEYS.includes(event.key)) return;
       this.refreshLiveViews(event.key);
-    });
-  }
-
-  queueRemoteWrite(key, value, mode = 'merge') {
-    const normalizedValue = normalizeStoredValue(key, value);
-    const resolvedMode = key === 'clients' ? 'exact' : (mode === 'exact' ? 'exact' : 'merge');
-    this._pendingRemoteWrites.set(key, cloneSyncedValue(normalizedValue));
-    this._pendingRemoteWriteModes.set(key, resolvedMode);
-  }
-
-  async writeSyncedKey(key, value) {
-    if (!firestore) return;
-
-    const queuedValue = cloneSyncedValue(normalizeStoredValue(key, value));
-    const docRef = firestore.collection('app_data').doc(key);
-
-    try {
-      if (queuedValue === null) {
-        await docRef.delete();
-        return;
-      }
-
-      if (isMergeSyncedKey(key) && Array.isArray(queuedValue)) {
-        await firestore.runTransaction(async transaction => {
-          const snapshot = await transaction.get(docRef);
-          const remoteValue = snapshot.exists ? snapshot.data()?.data ?? [] : [];
-          const mergedValue = mergeSyncedRecordArrays(key, remoteValue, queuedValue);
-
-          transaction.set(docRef, {
-            data: mergedValue,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: true });
-        });
-        return;
-      }
-
-      await docRef.set({
-        data: queuedValue,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-    } catch (err) {
-      console.warn('Firestore write failed for', key, err);
-    }
-  }
-
-  flushPendingRemoteWrites() {
-    if (!this._remoteWritesEnabled || !firestore || !this._pendingRemoteWrites.size) return;
-
-    Array.from(this._pendingRemoteWrites.entries()).forEach(([key, value]) => {
-      if (this._pendingRemoteWriteModes.get(key) === 'exact') {
-        this.setExact(key, value);
-        return;
-      }
-
-      this.writeSyncedKey(key, value);
     });
   }
 
@@ -348,34 +135,23 @@ class DB {
 
       if (remoteDoc.exists) {
         const remoteData = remoteDoc.data()?.data ?? null;
-        const mergedData = isMergeSyncedKey(key)
-          ? mergeSyncedRecordArrays(key, remoteData, localData)
-          : remoteData;
-        const resolvedData = key === 'clients' && Array.isArray(mergedData)
-          ? cleanupDuplicateMasterScheduleClients(mergedData)
-          : mergedData;
-
-        if (resolvedData !== null && JSON.stringify(resolvedData) !== JSON.stringify(localData)) {
-          this.storage.setItem(key, JSON.stringify(resolvedData));
-        }
-
-        if (key === 'clients' && JSON.stringify(resolvedData) !== JSON.stringify(remoteData)) {
-          this.queueRemoteWrite(key, resolvedData, 'exact');
-        } else if (isMergeSyncedKey(key) && JSON.stringify(resolvedData) !== JSON.stringify(remoteData)) {
-          this.queueRemoteWrite(key, resolvedData, 'merge');
+        if (remoteData !== null && JSON.stringify(remoteData) !== JSON.stringify(localData)) {
+          this.storage.setItem(key, JSON.stringify(remoteData));
         }
         return;
       }
 
       if (hasMeaningfulValue(localData)) {
-        this.queueRemoteWrite(key, clone(localData), key === 'clients' ? 'exact' : 'merge');
+        await docRef.set({
+          data: clone(localData),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
       }
     })).catch(error => {
       console.warn('Initial Firestore sync failed', error);
     }).finally(() => {
       knownNotificationIds = new Set((this.get('oasis_notifications', []) || []).map(item => item.id));
       this._remoteWritesEnabled = true;
-      this.flushPendingRemoteWrites();
 
       const syncedClients = this.get('clients', []);
       const assignedRouteCount = Array.isArray(syncedClients)
@@ -394,73 +170,23 @@ class DB {
           const remoteData = snapshot.data()?.data ?? null;
           const localData = this.get(key, null);
 
-          if (this._pendingRemoteWrites.has(key) && this._pendingRemoteWriteModes.get(key) === 'exact') {
-            const pendingData = this._pendingRemoteWrites.get(key);
-            const pendingSignature = JSON.stringify(pendingData);
-            const remoteSignature = JSON.stringify(remoteData);
-
-            if (pendingSignature !== remoteSignature) {
-              if (pendingSignature !== JSON.stringify(localData)) {
-                this.storage.setItem(key, pendingSignature);
-              }
-              this.setExact(key, pendingData);
-              this.refreshLiveViews(key);
-              return;
-            }
-
-            this._pendingRemoteWrites.delete(key);
-            this._pendingRemoteWriteModes.delete(key);
-          }
-
-          if (isMergeSyncedKey(key) && this._pendingRemoteWrites.has(key)) {
-            const pendingData = this._pendingRemoteWrites.get(key);
-            const mergedPendingData = mergeSyncedRecordArrays(key, remoteData, pendingData);
-            const mergedPendingSignature = JSON.stringify(mergedPendingData);
-            const remoteSignature = JSON.stringify(remoteData);
-
-            if (mergedPendingSignature !== remoteSignature) {
-              if (mergedPendingSignature !== JSON.stringify(localData)) {
-                this.storage.setItem(key, mergedPendingSignature);
-              }
-              this.queueRemoteWrite(key, mergedPendingData);
-              this.writeSyncedKey(key, mergedPendingData);
-              this.refreshLiveViews(key);
-              return;
-            }
-
-            this._pendingRemoteWrites.delete(key);
-            this._pendingRemoteWriteModes.delete(key);
-          }
-
-          const normalizedRemoteData = key === 'clients' && Array.isArray(remoteData)
-            ? cleanupDuplicateMasterScheduleClients(remoteData)
-            : remoteData;
-
-          if (key === 'clients' && JSON.stringify(normalizedRemoteData) !== JSON.stringify(remoteData)) {
-            this.storage.setItem(key, JSON.stringify(normalizedRemoteData));
-            this.queueRemoteWrite(key, normalizedRemoteData, 'exact');
-            this.setExact(key, normalizedRemoteData);
-            this.refreshLiveViews(key);
+          if (JSON.stringify(remoteData) === JSON.stringify(localData)) {
             return;
           }
 
-          if (JSON.stringify(normalizedRemoteData) === JSON.stringify(localData)) {
-            return;
-          }
-
-          this.storage.setItem(key, JSON.stringify(normalizedRemoteData));
+          this.storage.setItem(key, JSON.stringify(remoteData));
           console.log(`[Sync] ${key} updated from Firestore`);
 
-          if (key === 'clients' && Array.isArray(normalizedRemoteData)) {
-            const routeCount = normalizedRemoteData.filter(client => getClientTechnician(client) && getClientServiceDays(client).length).length;
-            if (routeCount < Math.max(20, Math.floor((normalizedRemoteData.length || 0) * 0.25)) && typeof initMasterSchedule === 'function') {
+          if (key === 'clients' && Array.isArray(remoteData)) {
+            const routeCount = remoteData.filter(client => getClientTechnician(client) && getClientServiceDays(client).length).length;
+            if (routeCount < Math.max(20, Math.floor((remoteData.length || 0) * 0.25)) && typeof initMasterSchedule === 'function') {
               this.set('masterScheduleLoaded', false);
               setTimeout(() => initMasterSchedule(), 0);
             }
           }
 
           if (key === 'oasis_notifications' && typeof notificationManager !== 'undefined') {
-            const newItems = (normalizedRemoteData || []).filter(item => item?.id && !knownNotificationIds.has(item.id));
+            const newItems = (remoteData || []).filter(item => item?.id && !knownNotificationIds.has(item.id));
             newItems.forEach(item => {
               knownNotificationIds.add(item.id);
               notificationManager.presentLiveNotification(item);
@@ -479,7 +205,7 @@ class DB {
 }
 
 const db = new DB();
-const DATA_VERSION = 'v232'; // Bump this only when master schedule clients must be force-refreshed
+const DATA_VERSION = 'v266'; // Bump this to force-refresh all master schedule clients
 
 // ==========================================
 // AUTHENTICATION
@@ -499,7 +225,7 @@ class Auth {
       't9': { role: 'technician', name: 'Tech - Jet' },
       't10': { role: 'technician', name: 'Tech - Mark' },
       'admin': { role: 'admin', name: 'Chris Mills' },
-      'admin2': { role: 'admin', name: 'James Bussey' }
+      'admin2': { role: 'admin', name: 'James Bussey', disableNotifications: true }
     };
   }
 
@@ -640,8 +366,14 @@ class NotificationManager {
 
   getForUser(user = auth.getCurrentUser()) {
     const userName = user?.name || '';
+    const currentDeviceId = getCurrentDeviceId();
+    const preferredDeviceId = getPreferredNotificationDeviceId(userName);
     return this.getAll().filter(item => {
-      return userNamesMatch(item.recipient, userName) || item.recipient === 'all';
+      const recipientMatches = userNamesMatch(item.recipient, userName) || item.recipient === 'all';
+      const deviceMatches = item.targetDeviceId
+        ? item.targetDeviceId === currentDeviceId
+        : (!preferredDeviceId || preferredDeviceId === currentDeviceId);
+      return recipientMatches && deviceMatches;
     });
   }
 
@@ -840,7 +572,7 @@ const notificationManager = new NotificationManager();
 
 function getAdminNames() {
   return Object.values(auth.users)
-    .filter(user => user.role === 'admin')
+    .filter(user => user.role === 'admin' && !user.disableNotifications)
     .map(user => user.name)
     .sort((a, b) => a.localeCompare(b));
 }
@@ -860,24 +592,11 @@ function getTechnicianNames() {
     .sort((a, b) => a.localeCompare(b));
 }
 
-function getAllUserNames() {
-  return Object.values(auth.users)
-    .map(user => user.name)
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b));
-}
-
 function normalizeTechnicianName(name = '') {
   const value = String(name || '').trim();
   if (!value) return '';
 
-  const exactMatch = getAllUserNames().find(item => item.toLowerCase() === value.toLowerCase());
-  if (exactMatch) return exactMatch;
-
-  const canonicalMatch = getAllUserNames().find(item => canonicalUserName(item) === canonicalUserName(value));
-  if (canonicalMatch) return canonicalMatch;
-
-  const match = getTechnicianNames().find(item => canonicalUserName(item) === canonicalUserName(value));
+  const match = getTechnicianNames().find(item => item.toLowerCase() === value.toLowerCase());
   return match || value;
 }
 
@@ -902,411 +621,12 @@ function normalizeServiceDays(value = []) {
     .map(day => dayMap[day.toLowerCase()] || day))];
 }
 
-function normalizeClientIdentityPart(value = '') {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[.,#'()]/g, '')
-    .replace(/\s*-\s*/g, ' ')
-    .replace(/\s+/g, ' ');
-}
-
-function getNormalizedClientIdentity(client = {}, includeTechnician = true) {
-  const parts = [
-    normalizeClientIdentityPart(client?.name || ''),
-    normalizeClientIdentityPart(client?.address || '')
-  ];
-
-  if (includeTechnician) {
-    parts.push(canonicalUserName(getClientTechnician(client) || client?.technician || client?.tech || ''));
-  }
-
-  return parts.join('||');
-}
-
-function getNormalizedClientAddressTechIdentity(client = {}) {
-  return [
-    normalizeClientIdentityPart(client?.address || ''),
-    canonicalUserName(getClientTechnician(client) || client?.technician || client?.tech || '')
-  ].join('||');
-}
-
-function shouldMergeClientNameVariants(leftClient = {}, rightClient = {}) {
-  const leftName = normalizeClientIdentityPart(leftClient?.name || '');
-  const rightName = normalizeClientIdentityPart(rightClient?.name || '');
-  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
-  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
-  if (!leftName || !rightName) return false;
-  if ((leftName === leftAddress && rightName !== rightAddress) || (rightName === rightAddress && leftName !== leftAddress)) {
-    return true;
-  }
-  if (leftName === rightAddress || rightName === leftAddress) {
-    return true;
-  }
-  if ((leftAddress && rightName.includes(leftAddress)) || (rightAddress && leftName.includes(rightAddress))) {
-    return true;
-  }
-  return leftName.includes(rightName) || rightName.includes(leftName);
-}
-
-function choosePreferredClientName(leftClient = {}, rightClient = {}) {
-  const leftName = String(leftClient?.name || '').trim();
-  const rightName = String(rightClient?.name || '').trim();
-  const normalizedLeftName = normalizeClientIdentityPart(leftName);
-  const normalizedRightName = normalizeClientIdentityPart(rightName);
-  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
-  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
-
-  if (normalizedLeftName === leftAddress && normalizedRightName !== rightAddress) {
-    return rightName || leftName;
-  }
-
-  if (normalizedRightName === rightAddress && normalizedLeftName !== leftAddress) {
-    return leftName || rightName;
-  }
-
-  if (normalizedLeftName === rightAddress && normalizedRightName !== leftAddress) {
-    return rightName || leftName;
-  }
-
-  if (normalizedRightName === leftAddress && normalizedLeftName !== rightAddress) {
-    return leftName || rightName;
-  }
-
-  if (leftAddress && normalizedRightName.includes(leftAddress) && !normalizedLeftName.includes(leftAddress)) {
-    return rightName || leftName;
-  }
-
-  if (rightAddress && normalizedLeftName.includes(rightAddress) && !normalizedRightName.includes(rightAddress)) {
-    return leftName || rightName;
-  }
-
-  return rightName.length > leftName.length ? rightName : leftName || rightName;
-}
-
-function extractClientUnitMarkers(client = {}) {
-  const text = `${String(client?.name || '')} ${String(client?.address || '')}`.toLowerCase();
-  const matches = text.match(/#\s*[a-z0-9]+|\b\d+[a-z]?\b/g) || [];
-  return [...new Set(matches.map(marker => marker.replace(/\s+/g, '')))].sort();
-}
-
-function haveOverlappingServiceDays(leftClient = {}, rightClient = {}) {
-  const leftDays = getClientServiceDays(leftClient);
-  const rightDays = getClientServiceDays(rightClient);
-  if (!leftDays.length || !rightDays.length) return true;
-  return leftDays.some(day => rightDays.includes(day));
-}
-
-function hasConflictingUnitMarkers(leftClient = {}, rightClient = {}) {
-  const leftMarkers = extractClientUnitMarkers(leftClient);
-  const rightMarkers = extractClientUnitMarkers(rightClient);
-
-  if (!leftMarkers.length && !rightMarkers.length) return false;
-  if (!leftMarkers.length || !rightMarkers.length) return true;
-
-  return !leftMarkers.some(marker => rightMarkers.includes(marker));
-}
-
-function doesClientAddressDescribeOther(containerClient = {}, targetClient = {}) {
-  const containerAddress = normalizeClientIdentityPart(containerClient?.address || '');
-  const targetName = normalizeClientIdentityPart(targetClient?.name || '');
-  const targetAddress = normalizeClientIdentityPart(targetClient?.address || '');
-
-  if (!containerAddress || !targetName || !targetAddress) return false;
-  return containerAddress.includes(targetName) && containerAddress.includes(targetAddress);
-}
-
-function isLegacySplitPropertyMatch(leftClient = {}, rightClient = {}) {
-  if (!userNamesMatch(getClientTechnician(leftClient), getClientTechnician(rightClient))) {
-    return false;
-  }
-
-  if (!haveOverlappingServiceDays(leftClient, rightClient)) {
-    return false;
-  }
-
-  const leftName = normalizeClientIdentityPart(leftClient?.name || '');
-  const rightName = normalizeClientIdentityPart(rightClient?.name || '');
-  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
-  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
-
-  const exactCrossFieldMatch = (leftName && leftName === rightAddress) || (rightName && rightName === leftAddress);
-  if (exactCrossFieldMatch) {
-    return true;
-  }
-
-  const embeddedSplitMatch = doesClientAddressDescribeOther(leftClient, rightClient)
-    || doesClientAddressDescribeOther(rightClient, leftClient);
-  if (!embeddedSplitMatch) {
-    return false;
-  }
-
-  return !hasConflictingUnitMarkers(leftClient, rightClient);
-}
-
-function choosePreferredClientAddress(leftClient = {}, rightClient = {}) {
-  const leftAddress = String(leftClient?.address || '').trim();
-  const rightAddress = String(rightClient?.address || '').trim();
-  const normalizedLeftName = normalizeClientIdentityPart(leftClient?.name || '');
-  const normalizedRightName = normalizeClientIdentityPart(rightClient?.name || '');
-  const normalizedLeftAddress = normalizeClientIdentityPart(leftAddress);
-  const normalizedRightAddress = normalizeClientIdentityPart(rightAddress);
-
-  if (normalizedLeftName && normalizedLeftName === normalizedRightAddress && normalizedRightName !== normalizedLeftAddress) {
-    return rightAddress || leftAddress;
-  }
-
-  if (normalizedRightName && normalizedRightName === normalizedLeftAddress && normalizedLeftName !== normalizedRightAddress) {
-    return leftAddress || rightAddress;
-  }
-
-  if (doesClientAddressDescribeOther(rightClient, leftClient) && !hasConflictingUnitMarkers(leftClient, rightClient)) {
-    return rightAddress || leftAddress;
-  }
-
-  if (doesClientAddressDescribeOther(leftClient, rightClient) && !hasConflictingUnitMarkers(leftClient, rightClient)) {
-    return leftAddress || rightAddress;
-  }
-
-  return rightAddress.length > leftAddress.length ? rightAddress : leftAddress || rightAddress;
-}
-
-function mergeClientRecords(existingClient = {}, client = {}) {
-  const normalizedTechnician = normalizeTechnicianName(
-    existingClient.technician || client.technician || existingClient.tech || client.tech || ''
-  );
-
-  return {
-    ...existingClient,
-    ...client,
-    id: existingClient.id || client.id || `c_${Math.random().toString(36).substr(2, 9)}`,
-    name: choosePreferredClientName(existingClient, client),
-    address: choosePreferredClientAddress(existingClient, client),
-    technician: normalizedTechnician,
-    serviceDays: mergeClientServiceDays(existingClient.serviceDays, client.serviceDays, client.serviceDay)
-  };
-}
-
-function shouldMergeStoredClientVariants(leftClient = {}, rightClient = {}) {
-  if (!userNamesMatch(getClientTechnician(leftClient), getClientTechnician(rightClient))) {
-    return false;
-  }
-
-  const sameAddressTech = getNormalizedClientAddressTechIdentity(leftClient) === getNormalizedClientAddressTechIdentity(rightClient);
-  if (sameAddressTech && shouldMergeClientNameVariants(leftClient, rightClient)) {
-    return true;
-  }
-
-  return isLegacySplitPropertyMatch(leftClient, rightClient);
-}
-
-function shouldMergeRouteVisitVariants(leftClient = {}, rightClient = {}) {
-  return shouldMergeStoredClientVariants(leftClient, rightClient);
-}
-
-function mergeClientServiceDays(...values) {
-  return normalizeServiceDays(values.flatMap(value => normalizeServiceDays(value)));
-}
-
-function cleanupDuplicateMasterScheduleClients(clientList = []) {
-  const clients = Array.isArray(clientList) ? clientList : [];
-  const mergedClients = [];
-
-  clients.forEach(client => {
-    const normalizedClient = {
-      ...client,
-      name: String(client?.name || '').trim(),
-      address: String(client?.address || '').trim(),
-      technician: normalizeTechnicianName(client?.technician || client?.tech || ''),
-      serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
-    };
-
-    const existingIndex = mergedClients.findIndex(existingClient => shouldMergeStoredClientVariants(existingClient, normalizedClient));
-    if (existingIndex >= 0) {
-      mergedClients[existingIndex] = mergeClientRecords(mergedClients[existingIndex], normalizedClient);
-    } else {
-      mergedClients.push(normalizedClient);
-    }
-  });
-
-  return mergedClients;
-}
-
-let cachedUiClientsSource = null;
-let cachedUiClients = [];
-let cachedDuplicateNameSource = null;
-let cachedDuplicateNameKeys = new Set();
-
-function getClientsStorageSource() {
-  try {
-    return window.localStorage.getItem('clients') || '[]';
-  } catch (error) {
-    return JSON.stringify(db.get('clients', []));
-  }
-}
-
-function getCachedUiClients() {
-  const source = getClientsStorageSource();
-  if (source === cachedUiClientsSource) {
-    return cachedUiClients;
-  }
-
-  let parsedClients;
-  try {
-    parsedClients = JSON.parse(source);
-  } catch (error) {
-    parsedClients = db.get('clients', []);
-  }
-
-  cachedUiClientsSource = source;
-  cachedUiClients = cleanupDuplicateMasterScheduleClients(parsedClients);
-  cachedDuplicateNameSource = null;
-  return cachedUiClients;
-}
-
-function getCachedDuplicateClientNameKeys(clients = getCachedUiClients()) {
-  const source = cachedUiClientsSource || getClientsStorageSource();
-  if (source === cachedDuplicateNameSource) {
-    return cachedDuplicateNameKeys;
-  }
-
-  cachedDuplicateNameSource = source;
-  cachedDuplicateNameKeys = getDuplicateClientNameKeys(clients);
-  return cachedDuplicateNameKeys;
-}
-
-function scheduleDeferredStartupTask(callback, timeout = 120) {
-  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-    window.requestIdleCallback(() => callback(), { timeout: Math.max(timeout, 800) });
-    return;
-  }
-
-  setTimeout(callback, timeout);
-}
-
-function runDeferredStartupWork() {
-  if (window.__oasisDeferredStartupRan) return;
-  window.__oasisDeferredStartupRan = true;
-
-  db.startRealtimeSync();
-
-  const currentClients = db.get('clients', []);
-  const dedupedClients = cleanupDuplicateMasterScheduleClients(currentClients);
-  if (JSON.stringify(dedupedClients) !== JSON.stringify(currentClients)) {
-    db.setExact('clients', dedupedClients);
-  }
-
-  cleanupTestClients();
-  if (db.get('dataVersion') !== DATA_VERSION) {
-    const existingClients = db.get('clients', []);
-    const userClients = existingClients.filter(c => !String(c.id || '').startsWith('c_'));
-    db.set('clients', userClients);
-    db.set('masterScheduleLoaded', false);
-    db.set('dataVersion', DATA_VERSION);
-  } else {
-    db.set('masterScheduleLoaded', false);
-  }
-
-  initMasterSchedule();
-  migrateLegacyRepairData();
-  rollOverPendingJobs();
-  populateLoginTechOptions();
-}
-
-function getDuplicateClientNameKeys(clients = []) {
-  const grouped = new Map();
-
-  (Array.isArray(clients) ? clients : []).forEach(client => {
-    const nameKey = normalizeClientIdentityPart(client?.name || '');
-    if (!nameKey) return;
-    if (!grouped.has(nameKey)) grouped.set(nameKey, new Set());
-    grouped.get(nameKey).add(getNormalizedClientIdentity(client, false));
-  });
-
-  return new Set(
-    [...grouped.entries()]
-      .filter(([, identities]) => identities.size > 1)
-      .map(([nameKey]) => nameKey)
-  );
-}
-
-function getClientRouteDisplayName(client = {}, allClients = []) {
-  const duplicateNames = Array.isArray(allClients) && allClients.length
-    ? getCachedDuplicateClientNameKeys(allClients)
-    : getCachedDuplicateClientNameKeys();
-  const clientName = String(client?.name || '').trim() || 'Client';
-
-  if (!duplicateNames.has(normalizeClientIdentityPart(clientName))) {
-    return clientName;
-  }
-
-  const address = String(client?.address || '').trim();
-  return address ? `${clientName} — ${address}` : clientName;
-}
-
-function collapseRouteClientsByName(clientList = []) {
-  const collapsedClients = [];
-
-  (Array.isArray(clientList) ? clientList : []).forEach(client => {
-    const normalizedClient = {
-      ...client,
-      technician: normalizeTechnicianName(client?.technician || client?.tech || ''),
-      serviceDays: normalizeServiceDays(client?.serviceDays || client?.serviceDay || [])
-    };
-
-    const existingIndex = collapsedClients.findIndex(existingClient => shouldMergeRouteVisitVariants(existingClient, normalizedClient));
-    if (existingIndex === -1) {
-      collapsedClients.push(normalizedClient);
-      return;
-    }
-
-    collapsedClients[existingIndex] = mergeClientRecords(collapsedClients[existingIndex], normalizedClient);
-  });
-
-  return collapsedClients;
-}
-
 function getClientTechnician(client = {}) {
   return normalizeTechnicianName(client?.technician || client?.tech || '');
 }
 
 function getClientServiceDays(client = {}) {
   return normalizeServiceDays(client?.serviceDays || client?.serviceDay || []);
-}
-
-function getClientVisitMetricKey(client = {}) {
-  return String(client?.id || '').trim() || `${String(client?.name || '').trim().toLowerCase()}|${String(client?.address || '').trim().toLowerCase()}`;
-}
-
-function getWeeklyChemVisitTarget(name = '') {
-  const normalizedName = normalizeTechnicianName(name || '');
-  return WEEKLY_CHEM_VISIT_TARGETS[String(normalizedName || '').trim().toLowerCase()] || 0;
-}
-
-function getTotalWeeklyChemVisitTarget() {
-  return Object.values(WEEKLY_CHEM_VISIT_TARGETS).reduce((sum, count) => sum + count, 0);
-}
-
-function getScheduledRouteClients(clients = [], technicianName = '') {
-  return (Array.isArray(clients) ? clients : []).filter(client => {
-    const serviceDays = getClientServiceDays(client);
-    const assignedTechnician = getClientTechnician(client);
-    if (!serviceDays.length || !assignedTechnician) return false;
-    return !technicianName || userNamesMatch(assignedTechnician, technicianName);
-  });
-}
-
-function countScheduledWeeklyVisits(clients = []) {
-  const visitKeys = new Set();
-
-  (Array.isArray(clients) ? clients : []).forEach(client => {
-    const clientKey = getClientVisitMetricKey(client);
-    getClientServiceDays(client).forEach(day => {
-      if (day) visitKeys.add(`${clientKey}::${day}`);
-    });
-  });
-
-  return visitKeys.size;
 }
 
 function formatDisplayDate(value = '') {
@@ -1508,14 +828,6 @@ function shouldResetPushSubscription() {
   }
 }
 
-function isNoServiceWorkerMode() {
-  try {
-    return new URLSearchParams(window.location.search).get('nosw') === '1';
-  } catch (error) {
-    return false;
-  }
-}
-
 async function resetPushSubscriptionState(messaging, serviceWorkerRegistration) {
   try {
     const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
@@ -1584,11 +896,6 @@ async function initializePushNotificationsForUser(force = false) {
     if (!currentUser) {
       setPushSetupState('error', 'Please sign in first.');
       return false;
-    }
-
-    if (!isCapacitorNativeApp() && isNoServiceWorkerMode()) {
-      setPushSetupState('local-only', 'Browser-safe mode is active. Live alerts will show while Oasis is open on this device.');
-      return true;
     }
 
     setPushSetupState('pending', 'Preparing phone notifications...');
@@ -1709,16 +1016,7 @@ async function initializePushNotificationsForUser(force = false) {
       return true;
     }
 
-    const existingRegistrations = await navigator.serviceWorker.getRegistrations().catch(() => []);
-    const serviceWorkerRegistration = existingRegistrations[0]
-      || await Promise.race([
-        navigator.serviceWorker.ready,
-        new Promise(resolve => setTimeout(() => resolve(null), 4000))
-      ]);
-    if (!serviceWorkerRegistration) {
-      setPushSetupState('local-only', 'Live alerts will show while Oasis is open on this device.');
-      return true;
-    }
+    const serviceWorkerRegistration = await navigator.serviceWorker.ready;
     if (typeof messaging.useServiceWorker === 'function') {
       messaging.useServiceWorker(serviceWorkerRegistration);
     }
@@ -1844,7 +1142,6 @@ class Router {
         this.routes[view]();
         const mc = document.getElementById('main-content');
         if (mc) { mc.classList.remove('page-fade'); void mc.offsetWidth; mc.classList.add('page-fade'); }
-        if (auth.isLoggedIn()) unlockAppShellInteraction();
       } catch (e) {
         console.error('Navigation error for view:', view, e);
         // Fallback UI if rendering fails
@@ -1960,12 +1257,14 @@ class Router {
     const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
     const todayStr = `${todayDay}, ${formatDisplayDate(new Date())}`;
 
-    const allClients = getCachedUiClients();
-    const scheduledRouteClients = getScheduledRouteClients(allClients, isAdmin ? '' : userName);
-    const myRouteClients = scheduledRouteClients.filter(c => getClientServiceDays(c).includes(todayDay));
-    const myTotalClients = isAdmin
-      ? getTotalWeeklyChemVisitTarget()
-      : (getWeeklyChemVisitTarget(userName) || countScheduledWeeklyVisits(scheduledRouteClients));
+    const allClients = db.get('clients', []);
+    const myRouteClients = isAdmin
+      ? allClients.filter(c => getClientServiceDays(c).includes(todayDay))
+      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).includes(todayDay));
+    const myTechClients = isAdmin
+      ? allClients.filter(c => getClientServiceDays(c).length)
+      : allClients.filter(c => userNamesMatch(getClientTechnician(c), userName) && getClientServiceDays(c).length);
+    const myTotalClients = myTechClients.reduce((sum, c) => sum + getClientServiceDays(c).length, 0);
 
     // Open and pending work orders
     const myRepairOrders = visibleRepairOrders.filter(r => {
@@ -2084,14 +1383,14 @@ class Router {
       <div id="today-route">
         ${myRouteClients.length > 0
           ? myRouteClients.sort((a, b) => a.name.localeCompare(b.name)).map(c => `
-            <div class="list-item" onclick="router.editClient('${escapeJsString(c.id)}')" style="cursor:pointer;">
+            <div class="list-item" onclick="router.editClient('${escapeHtml(c.id)}')" style="cursor:pointer;">
               <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
               <div class="list-item-info">
                 <div class="list-item-name">${escapeHtml(c.name)}</div>
                 <div class="list-item-sub">${escapeHtml(c.address)}</div>
               </div>
               <div class="list-item-actions">
-                <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeJsString(c.address)}')" title="Navigate">📍</button>
+                <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(c.address)}')" title="Navigate">📍</button>
               </div>
             </div>
           `).join('')
@@ -2166,7 +1465,7 @@ class Router {
       return this.renderWorkOrders();
     }
 
-    const allClients = getCachedUiClients();
+    const allClients = db.get('clients', []);
     const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
@@ -2184,7 +1483,6 @@ class Router {
     const dayClients = dayFilter === 'all'
       ? techClients
       : techClients.filter(c => getClientServiceDays(c).includes(dayFilter));
-    const visibleRouteClients = collapseRouteClientsByName(dayClients);
 
     content.innerHTML = `
       <div class="section-header">
@@ -2192,7 +1490,7 @@ class Router {
           <button class="btn btn-icon" onclick="router.goBack()" style="font-size:20px; padding:0 4px;">←</button>
           <div class="section-title">${isAdmin ? 'All Routes' : (user ? user.name + "'s Route" : 'My Route')}</div>
         </div>
-        <div style="font-size:12px; color:#666;">${visibleRouteClients.length} client${visibleRouteClients.length !== 1 ? 's' : ''} shown</div>
+        <div style="font-size:12px; color:#666;">${dayClients.length} client${dayClients.length !== 1 ? 's' : ''} shown</div>
       </div>
 
       ${isAdmin ? `
@@ -2213,16 +1511,16 @@ class Router {
       </div>
 
       <div style="padding:0 16px 8px; color:#666; font-size:13px;">
-        ${dayFilter === 'all' ? `${visibleRouteClients.length} total scheduled clients` : `${visibleRouteClients.length} clients for ${dayFilter}${dayFilter === today ? ' (today)' : ''}`}
+        ${dayFilter === 'all' ? `${dayClients.length} total scheduled clients` : `${dayClients.length} clients for ${dayFilter}${dayFilter === today ? ' (today)' : ''}`}
       </div>
 
       <div id="routes-list">
-        ${this.renderRouteClients(visibleRouteClients, dayFilter, techFilter, allClients)}
+        ${this.renderRouteClients(dayClients, dayFilter, techFilter)}
       </div>
     `;
   }
 
-  renderRouteClients(clients, dayFilter, techFilter, allClients = getCachedUiClients()) {
+  renderRouteClients(clients, dayFilter, techFilter) {
     if (clients.length === 0) {
       return `
         <div class="empty-state">
@@ -2232,12 +1530,11 @@ class Router {
         </div>
       `;
     }
-    return clients.map(c => this.renderRouteCard(c, allClients)).join('');
+    return clients.map(c => this.renderRouteCard(c)).join('');
   }
 
-  renderRouteCard(client, allClients = getCachedUiClients()) {
+  renderRouteCard(client) {
     const daysLabel = getClientServiceDays(client).map(d => d.substring(0, 3)).join(', ') || 'Unscheduled';
-    const routeDisplayName = getClientRouteDisplayName(client, allClients);
     const _rcUser = auth.getCurrentUser();
     const _rcIsAdmin = auth.isAdmin();
     const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.username === 't9' || _rcUser?.username === 't10');
@@ -2248,13 +1545,13 @@ class Router {
       <div class="list-item" style="cursor:pointer;">
         <div class="list-item-avatar" style="background:#e3f2fd; color:#1565c0;">📍</div>
         <div class="list-item-info">
-          <div class="list-item-name">${escapeHtml(routeDisplayName)}</div>
+          <div class="list-item-name">${escapeHtml(client.name)}</div>
           <div class="list-item-sub">${escapeHtml(client.address)}</div>
           ${daysLabel ? `<div class="list-item-sub" style="font-size:11px; color:#2196F3;">${escapeHtml(daysLabel)}</div>` : ''}
         </div>
         <div class="list-item-actions">
-          <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeJsString(client.address)}')" title="Navigate">📍</button>
-          ${_rcIsFieldTech ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); router.createWorkOrder('${escapeJsString(client.id)}')">${chemButtonLabel}</button>` : ''}
+          <button class="btn btn-icon" onclick="event.stopPropagation(); openMap('${escapeHtml(client.address)}')" title="Navigate">📍</button>
+          ${_rcIsFieldTech ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); router.createWorkOrder('${escapeHtml(client.id)}')">${chemButtonLabel}</button>` : ''}
         </div>
       </div>
     `;
@@ -2296,7 +1593,7 @@ class Router {
   }
 
   renderClientsList(query = '') {
-    const allClients = getCachedUiClients();
+    const allClients = db.get('clients', []);
     const isAdmin = auth.isAdmin();
     const currentUser = auth.getCurrentUser();
     const isJetOrMark = !isAdmin && (currentUser?.username === 't9' || currentUser?.username === 't10');
@@ -2330,9 +1627,9 @@ class Router {
           <div class="list-item-sub">${client.address}</div>
         </div>
         <div class="list-item-actions">
-          <button class="btn btn-icon" onclick="openMap('${escapeJsString(client.address)}')" title="View on Map">📍</button>
-          ${canManageClients ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${escapeJsString(client.id)}')">Edit</button>` : ''}
-          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${escapeJsString(client.id)}')">Delete</button>` : ''}
+          <button class="btn btn-icon" onclick="openMap('${client.address}')" title="View on Map">📍</button>
+          ${canManageClients ? `<button class="btn btn-secondary btn-sm" onclick="router.editClient('${client.id}')">Edit</button>` : ''}
+          ${isAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteClient('${client.id}')">Delete</button>` : ''}
         </div>
       </div>
     `).join('');
@@ -2534,13 +1831,13 @@ class Router {
               ${currentUser.role === 'admin' ? `<div class="job-meta-item">👤 ${wo.technician || 'Unknown'}</div>` : ''}
             </div>
           </div>
-          <button class="btn btn-icon" onclick="openMap('${escapeJsString(wo.address)}')" title="View on Map">📍</button>
+          <button class="btn btn-icon" onclick="openMap('${wo.address}')" title="View on Map">📍</button>
         </div>
         <div class="job-card-body">
           <div class="badge badge-${status}">${status.replace('-', ' ')}</div>
         </div>
         <div class="job-card-footer">
-          <button class="btn ${isCompleted ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="router.viewWorkOrder('${escapeJsString(wo.id)}')">${isCompleted ? 'Completed' : 'Open'}</button>
+          <button class="btn ${isCompleted ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="router.viewWorkOrder('${wo.id}')">${isCompleted ? 'Completed' : 'Open'}</button>
           ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareReport('${wo.id}')">Share</button>` : ''}
           ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteWorkOrder('${wo.id}')">Delete</button>` : ''}
         </div>
@@ -2554,7 +1851,7 @@ class Router {
     const allEstimates = [...getEstimateSheets()].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
     const sentQuotes     = allEstimates.filter(e => (e.status || '').toLowerCase() === 'sent');
     const approvedQuotes = allEstimates.filter(e => (e.status || '').toLowerCase() === 'approved');
-    const clients = getCachedUiClients();
+    const clients = db.get('clients', []);
 
     const renderQuoteCard = (estimate, showConvert = false) => {
       const client = clients.find(c => c.id === estimate.clientId);
@@ -2639,7 +1936,7 @@ class Router {
           </div>
           <div class="detail-row">
             <div class="detail-label">App Version</div>
-            <div class="detail-value">${APP_VERSION}</div>
+            <div class="detail-value">${DATA_VERSION}</div>
           </div>
           <button class="btn btn-danger" onclick="auth.logout(); location.reload()" style="width: 100%; margin-top: 10px;">Sign Out</button>
         </div>
@@ -2709,14 +2006,14 @@ class Router {
     const spa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
     const poolAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.pool || {}) };
     const spaAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.spa || {}) };
-    const clients = getSortedClients(getCachedUiClients());
+    const clients = getSortedClients(db.get('clients', []));
     const _woCurUser = auth.getCurrentUser();
     const _woIsAdmin = auth.isAdmin();
     const _woIsJetOrMark = !_woIsAdmin && (_woCurUser?.username === 't9' || _woCurUser?.username === 't10');
     const chemClientList = (_woIsAdmin || _woIsJetOrMark)
       ? clients
       : clients.filter(c => userNamesMatch((c.technician || ''), (_woCurUser?.name || '')));
-    const technician = normalizeTechnicianName(order.technician || auth.getCurrentUser()?.name || '');
+    const technician = order.technician || auth.getCurrentUser()?.name || '';
     const timeIn = order.timeIn || order.time || '';
     const timeOut = order.timeOut || '';
     const timeSpent = calculateTimeSpent(timeIn, timeOut);
@@ -2729,7 +2026,7 @@ class Router {
         <div class="wo-bar">
           <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
           <div id="wo-client-name" class="wo-bar-title">${order.clientName || 'Chem Sheet'}</div>
-          <button class="btn btn-primary btn-sm" onclick="saveWorkOrderForm('${order.id}', true)">Save & Complete</button>
+          <button class="btn btn-primary btn-sm" onclick="saveWorkOrderForm('${order.id}')">Save</button>
         </div>
 
         <div class="wo-sec">
@@ -2750,7 +2047,7 @@ class Router {
               <select id="wo-tech">
                 ${Object.entries(auth.users)
                   .sort((a, b) => a[1].name.localeCompare(b[1].name))
-                  .map(([id, user]) => `<option value="${user.name}" ${userNamesMatch(user.name, technician) ? 'selected' : ''}>${user.name}</option>`).join('')}
+                  .map(([id, user]) => `<option value="${user.name}" ${user.name === technician ? 'selected' : ''}>${user.name}</option>`).join('')}
               </select>
             </div>
 
@@ -2881,7 +2178,7 @@ class Router {
 
         <div class="card" style="margin:12px;">
           <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button class="btn btn-secondary" onclick="saveWorkOrderForm('${order.id}', true)">Save & Complete</button>
+            <button class="btn btn-secondary" onclick="saveWorkOrderForm('${order.id}')">Save Changes</button>
             ${auth.canShare() ? `<button class="btn send-report-btn" onclick="shareReport('${order.id}')">Share Report</button>` : ''}
           </div>
         </div>
@@ -2894,35 +2191,18 @@ class Router {
   // Quick actions
   createRoute() { showToast('Route planning can be added next.'); }
   viewRoute(id) { showToast(`Route ${id} selected`); }
-  openWorkOrderDetail(order, pushHistory = true) {
-    if (!order) return;
-
-    this.currentView = 'workorders';
-    workOrderManager.currentOrder = order;
-    if (pushHistory && this.history[this.history.length - 1] !== 'workorders') {
-      this.history.push('workorders');
-    }
-
-    this.renderWorkOrderDetail(order);
-    this.updateNav();
-  }
   createWorkOrder(clientId = '') {
-    const clients = getCachedUiClients();
+    const clients = db.get('clients', []);
     if (!clients.length) {
       showToast('Add a client first');
       this.renderClients();
       return;
     }
 
-    this.currentView = 'workorders';
-    if (this.history[this.history.length - 1] !== 'workorders') {
-      this.history.push('workorders');
-    }
-
     const selectedClientId = clientId || clients[0].id;
     const order = workOrderManager.createOrder(selectedClientId);
     if (order) {
-      this.openWorkOrderDetail(order, false);
+      this.renderWorkOrderDetail(order);
       showToast('Chem sheet created');
     }
   }
@@ -2932,7 +2212,7 @@ class Router {
       return;
     }
 
-    const clients = getCachedUiClients();
+    const clients = db.get('clients', []);
     if (!clients.length) {
       showToast('Add a client first');
       this.renderClients();
@@ -2955,7 +2235,7 @@ class Router {
       showToast('Work order not found');
       return;
     }
-    this.openWorkOrderDetail(order);
+    this.renderWorkOrderDetail(order);
   }
   editWorkOrder(id) {
     const order = workOrderManager.getOrder(id);
@@ -2963,7 +2243,7 @@ class Router {
       showToast('Work order not found');
       return;
     }
-    this.openWorkOrderDetail(order);
+    this.renderWorkOrderDetail(order);
   }
   editClient(id) {
     const _ecUser = auth.getCurrentUser();
@@ -2973,7 +2253,7 @@ class Router {
       showToast('Only admins and office staff can edit client details');
       return;
     }
-    const clients = getCachedUiClients();
+    const clients = db.get('clients', []);
     const client = clients.find(item => item.id === id);
     if (!client) {
       showToast('Client not found');
@@ -3032,7 +2312,6 @@ class Router {
 }
 
 const router = new Router();
-window.router = router;
 
 // ==========================================
 // WORK ORDER MANAGEMENT
@@ -3073,8 +2352,6 @@ class WorkOrderManager {
       return existingOpenOrder;
     }
 
-    const createdAt = new Date().toISOString();
-
     const order = {
       id: `wo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       clientId,
@@ -3102,9 +2379,7 @@ class WorkOrderManager {
       workPerformed: '',
       followUpNotes: '',
       notes: '',
-      photos: [],
-      createdAt,
-      updatedAt: createdAt
+      photos: []
     };
 
     const orders = db.get('workorders', []);
@@ -3116,19 +2391,10 @@ class WorkOrderManager {
   saveOrder(order) {
     const orders = db.get('workorders', []);
     const index = orders.findIndex(o => o.id === order.id);
-    const currentTimestamp = new Date().toISOString();
-    const existingOrder = index >= 0 ? orders[index] : null;
-    const nextOrder = {
-      ...(existingOrder || {}),
-      ...order,
-      createdAt: order.createdAt || existingOrder?.createdAt || currentTimestamp,
-      updatedAt: order.updatedAt || currentTimestamp
-    };
-
     if (index >= 0) {
-      orders[index] = nextOrder;
+      orders[index] = order;
     } else {
-      orders.push(nextOrder);
+      orders.push(order);
     }
     db.set('workorders', orders);
     return true;
@@ -3985,7 +3251,7 @@ function initMasterSchedule() {
     { name: "Zoe Foster", address: "47 Latana Way", tech: "Service - Elvin", serviceDays: ["Friday", "Monday"] }
 
   ];
-  const existingClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
+  const existingClients = db.get('clients', []);
   // Migrate existing stored technician names to new prefix format
   const _techNameRemap = {
     'Ace': 'Service - Ace', 'Ariel': 'Service - Ariel', 'Donald': 'Service - Donald',
@@ -3998,17 +3264,13 @@ function initMasterSchedule() {
     const mergedClients = [...existingClients];
 
   clients.forEach(c => {
-    const existingIdx = mergedClients.findIndex(e => getNormalizedClientIdentity(e) === getNormalizedClientIdentity({
-      name: c.name,
-      address: c.address,
-      technician: c.tech
-    }));
+    const existingIdx = mergedClients.findIndex(
+      e => e.address === c.address && e.technician === c.tech
+    );
     if (existingIdx >= 0) {
-      // Merge repeated weekly visits into one client record with combined service days.
+      // Update name and serviceDays so master data corrections take effect
       mergedClients[existingIdx].name = c.name;
-      mergedClients[existingIdx].address = mergedClients[existingIdx].address || c.address;
-      mergedClients[existingIdx].technician = c.tech;
-      mergedClients[existingIdx].serviceDays = mergeClientServiceDays(mergedClients[existingIdx].serviceDays, c.serviceDays);
+      mergedClients[existingIdx].serviceDays = c.serviceDays;
     } else {
       mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
@@ -4020,7 +3282,7 @@ function initMasterSchedule() {
     }
   });
 
-  db.set('clients', cleanupDuplicateMasterScheduleClients(mergedClients));
+  db.set('clients', mergedClients);
   db.set('masterScheduleLoaded', true);
 }
 
@@ -4042,17 +3304,26 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  if (window.__oasisDomBootstrapped) return;
-  window.__oasisDomBootstrapped = true;
+  // Always force login screen on startup
+  auth.logout();
+  db.startRealtimeSync();
 
-  const loginVersion = document.getElementById('login-version');
-  if (loginVersion) {
-    loginVersion.textContent = `Version ${APP_VERSION}`;
+  cleanupTestClients();
+  // Data version check: if version changed, wipe & reseed all master-schedule clients
+  if (db.get('dataVersion') !== DATA_VERSION) {
+    const existingClients = db.get('clients', []);
+    // Master schedule clients have ids starting with 'c_'; user-created use 'c' + timestamp
+    const userClients = existingClients.filter(c => !String(c.id || '').startsWith('c_'));
+    db.set('clients', userClients);
+    db.set('masterScheduleLoaded', false);
+    db.set('dataVersion', DATA_VERSION);
+  } else {
+    db.set('masterScheduleLoaded', false);
   }
-
-  const savedUser = auth.getCurrentUser();
-  setShellSignedInState(!!savedUser);
-  scheduleDeferredStartupTask(runDeferredStartupWork, savedUser ? 180 : 60);
+  initMasterSchedule();
+  migrateLegacyRepairData();
+  rollOverPendingJobs();
+  populateLoginTechOptions();
 
   // Android Back Button Handling
   if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
@@ -4091,10 +3362,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (auth.login(username, pin)) {
       console.log('Login successful');
+      initializePushNotificationsForUser().catch(() => {});
+      const loginScreen = document.getElementById('login-screen');
+      const appShell = document.getElementById('app');
 
       if (loginError) loginError.style.display = 'none';
       curtainTransition(() => {
-        location.reload();
+        if (loginScreen) loginScreen.style.setProperty('display', 'none', 'important');
+        if (appShell) {
+          appShell.classList.remove('hidden');
+          appShell.style.setProperty('display', 'flex', 'important');
+        }
+        try { router.navigate('dashboard'); } catch (err) { location.reload(); }
       });
     } else {
       console.warn('Login failed: invalid username or PIN');
@@ -4107,25 +3386,6 @@ document.addEventListener('DOMContentLoaded', () => {
       modal.hide();
     }
   });
-
-  if (savedUser) {
-    const loginScreen = document.getElementById('login-screen');
-    if (loginScreen?.parentNode) {
-      loginScreen.parentNode.removeChild(loginScreen);
-      window.__oasisLoginDetached = true;
-    }
-    unlockAppShellInteraction();
-    try {
-      router.navigate('dashboard', false);
-      scheduleDeferredStartupTask(() => {
-        initializePushNotificationsForUser().catch(() => {});
-      }, 1200);
-    } catch (error) {
-      console.error('Startup dashboard render failed', error);
-      auth.logout();
-      location.reload();
-    }
-  }
 });
 
 // Dark curtain transition — prevents white flash between login and app
@@ -4139,79 +3399,15 @@ function curtainTransition(callback, duration = 320) {
   }, duration / 2);
 }
 
-function setShellSignedInState(isSignedIn) {
-  const appShell = document.getElementById('app');
-  const loginScreen = document.getElementById('login-screen');
-
-  if (appShell) {
-    appShell.classList.toggle('hidden', !isSignedIn);
-    appShell.style.display = isSignedIn ? 'flex' : 'none';
-    appShell.style.pointerEvents = isSignedIn ? 'auto' : 'none';
-    appShell.style.visibility = isSignedIn ? 'visible' : 'hidden';
-    appShell.setAttribute('aria-hidden', isSignedIn ? 'false' : 'true');
-  }
-
-  if (loginScreen) {
-    loginScreen.classList.toggle('hidden', isSignedIn);
-    loginScreen.style.display = isSignedIn ? 'none' : 'flex';
-    loginScreen.style.pointerEvents = isSignedIn ? 'none' : 'auto';
-    loginScreen.style.visibility = isSignedIn ? 'hidden' : 'visible';
-    loginScreen.style.opacity = isSignedIn ? '0' : '1';
-    loginScreen.setAttribute('aria-hidden', isSignedIn ? 'true' : 'false');
-  }
-}
-
-function unlockAppShellInteraction() {
-  const appShell = document.getElementById('app');
-  const shell = document.getElementById('app-shell');
-  const header = document.querySelector('.app-header');
-  const mainContent = document.getElementById('main-content');
-  const bottomNav = document.querySelector('.bottom-nav');
-  const loginScreen = document.getElementById('login-screen');
-  const transitionCurtain = document.getElementById('transition-curtain');
-
-  if (appShell) {
-    appShell.classList.remove('hidden');
-    appShell.style.display = 'flex';
-    appShell.style.pointerEvents = 'auto';
-    appShell.style.visibility = 'visible';
-    appShell.style.opacity = '1';
-    appShell.setAttribute('aria-hidden', 'false');
-  }
-
-  [shell, header, mainContent, bottomNav].forEach(element => {
-    if (!element) return;
-    element.style.pointerEvents = 'auto';
-    element.style.visibility = 'visible';
-  });
-
-  document.querySelectorAll('#app .nav-item, #app .signout-btn, #app button, #app a').forEach(element => {
-    element.style.pointerEvents = 'auto';
-  });
-
-  document.querySelectorAll('.modal-overlay.hidden').forEach(overlay => {
-    overlay.style.display = 'none';
-    overlay.style.pointerEvents = 'none';
-    overlay.setAttribute('aria-hidden', 'true');
-  });
-
-  if (transitionCurtain) {
-    transitionCurtain.classList.remove('active');
-    transitionCurtain.style.pointerEvents = 'none';
-  }
-
-  if (loginScreen) {
-    loginScreen.classList.add('hidden');
-    loginScreen.style.display = 'none';
-    loginScreen.style.pointerEvents = 'none';
-    loginScreen.style.visibility = 'hidden';
-    loginScreen.setAttribute('aria-hidden', 'true');
-  }
-}
-
 function signOut() {
-  auth.logout();
-  location.reload();
+  curtainTransition(() => {
+    auth.logout();
+    const appShell = document.getElementById('app');
+    const loginScreen = document.getElementById('login-screen');
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
+    if (loginScreen) { loginScreen.style.display = 'flex'; }
+    router.navigate('dashboard');
+  });
 }
 
 function quickAddClient() {
@@ -4259,7 +3455,7 @@ function onChemClientChange() {
   const title = document.getElementById('wo-client-name');
   if (!select) return;
 
-  const client = getCachedUiClients().find(item => item.id === select.value);
+  const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     if (addressField) addressField.value = client.address || '';
     if (title) title.textContent = client.name || 'Chem Sheet';
@@ -4325,14 +3521,14 @@ function collectWorkOrderForm(orderId) {
   const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
   const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
   const selectedClientId = getValue('wo-client', order.clientId || '');
-  const selectedClient = getCachedUiClients().find(item => item.id === selectedClientId);
+  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
   const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
 
   const updatedOrder = {
     ...order,
     clientId: selectedClientId || order.clientId,
     clientName: selectedClient?.name || order.clientName,
-    technician: normalizeTechnicianName(getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || '')),
+    technician: canonicalUserName(getValue('wo-tech', order.technician || auth.getCurrentUser()?.name || '')),
     date: getValue('wo-date', order.date),
     time: getValue('wo-time-in', order.timeIn || order.time || ''),
     timeIn: getValue('wo-time-in', order.timeIn || order.time || ''),
@@ -4491,7 +3687,7 @@ function getSortedClients(clients = []) {
   });
 }
 
-function findClientByRepairSearch(searchValue = '', clients = getCachedUiClients()) {
+function findClientByRepairSearch(searchValue = '', clients = db.get('clients', [])) {
   const term = String(searchValue || '').trim().toLowerCase();
   if (!term) return null;
 
@@ -4594,7 +3790,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
 function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = null) {
   const content = document.getElementById('main-content');
   const existing = !draftOrder && orderId ? getRepairOrders().find(order => order.id === orderId) : null;
-  const clients = getCachedUiClients();
+  const clients = db.get('clients', []);
   const assigneeOptions = getWorkOrderAssigneeOptions();
   const currentAssignee = normalizeTechnicianName((draftOrder || existing)?.assignedTo || auth.getCurrentUser()?.name || assigneeOptions[0] || '');
   const selectedClientId = (draftOrder || existing)?.clientId || presetClientId || '';
@@ -4752,7 +3948,7 @@ function onRepairClientChange() {
   const title = document.getElementById('repair-bar-title');
   if (!select || !address) return;
 
-  const client = getCachedUiClients().find(item => item.id === select.value);
+  const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     address.value = client.address || '';
     if (title) title.textContent = client.name || 'Work Order';
@@ -4775,7 +3971,7 @@ function collectRepairOrderFromForm(orderId = '') {
   const finalId = orderId || existing?.id || `r${Date.now()}`;
 
   const clientId = document.getElementById('repair-client')?.value || '';
-  const client = getCachedUiClients().find(item => item.id === clientId);
+  const client = db.get('clients', []).find(item => item.id === clientId);
   const partItems = Array.from(document.querySelectorAll('.repair-part-row')).map(row => {
     const category = row.querySelector('.repair-part-category')?.value || '';
     const productSelect = row.querySelector('.repair-part-product');
@@ -5005,27 +4201,25 @@ function toggleAccordion(header) {
   }
 }
 
-async function deleteRepairOrder(orderId) {
+function deleteRepairOrder(orderId) {
   if (!auth.isAdmin()) {
     showToast('Only admins can delete work orders');
     return;
   }
   if (!confirm('Delete this repair work order?')) return;
-
-  await db.setExact('repairOrders', getRepairOrders().filter(order => order.id !== orderId));
+  saveRepairOrders(getRepairOrders().filter(order => order.id !== orderId));
   showToast('Work order deleted');
   router.renderWorkOrders();
 }
 
-async function deleteWorkOrder(orderId) {
+function deleteWorkOrder(orderId) {
   if (!auth.isAdmin()) {
     showToast('Only admins can delete chem sheets');
     return;
   }
   if (!confirm('Delete this chem sheet?')) return;
   const orders = db.get('workorders', []).filter(o => o.id !== orderId);
-
-  await db.setExact('workorders', orders);
+  db.set('workorders', orders);
   showToast('Chem sheet deleted');
   router.renderWorkOrders();
 }
@@ -5230,7 +4424,7 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
     return;
   }
 
-  const clients = getSortedClients(getCachedUiClients());
+  const clients = getSortedClients(db.get('clients', []));
   if (!clients.length) {
     showToast('Add a client first');
     router.renderClients();
@@ -5364,7 +4558,7 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
 
 function onEstimateClientChange() {
   const clientId = document.getElementById('est-client')?.value || '';
-  const client = getCachedUiClients().find(item => item.id === clientId);
+  const client = db.get('clients', []).find(item => item.id === clientId);
   const address = document.getElementById('est-address');
   const title = document.getElementById('estimate-form-title');
 
@@ -5687,18 +4881,6 @@ function escapeHtml(value = '') {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function escapeJsString(value = '') {
-  return String(value)
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\\'")
-    .replace(/\r/g, '\\r')
-    .replace(/\n/g, '\\n')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 function showToast(message) {
@@ -6699,10 +5881,7 @@ async function handleRepairPhotoUpload(orderId, slotIndex, event) {
 
     const photos = normalizeRepairPhotos(order.photos);
     photos[slotIndex] = dataUrl;
-  const updatedAt = new Date().toISOString();
-  order.photos = photos;
-  order.createdAt = order.createdAt || updatedAt;
-  order.updatedAt = updatedAt;
+    order.photos = photos;
 
     // Persist immediately
     const orders = getRepairOrders();
@@ -6748,8 +5927,6 @@ function removeRepairPhoto(orderId, slotIndex) {
   const photos = normalizeRepairPhotos(order.photos);
   photos[slotIndex] = '';
   order.photos = photos;
-  order.createdAt = order.createdAt || new Date().toISOString();
-  order.updatedAt = new Date().toISOString();
 
   // Persist immediately
   const orders = getRepairOrders();
@@ -7349,46 +6526,17 @@ function initMasterSchedule() {
     { name: "Zoe Foster", address: "47 Latana Way", tech: "Service - Elvin", serviceDays: ["Friday", "Monday"] }
 
   ];
-  const existingClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
-  const techNameRemap = {
-    'Ace': 'Service - Ace',
-    'Ariel': 'Service - Ariel',
-    'Donald': 'Service - Donald',
-    'Elvin': 'Service - Elvin',
-    'Jermaine': 'Service - Jermaine',
-    'Kadeem': 'Service - Kadeem',
-    'Kingsley': 'Service - Kingsley',
-    'Malik': 'Service - Malik',
-    'Jet': 'Tech - Jet',
-    'Mark': 'Tech - Mark'
-  };
-  existingClients.forEach(client => {
-    if (client.technician && techNameRemap[client.technician]) {
-      client.technician = techNameRemap[client.technician];
-    }
-  });
-
+  const existingClients = db.get('clients', []);
   const mergedClients = [...existingClients];
 
   clients.forEach(c => {
-    const incomingClient = {
-      name: c.name,
-      address: c.address,
-      technician: c.tech,
-      serviceDays: c.serviceDays
-    };
-    const existingIdx = mergedClients.findIndex(existingClient =>
-      getNormalizedClientIdentity(existingClient) === getNormalizedClientIdentity(incomingClient)
+    const existingIdx = mergedClients.findIndex(
+      e => e.address === c.address && e.technician === c.tech
     );
-
     if (existingIdx >= 0) {
+      // Update name and serviceDays so master data corrections take effect
       mergedClients[existingIdx].name = c.name;
-      mergedClients[existingIdx].address = mergedClients[existingIdx].address || c.address;
-      mergedClients[existingIdx].technician = c.tech;
-      mergedClients[existingIdx].serviceDays = mergeClientServiceDays(
-        mergedClients[existingIdx].serviceDays,
-        c.serviceDays
-      );
+      mergedClients[existingIdx].serviceDays = c.serviceDays;
     } else {
       mergedClients.push({
         id: `c_${Math.random().toString(36).substr(2, 9)}`,
@@ -7400,7 +6548,7 @@ function initMasterSchedule() {
     }
   });
 
-  db.set('clients', cleanupDuplicateMasterScheduleClients(mergedClients));
+  db.set('clients', mergedClients);
   db.set('masterScheduleLoaded', true);
 }
 
@@ -7422,9 +6570,6 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  if (window.__oasisDomBootstrapped) return;
-  window.__oasisDomBootstrapped = true;
-
   // Always force login screen on startup
   auth.logout();
   db.startRealtimeSync();
@@ -7510,8 +6655,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  auth.logout();
-  location.reload();
+  curtainTransition(() => {
+    auth.logout();
+    const appShell = document.getElementById('app');
+    const loginScreen = document.getElementById('login-screen');
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
+    if (loginScreen) { loginScreen.style.display = 'flex'; }
+    router.navigate('dashboard');
+  });
 }
 
 function quickAddClient() {
@@ -7559,7 +6710,7 @@ function onChemClientChange() {
   const title = document.getElementById('wo-client-name');
   if (!select) return;
 
-  const client = getCachedUiClients().find(item => item.id === select.value);
+  const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     if (addressField) addressField.value = client.address || '';
     if (title) title.textContent = client.name || 'Chem Sheet';
@@ -7625,7 +6776,7 @@ function collectWorkOrderForm(orderId) {
   const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
   const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
   const selectedClientId = getValue('wo-client', order.clientId || '');
-  const selectedClient = getCachedUiClients().find(item => item.id === selectedClientId);
+  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
   const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
 
   const updatedOrder = {
@@ -7867,7 +7018,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
       <div class="wo-bar">
         <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
         <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Work Order'}</div>
-        <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}', false, 'completed')">Save & Complete</button>
+        <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
       </div>
 
       <div class="wo-sec">
@@ -7970,9 +7121,16 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 
       <div class="card" style="margin:12px;">
         <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', false, 'completed')">Save & Complete</button>
-          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true, 'completed')">Share Report</button>` : ''}
-          <div class="wo-hint" style="flex-basis:100%;margin:0;">Saving this work order now submits it as completed and makes it ready for the daily download.</div>
+          <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save Changes</button>
+          <button id="repair-complete-btn" class="btn btn-primary" onclick="completeRepairWorkOrder('${escapeHtml(activeOrderId)}')" ${(!isCompleted && readyToComplete) ? '' : 'disabled'}>${isCompleted ? 'Completed' : 'Complete Work Order'}</button>
+          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true)">Share Report</button>` : ''}
+          <div id="repair-completion-hint" class="wo-hint" style="flex-basis:100%;margin:0;">
+            ${isCompleted
+              ? 'This work order is already completed.'
+              : (readyToComplete
+                ? 'All required sections are filled in and ready to complete.'
+                : 'Fill in client, address, date, assigned tech, work order type, and summary to enable completion.')}
+          </div>
         </div>
       </div>
     </div>
@@ -8020,7 +7178,7 @@ function collectRepairOrderFromForm(orderId = '') {
 
   const clientId = document.getElementById('repair-client')?.value || '';
   const typedClient = (document.getElementById('repair-client-search')?.value || '').trim();
-  const client = getCachedUiClients().find(item => item.id === clientId);
+  const client = db.get('clients', []).find(item => item.id === clientId);
   const partItems = Array.from(document.querySelectorAll('.repair-part-row')).map(row => {
     const category = row.querySelector('.repair-part-category')?.value || '';
     const productSelect = row.querySelector('.repair-part-product');
@@ -9134,9 +8292,6 @@ function populateLoginTechOptions() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  if (window.__oasisDomBootstrapped) return;
-  window.__oasisDomBootstrapped = true;
-
   // Always force login screen on startup
   auth.logout();
   db.startRealtimeSync();
@@ -9225,8 +8380,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function signOut() {
-  auth.logout();
-  location.reload();
+  curtainTransition(() => {
+    auth.logout();
+    const appShell = document.getElementById('app');
+    const loginScreen = document.getElementById('login-screen');
+    if (appShell) { appShell.classList.add('hidden'); appShell.style.display = 'none'; }
+    if (loginScreen) { loginScreen.style.display = 'flex'; }
+    router.navigate('dashboard');
+  });
 }
 
 function quickAddClient() {
@@ -9307,7 +8468,7 @@ function onChemClientChange() {
   const title = document.getElementById('wo-client-name');
   if (!select) return;
 
-  const client = getCachedUiClients().find(item => item.id === select.value);
+  const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     if (addressField) addressField.value = client.address || '';
     if (title) title.textContent = client.name || 'Chem Sheet';
@@ -9373,7 +8534,7 @@ function collectWorkOrderForm(orderId) {
   const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
   const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
   const selectedClientId = getValue('wo-client', order.clientId || '');
-  const selectedClient = getCachedUiClients().find(item => item.id === selectedClientId);
+  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
   const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
 
   const updatedOrder = {
@@ -9496,13 +8657,8 @@ function sendReport(orderId) {
 }
 
 function getDefaultAppLink() {
-  const versionNumber = String(APP_VERSION || DATA_VERSION || 'v200').replace(/^v/i, '');
-  return `https://millzy7665-beep.github.io/oasis-service/index.html?v=${versionNumber}`;
-}
-
-function getBrowserSafeAppLink() {
-  const versionNumber = String(APP_VERSION || DATA_VERSION || 'v200').replace(/^v/i, '');
-  return `https://millzy7665-beep.github.io/oasis-service/index.html?v=${versionNumber}&nosw=1&resetPush=1`;
+  const versionNumber = String(DATA_VERSION || 'v200').replace(/^v/i, '');
+  return `https://millzy7665-beep.github.io/oasis-service/?v=${versionNumber}`;
 }
 
 function getSavedAppLink() {
@@ -9770,7 +8926,7 @@ function onChemClientChange() {
   const techField = document.getElementById('wo-tech');
   if (!select) return;
 
-  const client = getCachedUiClients().find(item => item.id === select.value);
+  const client = db.get('clients', []).find(item => item.id === select.value);
   if (client) {
     if (addressField) addressField.value = client.address || '';
     if (title) title.textContent = client.name || 'Chem Sheet';
@@ -9779,7 +8935,7 @@ function onChemClientChange() {
   }
 }
 
-function saveWorkOrderForm(orderId, forceComplete = true) {
+function saveWorkOrderForm(orderId) {
   const previousOrder = workOrderManager.getOrder(orderId);
   const order = collectWorkOrderForm(orderId);
   if (!order) {
@@ -9789,14 +8945,12 @@ function saveWorkOrderForm(orderId, forceComplete = true) {
 
   const currentUser = auth.getCurrentUser();
   const previousStatus = (previousOrder?.status || '').toLowerCase();
-  const savedAt = new Date().toISOString();
-  order.status = String(forceComplete ? 'completed' : (document.getElementById('wo-status')?.value || order.status || 'pending')).toLowerCase();
+  order.status = String(document.getElementById('wo-status')?.value || order.status || 'pending').toLowerCase();
   order.technician = normalizeTechnicianName(order.technician || '');
-  order.createdAt = previousOrder?.createdAt || order.createdAt || savedAt;
   if (order.status === 'completed') {
-    order.completedAt = previousOrder?.completedAt || savedAt;
+    order.completedAt = previousOrder?.completedAt || new Date().toISOString();
   }
-  order.updatedAt = savedAt;
+  order.updatedAt = new Date().toISOString();
   order.updatedBy = currentUser?.name || '';
 
   workOrderManager.saveOrder(order);
@@ -9829,8 +8983,7 @@ function saveWorkOrderForm(orderId, forceComplete = true) {
     }
   }
 
-  const nextView = !auth.isAdmin() && order.status === 'completed' ? 'dashboard' : 'workorders';
-  router.navigate(nextView);
+  router.navigate('workorders');
   showToast(order.status === 'completed'
     ? 'Completed chem sheet saved for admin export'
     : 'Chem sheet saved');
@@ -9898,12 +9051,10 @@ function persistRepairOrderDraft(orderId = '') {
 
   const orders = getRepairOrders();
   const index = orders.findIndex(item => item.id === order.id);
-  const draftSavedAt = new Date().toISOString();
   const nextOrder = {
     ...order,
-    createdAt: order.createdAt || orders[index]?.createdAt || draftSavedAt,
     status: order.status || 'open',
-    updatedAt: draftSavedAt
+    updatedAt: new Date().toISOString()
   };
 
   if (index >= 0) {
@@ -9941,7 +9092,7 @@ async function completeRepairWorkOrder(orderId = '') {
   return saveRepairWorkOrder(orderId, false, 'completed');
 }
 
-async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedStatus = 'completed') {
+async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedStatus = '') {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) return;
 
@@ -9949,14 +9100,12 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
   const orders = getRepairOrders();
   const previousOrder = orders.find(item => item.id === order.id);
   const previousStatus = (previousOrder?.status || '').toLowerCase();
-  const savedAt = new Date().toISOString();
 
   order.status = String(forcedStatus || document.getElementById('repair-status')?.value || order.status || 'open').toLowerCase();
-  order.createdAt = previousOrder?.createdAt || order.createdAt || savedAt;
   if (order.status === 'completed') {
-    order.completedAt = previousOrder?.completedAt || savedAt;
+    order.completedAt = previousOrder?.completedAt || new Date().toISOString();
   }
-  order.updatedAt = savedAt;
+  order.updatedAt = new Date().toISOString();
   order.updatedBy = currentUser?.name || '';
 
   const index = orders.findIndex(item => item.id === order.id);
@@ -10009,15 +9158,6 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
-    return;
-  }
-
-  const shouldReturnOfficeTechToHome = !auth.isAdmin()
-    && isOfficeWorkOrderAssignee(currentUser?.name || '')
-    && order.status === 'completed';
-
-  if (shouldReturnOfficeTechToHome) {
-    router.navigate('dashboard');
     return;
   }
 

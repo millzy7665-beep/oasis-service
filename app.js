@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v265';
+const APP_VERSION = 'v266';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -244,10 +244,10 @@ class DB {
         router.renderClients();
       } else if (router.currentView === 'workorders' && document.getElementById('workorders-list')) {
         router.renderWorkOrders();
-      } else if (router.currentView === 'workorders' && document.querySelector('.wo-form') && workOrderManager?.currentOrder?.id) {
+      } else if (key === 'workorders' && router.currentView === 'workorders' && document.querySelector('.wo-form') && workOrderManager?.currentOrder?.id) {
         const refreshedOrder = workOrderManager.getOrder(workOrderManager.currentOrder.id);
         if (refreshedOrder) {
-          router.openWorkOrderDetail(refreshedOrder, false);
+          workOrderManager.currentOrder = refreshedOrder;
         }
       } else if (router.currentView === 'quotes' && typeof router.renderQuotes === 'function' && document.getElementById('quotes-list')) {
         router.renderQuotes();

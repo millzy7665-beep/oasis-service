@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v265';
+const APP_VERSION = 'v266';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -244,10 +244,10 @@ class DB {
         router.renderClients();
       } else if (router.currentView === 'workorders' && document.getElementById('workorders-list')) {
         router.renderWorkOrders();
-      } else if (router.currentView === 'workorders' && document.querySelector('.wo-form') && workOrderManager?.currentOrder?.id) {
+      } else if (key === 'workorders' && router.currentView === 'workorders' && document.querySelector('.wo-form') && workOrderManager?.currentOrder?.id) {
         const refreshedOrder = workOrderManager.getOrder(workOrderManager.currentOrder.id);
         if (refreshedOrder) {
-          router.openWorkOrderDetail(refreshedOrder, false);
+          workOrderManager.currentOrder = refreshedOrder;
         }
       } else if (router.currentView === 'quotes' && typeof router.renderQuotes === 'function' && document.getElementById('quotes-list')) {
         router.renderQuotes();
@@ -2683,6 +2683,8 @@ class Router {
     const user = auth.getCurrentUser();
     const isAdmin = auth.isAdmin();
     const isMainAdmin = user && user.role === 'admin';
+    const savedWorkOrderExportDate = getSavedWorkOrderExportDate();
+    const savedChemExportMonth = getSavedChemExportMonth();
     const appLink = getSavedAppLink();
     const encodedAppLink = encodeURIComponent(appLink);
 
@@ -2749,7 +2751,7 @@ class Router {
           <div style="font-weight:600; font-size:15px; margin-bottom:8px;">📋 Daily Work Orders</div>
           <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Download completed work orders for a specific date for billing.</p>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <input type="date" id="wo-export-date" class="form-control" style="flex:1; min-width:140px;" value="${new Date().toISOString().split('T')[0]}">
+            <input type="date" id="wo-export-date" class="form-control" style="flex:1; min-width:140px;" value="${savedWorkOrderExportDate}" onchange="persistSettingsExportSelections()">
             <button class="btn btn-primary" onclick="exportDailyWorkOrders()">📥 Download Daily Work Orders</button>
           </div>
         </div>
@@ -2759,7 +2761,7 @@ class Router {
           <div style="font-weight:600; font-size:15px; margin-bottom:8px;">🧪 Monthly Chem Sheets</div>
           <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Download all completed chem sheets for a specific month.</p>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <input type="month" id="chem-export-month" class="form-control" style="flex:1; min-width:140px;" value="${new Date().toISOString().slice(0, 7)}">
+            <input type="month" id="chem-export-month" class="form-control" style="flex:1; min-width:140px;" value="${savedChemExportMonth}" onchange="persistSettingsExportSelections()">
             <button class="btn btn-secondary" onclick="exportMonthlyChemSheets()">📥 Download Bulk Chem Sheets</button>
           </div>
         </div>
@@ -10285,7 +10287,8 @@ async function addRepairWorkOrderPdfToDocument(doc, order, addNewPage = false) {
 
 async function exportDailyWorkOrders() {
   const dateInput = document.getElementById('wo-export-date');
-  const selectedDate = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
+  const selectedDate = dateInput ? dateInput.value : getSavedWorkOrderExportDate();
+  persistSettingsExportSelections();
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const orders = getRepairOrders()
     .filter(order => {
@@ -10331,7 +10334,8 @@ async function exportCompletedToExcel() {
 
 async function exportMonthlyChemSheets() {
   const monthInput = document.getElementById('chem-export-month');
-  const selectedMonth = monthInput ? monthInput.value : new Date().toISOString().slice(0, 7);
+  const selectedMonth = monthInput ? monthInput.value : getSavedChemExportMonth();
+  persistSettingsExportSelections();
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const sorted = [...db.get('workorders', []).filter(wo => isCompleted(wo.status) && (wo.date || '').startsWith(selectedMonth))]
     .sort((a, b) => new Date(a?.date || 0) - new Date(b?.date || 0));
@@ -10390,4 +10394,50 @@ async function exportMonthlyChemSheets() {
     document.body.removeChild(a); URL.revokeObjectURL(url);
     showToast(`${sorted.length} chem sheet${sorted.length !== 1 ? 's' : ''} for ${selectedMonth} saved`);
   } catch (error) { console.error('Chem sheets export failed:', error); showToast('Chem sheets export failed'); }
+}
+
+const SETTINGS_EXPORT_DATE_KEY = 'oasis_settings_export_daily_date';
+const SETTINGS_CHEM_MONTH_KEY = 'oasis_settings_export_chem_month';
+
+function getSavedWorkOrderExportDate() {
+  const fallback = new Date().toISOString().split('T')[0];
+
+  try {
+    const savedValue = String(window.localStorage.getItem(SETTINGS_EXPORT_DATE_KEY) || '').trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(savedValue) ? savedValue : fallback;
+  } catch (error) {
+    console.warn('Unable to load saved daily work order export date', error);
+    return fallback;
+  }
+}
+
+function getSavedChemExportMonth() {
+  const fallback = new Date().toISOString().slice(0, 7);
+
+  try {
+    const savedValue = String(window.localStorage.getItem(SETTINGS_CHEM_MONTH_KEY) || '').trim();
+    return /^\d{4}-\d{2}$/.test(savedValue) ? savedValue : fallback;
+  } catch (error) {
+    console.warn('Unable to load saved chem sheet export month', error);
+    return fallback;
+  }
+}
+
+function persistSettingsExportSelections() {
+  const dateInput = document.getElementById('wo-export-date');
+  const monthInput = document.getElementById('chem-export-month');
+
+  try {
+    const selectedDate = String(dateInput?.value || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
+      window.localStorage.setItem(SETTINGS_EXPORT_DATE_KEY, selectedDate);
+    }
+
+    const selectedMonth = String(monthInput?.value || '').trim();
+    if (/^\d{4}-\d{2}$/.test(selectedMonth)) {
+      window.localStorage.setItem(SETTINGS_CHEM_MONTH_KEY, selectedMonth);
+    }
+  } catch (error) {
+    console.warn('Unable to persist export selections', error);
+  }
 }
