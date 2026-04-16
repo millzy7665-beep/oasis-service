@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v264';
+const APP_VERSION = 'v265';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -1016,6 +1016,52 @@ function doesClientAddressDescribeOther(containerClient = {}, targetClient = {})
   return containerAddress.includes(targetName) && containerAddress.includes(targetAddress);
 }
 
+function isExpandedAddressVariant(leftClient = {}, rightClient = {}) {
+  const leftName = normalizeClientIdentityPart(leftClient?.name || '');
+  const rightName = normalizeClientIdentityPart(rightClient?.name || '');
+  const leftAddress = normalizeClientIdentityPart(leftClient?.address || '');
+  const rightAddress = normalizeClientIdentityPart(rightClient?.address || '');
+
+  if (!leftName || !rightName || leftName !== rightName) {
+    return false;
+  }
+
+  if (!leftAddress || !rightAddress || leftAddress === rightAddress) {
+    return false;
+  }
+
+  if (!haveOverlappingServiceDays(leftClient, rightClient)) {
+    return false;
+  }
+
+  if (hasConflictingUnitMarkers(leftClient, rightClient)) {
+    return false;
+  }
+
+  return leftAddress.includes(rightAddress) || rightAddress.includes(leftAddress);
+}
+
+function getClientAddressDetailScore(client = {}, address = '') {
+  const rawAddress = String(address || '').trim();
+  const normalizedAddress = normalizeClientIdentityPart(rawAddress);
+  const normalizedName = normalizeClientIdentityPart(client?.name || '');
+
+  if (!normalizedAddress) {
+    return -1;
+  }
+
+  const uniqueWords = new Set(normalizedAddress.split(' ').filter(Boolean));
+  const punctuationCount = (rawAddress.match(/[,#/()-]/g) || []).length;
+  const containsNumber = /\d/.test(rawAddress);
+  const containsClientName = normalizedName && normalizedAddress.includes(normalizedName);
+
+  return normalizedAddress.length
+    + (uniqueWords.size * 4)
+    + (punctuationCount * 3)
+    + (containsNumber ? 20 : 0)
+    + (containsClientName ? 12 : 0);
+}
+
 function isLegacySplitPropertyMatch(leftClient = {}, rightClient = {}) {
   if (!userNamesMatch(getClientTechnician(leftClient), getClientTechnician(rightClient))) {
     return false;
@@ -1068,6 +1114,20 @@ function choosePreferredClientAddress(leftClient = {}, rightClient = {}) {
     return leftAddress || rightAddress;
   }
 
+  if (normalizedRightAddress && normalizedRightAddress.includes(normalizedLeftAddress) && normalizedRightAddress !== normalizedLeftAddress && !hasConflictingUnitMarkers(leftClient, rightClient)) {
+    return rightAddress || leftAddress;
+  }
+
+  if (normalizedLeftAddress && normalizedLeftAddress.includes(normalizedRightAddress) && normalizedRightAddress !== normalizedLeftAddress && !hasConflictingUnitMarkers(leftClient, rightClient)) {
+    return leftAddress || rightAddress;
+  }
+
+  const leftScore = getClientAddressDetailScore(leftClient, leftAddress);
+  const rightScore = getClientAddressDetailScore(rightClient, rightAddress);
+  if (leftScore !== rightScore) {
+    return rightScore > leftScore ? rightAddress : leftAddress || rightAddress;
+  }
+
   return rightAddress.length > leftAddress.length ? rightAddress : leftAddress || rightAddress;
 }
 
@@ -1094,6 +1154,10 @@ function shouldMergeStoredClientVariants(leftClient = {}, rightClient = {}) {
 
   const sameAddressTech = getNormalizedClientAddressTechIdentity(leftClient) === getNormalizedClientAddressTechIdentity(rightClient);
   if (sameAddressTech && shouldMergeClientNameVariants(leftClient, rightClient)) {
+    return true;
+  }
+
+  if (isExpandedAddressVariant(leftClient, rightClient)) {
     return true;
   }
 
