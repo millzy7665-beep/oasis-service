@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v266';
+const APP_VERSION = 'v267';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -72,9 +72,66 @@ function getSyncedTimestampValue(value = '') {
 function getSyncedRecordTimestamp(record = {}) {
   return Math.max(
     getSyncedTimestampValue(record?.updatedAt),
+    getSyncedTimestampValue(record?.deletedAt),
     getSyncedTimestampValue(record?.completedAt),
     getSyncedTimestampValue(record?.createdAt),
     getSyncedTimestampValue(record?.date)
+  );
+}
+
+function isDeletedSyncedRecord(record = {}) {
+  return Boolean(String(record?.deletedAt || '').trim());
+}
+
+function filterDeletedSyncedRecords(key = '', records = []) {
+  if (!isMergeSyncedKey(key) || !Array.isArray(records)) {
+    return records;
+  }
+
+  return records.filter(record => !isDeletedSyncedRecord(record));
+}
+
+function createDeletedSyncedRecord(recordOrId = {}, deletedAt = new Date().toISOString()) {
+  const sourceRecord = typeof recordOrId === 'string'
+    ? { id: recordOrId }
+    : (recordOrId || {});
+  const recordId = getSyncedRecordId(sourceRecord);
+
+  if (!recordId) {
+    return null;
+  }
+
+  return {
+    ...cloneSyncedValue(sourceRecord),
+    id: recordId,
+    status: 'deleted',
+    deletedAt,
+    updatedAt: deletedAt
+  };
+}
+
+function markSyncedRecordDeleted(key = '', records = [], recordId = '', deletedAt = new Date().toISOString()) {
+  if (!isMergeSyncedKey(key)) {
+    return cloneSyncedValue(Array.isArray(records) ? records : []);
+  }
+
+  const normalizedId = String(recordId || '').trim();
+  if (!normalizedId) {
+    return cloneSyncedValue(Array.isArray(records) ? records : []);
+  }
+
+  const sourceRecords = Array.isArray(records) ? records : [];
+  const existingRecord = sourceRecords.find(record => getSyncedRecordId(record) === normalizedId);
+  const deletedRecord = createDeletedSyncedRecord(existingRecord || { id: normalizedId }, deletedAt);
+
+  if (!deletedRecord) {
+    return cloneSyncedValue(sourceRecords);
+  }
+
+  return mergeSyncedRecordArrays(
+    key,
+    sourceRecords.filter(record => getSyncedRecordId(record) !== normalizedId),
+    [deletedRecord]
   );
 }
 
@@ -84,6 +141,12 @@ function shouldPreferIncomingSyncedRecord(currentRecord = {}, incomingRecord = {
 
   if (incomingTimestamp !== currentTimestamp) {
     return incomingTimestamp > currentTimestamp;
+  }
+
+  const currentDeleted = isDeletedSyncedRecord(currentRecord);
+  const incomingDeleted = isDeletedSyncedRecord(incomingRecord);
+  if (incomingDeleted !== currentDeleted) {
+    return incomingDeleted;
   }
 
   const currentCompleted = String(currentRecord?.status || '').toLowerCase() === 'completed';
@@ -153,13 +216,18 @@ class DB {
     this._pendingRemoteWriteModes = new Map();
   }
 
-  get(key, defaultValue = null) {
+  getRaw(key, defaultValue = null) {
     try {
       const item = this.storage.getItem(key);
       return item ? JSON.parse(item) : defaultValue;
     } catch (e) {
       return defaultValue;
     }
+  }
+
+  get(key, defaultValue = null) {
+    const value = this.getRaw(key, defaultValue);
+    return filterDeletedSyncedRecords(key, value);
   }
 
   set(key, value) {
@@ -213,6 +281,38 @@ class DB {
       }
     }
 
+    return true;
+  }
+
+  async markRecordsDeleted(key, recordIds = []) {
+    if (!isMergeSyncedKey(key)) return false;
+
+    const ids = [...new Set((Array.isArray(recordIds) ? recordIds : [recordIds])
+      .map(recordId => String(recordId || '').trim())
+      .filter(Boolean))];
+
+    if (!ids.length) return false;
+
+    const deletedAt = new Date().toISOString();
+    const rawRecords = this.getRaw(key, []);
+    const nextValue = ids.reduce(
+      (records, recordId) => markSyncedRecordDeleted(key, records, recordId, deletedAt),
+      rawRecords
+    );
+
+    try {
+      this.storage.setItem(key, JSON.stringify(nextValue));
+    } catch (error) {
+      return false;
+    }
+
+    this.queueRemoteWrite(key, nextValue, 'merge');
+
+    if (this._remoteWritesEnabled) {
+      await this.writeSyncedKey(key, nextValue);
+    }
+
+    this.refreshLiveViews(key);
     return true;
   }
 
@@ -344,7 +444,7 @@ class DB {
     Promise.all(SYNCED_KEYS.map(async key => {
       const docRef = firestore.collection('app_data').doc(key);
       const remoteDoc = await docRef.get();
-      const localData = this.get(key, null);
+      const localData = this.getRaw(key, null);
 
       if (remoteDoc.exists) {
         const remoteData = remoteDoc.data()?.data ?? null;
@@ -392,7 +492,7 @@ class DB {
           if (!snapshot.exists) return;
 
           const remoteData = snapshot.data()?.data ?? null;
-          const localData = this.get(key, null);
+          const localData = this.getRaw(key, null);
 
           if (this._pendingRemoteWrites.has(key) && this._pendingRemoteWriteModes.get(key) === 'exact') {
             const pendingData = this._pendingRemoteWrites.get(key);
@@ -4302,16 +4402,26 @@ function quickAddClient() {
   router.renderClients();
 }
 
-function deleteClient(clientId) {
+async function deleteClient(clientId) {
   if (!auth.isAdmin()) {
     showToast('Only admins can delete clients');
     return;
   }
   if (!confirm('Delete this client and related service records?')) return;
 
+  const relatedChemSheetIds = db.get('workorders', [])
+    .filter(order => order.clientId === clientId)
+    .map(order => order.id);
+  const relatedRepairOrderIds = getRepairOrders()
+    .filter(order => order.clientId === clientId)
+    .map(order => order.id);
+
   db.set('clients', db.get('clients', []).filter(client => client.id !== clientId));
-  db.set('workorders', db.get('workorders', []).filter(order => order.clientId !== clientId));
-  db.set('repairOrders', getRepairOrders().filter(order => order.clientId !== clientId));
+
+  await Promise.all([
+    relatedChemSheetIds.length ? db.markRecordsDeleted('workorders', relatedChemSheetIds) : Promise.resolve(false),
+    relatedRepairOrderIds.length ? db.markRecordsDeleted('repairOrders', relatedRepairOrderIds) : Promise.resolve(false)
+  ]);
 
   showToast('Client removed');
   router.renderClients();
@@ -5076,7 +5186,7 @@ async function deleteRepairOrder(orderId) {
   }
   if (!confirm('Delete this repair work order?')) return;
 
-  await db.setExact('repairOrders', getRepairOrders().filter(order => order.id !== orderId));
+  await db.markRecordsDeleted('repairOrders', orderId);
   showToast('Work order deleted');
   router.renderWorkOrders();
 }
@@ -5087,9 +5197,8 @@ async function deleteWorkOrder(orderId) {
     return;
   }
   if (!confirm('Delete this chem sheet?')) return;
-  const orders = db.get('workorders', []).filter(o => o.id !== orderId);
 
-  await db.setExact('workorders', orders);
+  await db.markRecordsDeleted('workorders', orderId);
   showToast('Chem sheet deleted');
   router.renderWorkOrders();
 }
