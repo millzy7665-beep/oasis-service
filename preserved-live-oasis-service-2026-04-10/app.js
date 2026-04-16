@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v258';
+const APP_VERSION = 'v261';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -1412,6 +1412,14 @@ function shouldResetPushSubscription() {
   }
 }
 
+function isNoServiceWorkerMode() {
+  try {
+    return new URLSearchParams(window.location.search).get('nosw') === '1';
+  } catch (error) {
+    return false;
+  }
+}
+
 async function resetPushSubscriptionState(messaging, serviceWorkerRegistration) {
   try {
     const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
@@ -1480,6 +1488,11 @@ async function initializePushNotificationsForUser(force = false) {
     if (!currentUser) {
       setPushSetupState('error', 'Please sign in first.');
       return false;
+    }
+
+    if (!isCapacitorNativeApp() && isNoServiceWorkerMode()) {
+      setPushSetupState('local-only', 'Browser-safe mode is active. Live alerts will show while Oasis is open on this device.');
+      return true;
     }
 
     setPushSetupState('pending', 'Preparing phone notifications...');
@@ -1600,7 +1613,16 @@ async function initializePushNotificationsForUser(force = false) {
       return true;
     }
 
-    const serviceWorkerRegistration = await navigator.serviceWorker.ready;
+    const existingRegistrations = await navigator.serviceWorker.getRegistrations().catch(() => []);
+    const serviceWorkerRegistration = existingRegistrations[0]
+      || await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise(resolve => setTimeout(() => resolve(null), 4000))
+      ]);
+    if (!serviceWorkerRegistration) {
+      setPushSetupState('local-only', 'Live alerts will show while Oasis is open on this device.');
+      return true;
+    }
     if (typeof messaging.useServiceWorker === 'function') {
       messaging.useServiceWorker(serviceWorkerRegistration);
     }
@@ -9399,8 +9421,13 @@ function sendReport(orderId) {
 }
 
 function getDefaultAppLink() {
-  const versionNumber = String(DATA_VERSION || 'v200').replace(/^v/i, '');
-  return `https://millzy7665-beep.github.io/oasis-service/?v=${versionNumber}`;
+  const versionNumber = String(APP_VERSION || DATA_VERSION || 'v200').replace(/^v/i, '');
+  return `https://millzy7665-beep.github.io/oasis-service/index.html?v=${versionNumber}`;
+}
+
+function getBrowserSafeAppLink() {
+  const versionNumber = String(APP_VERSION || DATA_VERSION || 'v200').replace(/^v/i, '');
+  return `https://millzy7665-beep.github.io/oasis-service/index.html?v=${versionNumber}&nosw=1&resetPush=1`;
 }
 
 function getSavedAppLink() {
