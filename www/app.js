@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v269';
+const APP_VERSION = 'v270';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -962,6 +962,87 @@ function getAllUserNames() {
     .map(user => user.name)
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));
+}
+
+function getOrderAssigneeName(order = {}) {
+  return normalizeTechnicianName(order.assignedTo || order.technician || '');
+}
+
+function getOrderWorkflowState(order = {}) {
+  const explicitState = String(order.workflowState || '').trim().toLowerCase();
+  if (explicitState === 'draft' || explicitState === 'assigned' || explicitState === 'submitted') {
+    return explicitState;
+  }
+
+  if (String(order.submittedToAdminAt || '').trim()) {
+    return 'submitted';
+  }
+
+  if (getOrderAssigneeName(order)) {
+    return 'assigned';
+  }
+
+  return 'draft';
+}
+
+function isOrderSubmittedToAdmin(order = {}) {
+  return getOrderWorkflowState(order) === 'submitted';
+}
+
+function isAdminCompletedOrder(order = {}) {
+  return String(order.status || '').trim().toLowerCase() === 'completed' && isOrderSubmittedToAdmin(order);
+}
+
+function resolveSavedOrderWorkflowState(order = {}, previousOrder = null) {
+  const previousWorkflowState = getOrderWorkflowState(previousOrder || {});
+  if (previousWorkflowState === 'submitted') {
+    return 'submitted';
+  }
+
+  if (auth.isAdmin() && getOrderAssigneeName(order)) {
+    return 'assigned';
+  }
+
+  if (previousWorkflowState === 'assigned') {
+    return 'assigned';
+  }
+
+  return 'draft';
+}
+
+function getOrderBadgePresentation(order = {}) {
+  const status = String(order.status || 'pending').trim().toLowerCase();
+  const workflowState = getOrderWorkflowState(order);
+
+  if (workflowState === 'submitted' && status === 'completed') {
+    return { tone: 'completed', label: 'sent to admin' };
+  }
+
+  if (workflowState === 'assigned') {
+    return {
+      tone: status === 'pending' ? 'pending' : 'assigned',
+      label: status === 'pending' ? 'assigned / pending' : 'assigned'
+    };
+  }
+
+  if (workflowState === 'draft') {
+    return {
+      tone: 'draft',
+      label: status === 'completed' ? 'saved complete' : 'saved'
+    };
+  }
+
+  return {
+    tone: status === 'completed' ? 'completed' : (status === 'in-progress' ? 'in-progress' : 'pending'),
+    label: status.replace('-', ' ')
+  };
+}
+
+function getOrderScheduleTone(order = {}) {
+  const tone = getOrderBadgePresentation(order).tone;
+  if (tone === 'completed') return 'completed';
+  if (tone === 'assigned' || tone === 'in-progress') return 'in-progress';
+  return 'pending';
 }
 
 function normalizeTechnicianName(name = '') {
@@ -2293,6 +2374,13 @@ class Router {
 
       ${!isOfficeUser ? `
       <div class="section-header">
+        <div class="section-title">Assigned Jobs Today</div>
+      </div>
+      <div id="today-schedule">
+        ${this.renderTodaySchedule()}
+      </div>
+
+      <div class="section-header">
         <div class="section-title">Today's Route · ${todayDay}</div>
         <button class="btn btn-secondary btn-sm" onclick="router.navigate('routes')">Full Route →</button>
       </div>
@@ -2328,6 +2416,7 @@ class Router {
       address: wo.address || '',
       time: wo.time || wo.timeIn || 'TBD',
       status: wo.status || 'pending',
+      tone: getOrderScheduleTone(wo),
       kind: 'Chem Sheet',
       openAction: `router.viewWorkOrder('${wo.id}')`,
       dateKey: this.getDateKey(wo.date)
@@ -2339,6 +2428,7 @@ class Router {
       address: order.address || '',
       time: order.timeIn || order.time || 'TBD',
       status: order.status || 'open',
+      tone: getOrderScheduleTone(order),
       kind: order.jobType || 'Work Order',
       openAction: `renderRepairOrderForm('${order.id}')`,
       dateKey: this.getDateKey(order.date)
@@ -2366,7 +2456,7 @@ class Router {
           <div class="schedule-name">${escapeHtml(job.clientName)}</div>
           <div class="schedule-detail">${escapeHtml(job.kind)} • ${escapeHtml(job.address || 'Address TBD')}</div>
         </div>
-        <div class="schedule-dot ${(job.status || '').toLowerCase() === 'completed' ? 'completed' : (job.status || '').toLowerCase() === 'in-progress' ? 'in-progress' : 'pending'}"></div>
+        <div class="schedule-dot ${job.tone || 'pending'}"></div>
       </div>
     `).join('');
   }
@@ -2559,13 +2649,13 @@ class Router {
     const currentUser = auth.getCurrentUser();
     const isJetOrMark = !isAdmin && (currentUser?.username === 't9' || currentUser?.username === 't10');
     const canCreateRepairOrders = isAdmin || isJetOrMark;
-    const completedWOs = (typeof getRepairOrders === 'function' ? getRepairOrders() : []).filter(o => (o.status || '').toLowerCase() === 'completed');
+    const completedWOs = (typeof getRepairOrders === 'function' ? getRepairOrders() : []).filter(isAdminCompletedOrder);
     const todayKey = new Date().toISOString().split('T')[0];
     const todaysPendingOpenCount = isAdmin
       ? (typeof getRepairOrders === 'function' ? getRepairOrders() : []).filter(order => String(order.date || '') === todayKey && (order.status || '').toLowerCase() !== 'completed').length
       : 0;
     const completedChemSheetCount = isAdmin
-      ? db.get('workorders', []).filter(order => (order.status || '').toLowerCase() === 'completed').length
+      ? db.get('workorders', []).filter(isAdminCompletedOrder).length
       : 0;
 
     content.innerHTML = `
@@ -2640,7 +2730,7 @@ class Router {
   renderPendingChemSheetsByUser() {
     const currentUser = auth.getCurrentUser();
     const canShare = auth.canShare();
-    const completedSheets = [...db.get('workorders', []).filter(order => (order.status || '').toLowerCase() === 'completed')]
+    const completedSheets = [...db.get('workorders', []).filter(isAdminCompletedOrder)]
       .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
     if (!completedSheets.length) {
@@ -2736,7 +2826,8 @@ class Router {
 
   renderJobCard(wo, canShare, isAdmin, currentUser) {
     const status = String(wo.status || 'pending').toLowerCase();
-    const isCompleted = status === 'completed';
+    const isCompleted = isAdminCompletedOrder(wo);
+    const badge = getOrderBadgePresentation(wo);
     return `
       <div class="job-card ${isCompleted ? 'job-card-completed' : ''}">
         <div class="job-card-header">
@@ -2752,7 +2843,7 @@ class Router {
           <button class="btn btn-icon" onclick="openMap('${escapeJsString(wo.address)}')" title="View on Map">📍</button>
         </div>
         <div class="job-card-body">
-          <div class="badge badge-${status}">${status.replace('-', ' ')}</div>
+          <div class="badge badge-${badge.tone}">${escapeHtml(badge.label)}</div>
         </div>
         <div class="job-card-footer">
           <button class="btn ${isCompleted ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="router.viewWorkOrder('${escapeJsString(wo.id)}')">${isCompleted ? 'Completed' : 'Open'}</button>
@@ -2933,7 +3024,7 @@ class Router {
         <div class="wo-bar">
           <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
           <div id="wo-client-name" class="wo-bar-title">${order.clientName || 'Chem Sheet'}</div>
-          <button class="btn btn-primary btn-sm" onclick="saveWorkOrderForm('${order.id}', true)">Save & Complete</button>
+          <button class="btn btn-primary btn-sm" onclick="saveWorkOrderForm('${order.id}', false)">Save</button>
         </div>
 
         <div class="wo-sec">
@@ -3085,8 +3176,10 @@ class Router {
 
         <div class="card" style="margin:12px;">
           <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button class="btn btn-secondary" onclick="saveWorkOrderForm('${order.id}', true)">Save & Complete</button>
+            <button class="btn btn-secondary" onclick="saveWorkOrderForm('${order.id}', false)">Save</button>
+            <button class="btn btn-primary" onclick="sendReport('${order.id}')">Send to Admin</button>
             ${auth.canShare() ? `<button class="btn send-report-btn" onclick="shareReport('${order.id}')">Share Report</button>` : ''}
+            <div class="wo-hint" style="flex-basis:100%;margin:0;">Save progress any time. Use Send to Admin once the chem sheet is complete.</div>
           </div>
         </div>
       </div>
@@ -4656,7 +4749,7 @@ function shareReport(orderId) {
 }
 
 function sendReport(orderId) {
-  shareReport(orderId);
+  saveWorkOrderForm(orderId, true);
 }
 
 function getRepairOrders() {
@@ -7984,7 +8077,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
 
   if (isAdmin) {
     if (statusFilter === 'completed') {
-      orders = orders.filter(order => (order.status || '').toLowerCase() === 'completed');
+      orders = orders.filter(isAdminCompletedOrder);
     } else if (statusFilter === 'today-open') {
       const todayKey = new Date().toISOString().split('T')[0];
       orders = orders.filter(order => String(order.date || '') === todayKey && (order.status || '').toLowerCase() !== 'completed');
@@ -8021,11 +8114,11 @@ function renderRepairOrdersList(statusFilter = 'all') {
         </div>
       </div>
       <div class="job-card-body">
-        <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${escapeHtml(order.status || 'open')}</div></div>
+        <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value"><span class="badge badge-${getOrderBadgePresentation(order).tone}">${escapeHtml(getOrderBadgePresentation(order).label)}</span></div></div>
         <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${escapeHtml(order.address || '')}</div></div>
       </div>
       <div class="job-card-footer">
-        <button class="btn ${order.status === 'completed' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">${order.status === 'completed' ? 'Completed' : 'Open'}</button>
+        <button class="btn ${isAdminCompletedOrder(order) ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="renderRepairOrderForm('${escapeHtml(order.id)}')">${isAdminCompletedOrder(order) ? 'Completed' : 'Open'}</button>
         ${canShare ? `<button class="btn btn-primary btn-sm" onclick="shareRepairPDF('${escapeHtml(order.id)}')">Share</button>` : ''}
         ${currentUser.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteRepairOrder('${escapeHtml(order.id)}')">Delete</button>` : ''}
       </div>
@@ -8089,7 +8182,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
       <div class="wo-bar">
         <button class="btn btn-secondary btn-sm" onclick="router.renderWorkOrders()">← Back</button>
         <div id="repair-bar-title" class="wo-bar-title">${order.clientName || 'Work Order'}</div>
-        <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}', false, 'completed')">Save & Complete</button>
+        <button class="btn btn-primary btn-sm" onclick="saveRepairWorkOrder('${activeOrderId}')">Save</button>
       </div>
 
       <div class="wo-sec">
@@ -8192,9 +8285,10 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
 
       <div class="card" style="margin:12px;">
         <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', false, 'completed')">Save & Complete</button>
-          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', true, 'completed')">Share Report</button>` : ''}
-          <div class="wo-hint" style="flex-basis:100%;margin:0;">Saving this work order now submits it as completed and makes it ready for the daily download.</div>
+          <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save</button>
+          <button id="repair-send-btn" class="btn btn-primary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', false, true)" ${readyToComplete && !isCompleted ? '' : 'disabled'}>${isCompleted ? 'Sent to Admin' : 'Send to Admin'}</button>
+          ${auth.canShare() ? `<button class="btn send-report-btn" onclick="shareRepairPDF('${escapeHtml(activeOrderId)}')">Share Report</button>` : ''}
+          <div id="repair-completion-hint" class="wo-hint" style="flex-basis:100%;margin:0;">${isCompleted ? 'This work order has already been sent to admin.' : (readyToComplete ? 'Save progress any time. Use Send to Admin when the job is complete.' : 'Fill in client, address, date, assigned tech, work order type, and summary before sending to admin.')}</div>
         </div>
       </div>
     </div>
@@ -10000,11 +10094,20 @@ function saveWorkOrderForm(orderId, forceComplete = true) {
   const currentUser = auth.getCurrentUser();
   const previousStatus = (previousOrder?.status || '').toLowerCase();
   const savedAt = new Date().toISOString();
-  order.status = String(forceComplete ? 'completed' : (document.getElementById('wo-status')?.value || order.status || 'pending')).toLowerCase();
+  const isSendToAdmin = Boolean(forceComplete);
+  order.status = String(isSendToAdmin ? 'completed' : (document.getElementById('wo-status')?.value || order.status || 'pending')).toLowerCase();
   order.technician = normalizeTechnicianName(order.technician || '');
   order.createdAt = previousOrder?.createdAt || order.createdAt || savedAt;
-  if (order.status === 'completed') {
+  if (isSendToAdmin) {
     order.completedAt = previousOrder?.completedAt || savedAt;
+    order.submittedToAdminAt = previousOrder?.submittedToAdminAt || savedAt;
+    order.submittedBy = currentUser?.name || '';
+    order.workflowState = 'submitted';
+  } else {
+    order.completedAt = previousOrder?.completedAt || order.completedAt || '';
+    order.submittedToAdminAt = previousOrder?.submittedToAdminAt || order.submittedToAdminAt || '';
+    order.submittedBy = previousOrder?.submittedBy || order.submittedBy || '';
+    order.workflowState = resolveSavedOrderWorkflowState(order, previousOrder);
   }
   order.updatedAt = savedAt;
   order.updatedBy = currentUser?.name || '';
@@ -10024,13 +10127,13 @@ function saveWorkOrderForm(orderId, forceComplete = true) {
         actionLabel: 'Open Chem Sheet'
       });
     }
-  } else if (currentUser && !auth.isAdmin()) {
-    const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
+  } else if (currentUser && !auth.isAdmin() && isSendToAdmin) {
+    const shouldNotifyAdmin = !previousOrder?.submittedToAdminAt || previousStatus !== (order.status || '').toLowerCase();
     if (shouldNotifyAdmin) {
       notificationManager.create({
         type: 'chem',
-        title: order.status === 'completed' ? 'Completed chem sheet received' : 'Chem sheet received from technician',
-        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a chem sheet'}.`,
+        title: 'Completed chem sheet received',
+        message: `${currentUser.name} sent ${order.clientName || 'a chem sheet'} to admin.`,
         recipients: getAdminRecipients(currentUser?.name),
         targetView: 'chem',
         targetId: order.id,
@@ -10039,11 +10142,13 @@ function saveWorkOrderForm(orderId, forceComplete = true) {
     }
   }
 
-  const nextView = !auth.isAdmin() && order.status === 'completed' ? 'dashboard' : 'workorders';
+  const nextView = !auth.isAdmin() && isSendToAdmin ? 'dashboard' : 'workorders';
   router.navigate(nextView);
-  showToast(order.status === 'completed'
-    ? 'Completed chem sheet saved for admin export'
-    : 'Chem sheet saved');
+  showToast(isSendToAdmin
+    ? 'Chem sheet sent to admin'
+    : (auth.isAdmin() && order.technician && !userNamesMatch(order.technician, currentUser?.name || '')
+      ? `Chem sheet saved and assigned to ${order.technician}`
+      : 'Chem sheet saved for later'));
 }
 
 function onRepairClientChange() {
@@ -10068,25 +10173,27 @@ function onRepairClientChange() {
 }
 
 function updateRepairCompletionState() {
-  const button = document.getElementById('repair-complete-btn');
+  const button = document.getElementById('repair-send-btn');
   const hint = document.getElementById('repair-completion-hint');
   if (!button || !hint) return;
 
   const status = String(document.getElementById('repair-status')?.value || 'open').toLowerCase();
-  if (status === 'completed') {
+  const existingId = document.querySelector('[data-active-repair-id]')?.getAttribute('data-active-repair-id') || '';
+  const existingOrder = existingId ? getRepairOrders().find(item => item.id === existingId) : null;
+  if (status === 'completed' && isOrderSubmittedToAdmin(existingOrder || {})) {
     button.disabled = true;
-    button.textContent = 'Completed';
-    hint.textContent = 'This work order is already completed.';
+    button.textContent = 'Sent to Admin';
+    hint.textContent = 'This work order has already been sent to admin.';
     return;
   }
 
   const draft = collectRepairOrderFromForm();
   const ready = isRepairOrderReadyToComplete(draft || {});
   button.disabled = !ready;
-  button.textContent = 'Complete Work Order';
+  button.textContent = 'Send to Admin';
   hint.textContent = ready
-    ? 'All required sections are filled in and ready to complete.'
-    : 'Fill in client, address, date, assigned tech, work order type, and summary to enable completion.';
+    ? 'Save progress any time. Use Send to Admin when the job is complete.'
+    : 'Fill in client, address, date, assigned tech, work order type, and summary before sending to admin.';
 }
 
 function isRepairOrderReadyToComplete(order = {}) {
@@ -10148,10 +10255,10 @@ async function completeRepairWorkOrder(orderId = '') {
   }
   if (statusField) statusField.value = 'completed';
 
-  return saveRepairWorkOrder(orderId, false, 'completed');
+  return saveRepairWorkOrder(orderId, false, true);
 }
 
-async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedStatus = 'completed') {
+async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, sendToAdmin = false) {
   const order = collectRepairOrderFromForm(orderId);
   if (!order) return;
 
@@ -10161,10 +10268,18 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
   const previousStatus = (previousOrder?.status || '').toLowerCase();
   const savedAt = new Date().toISOString();
 
-  order.status = String(forcedStatus || document.getElementById('repair-status')?.value || order.status || 'open').toLowerCase();
+  order.status = String(sendToAdmin ? 'completed' : (document.getElementById('repair-status')?.value || order.status || 'open')).toLowerCase();
   order.createdAt = previousOrder?.createdAt || order.createdAt || savedAt;
-  if (order.status === 'completed') {
+  if (sendToAdmin) {
     order.completedAt = previousOrder?.completedAt || savedAt;
+    order.submittedToAdminAt = previousOrder?.submittedToAdminAt || savedAt;
+    order.submittedBy = currentUser?.name || '';
+    order.workflowState = 'submitted';
+  } else {
+    order.completedAt = previousOrder?.completedAt || order.completedAt || '';
+    order.submittedToAdminAt = previousOrder?.submittedToAdminAt || order.submittedToAdminAt || '';
+    order.submittedBy = previousOrder?.submittedBy || order.submittedBy || '';
+    order.workflowState = resolveSavedOrderWorkflowState(order, previousOrder);
   }
   order.updatedAt = savedAt;
   order.updatedBy = currentUser?.name || '';
@@ -10198,13 +10313,13 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
         actionLabel: 'Open Work Order'
       });
     }
-  } else if (currentUser && !auth.isAdmin()) {
-    const shouldNotifyAdmin = !previousOrder?.updatedAt || previousStatus !== (order.status || '').toLowerCase();
+  } else if (currentUser && !auth.isAdmin() && sendToAdmin) {
+    const shouldNotifyAdmin = !previousOrder?.submittedToAdminAt || previousStatus !== (order.status || '').toLowerCase();
     if (shouldNotifyAdmin) {
       await notificationManager.create({
         type: 'repair',
-        title: order.status === 'completed' ? 'Completed work order received' : 'Work order received from technician',
-        message: `${currentUser.name} ${order.status === 'completed' ? 'completed' : 'updated'} ${order.clientName || 'a work order'}.`,
+        title: 'Completed work order received',
+        message: `${currentUser.name} sent ${order.clientName || 'a work order'} to admin.`,
         recipients: getAdminRecipients(currentUser?.name),
         targetView: 'repair',
         targetId: order.id,
@@ -10213,9 +10328,11 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
     }
   }
 
-  showToast(order.status === 'completed'
-    ? 'Completed work order saved for admin export'
-    : 'Work order saved');
+  showToast(sendToAdmin
+    ? 'Work order sent to admin'
+    : (auth.isAdmin() && order.assignedTo
+      ? `Work order saved and assigned to ${order.assignedTo}`
+      : 'Work order saved for later'));
 
   if (shareAfterSave) {
     shareRepairPDF(order.id);
@@ -10224,7 +10341,7 @@ async function saveRepairWorkOrder(orderId = '', shareAfterSave = false, forcedS
 
   const shouldReturnOfficeTechToHome = !auth.isAdmin()
     && isOfficeWorkOrderAssignee(currentUser?.name || '')
-    && order.status === 'completed';
+    && sendToAdmin;
 
   if (shouldReturnOfficeTechToHome) {
     router.navigate('dashboard');
@@ -10435,7 +10552,7 @@ async function exportDailyWorkOrders() {
   const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
   const orders = getRepairOrders()
     .filter(order => {
-      if (!isCompleted(order.status)) return false;
+      if (!isAdminCompletedOrder(order)) return false;
       const workDate = String(order.date || '').trim();
       const completedDate = String(order.completedAt || '').slice(0, 10);
       return workDate === selectedDate || completedDate === selectedDate;
@@ -10478,8 +10595,7 @@ async function exportCompletedToExcel() {
 async function exportMonthlyChemSheets() {
   const monthInput = document.getElementById('chem-export-month');
   const selectedMonth = monthInput ? monthInput.value : new Date().toISOString().slice(0, 7);
-  const isCompleted = (status = '') => String(status || '').trim().toLowerCase() === 'completed';
-  const sorted = [...db.get('workorders', []).filter(wo => isCompleted(wo.status) && (wo.date || '').startsWith(selectedMonth))]
+  const sorted = [...db.get('workorders', []).filter(wo => isAdminCompletedOrder(wo) && (wo.date || '').startsWith(selectedMonth))]
     .sort((a, b) => new Date(a?.date || 0) - new Date(b?.date || 0));
   if (sorted.length === 0) { showToast(`No completed chem sheets found for ${selectedMonth}`); return; }
   showToast('Generating Chem Sheets Excel...');

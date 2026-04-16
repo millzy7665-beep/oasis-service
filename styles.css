@@ -442,6 +442,8 @@ html, body {
   letter-spacing: 0.08em;
 }
 .badge-pending     { background: var(--warning-light); color: var(--warning); }
+.badge-draft       { background: var(--gray-100);      color: var(--gray-600); }
+.badge-assigned    { background: #e8f1ff;              color: #2457a6; }
 .badge-in-progress { background: var(--teal-light);   color: var(--ocean); }
 .badge-completed   { background: var(--success-light); color: var(--success); }
 .badge-cancelled   { background: var(--gray-100);      color: var(--gray-500); }
