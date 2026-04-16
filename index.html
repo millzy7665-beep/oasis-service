@@ -17,7 +17,7 @@
 
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
-  <link rel="stylesheet" href="styles.css?v=275">
+  <link rel="stylesheet" href="styles.css?v=276">
 
   <style>
     /* Critical overrides for luxury feel */
@@ -136,10 +136,19 @@
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"></script>
-  <script src="app.js?v=275"></script>
+  <script src="app.js?v=276"></script>
   <script>
     const oasisParams = new URLSearchParams(window.location.search);
     const oasisNoServiceWorker = oasisParams.get('nosw') === '1';
+    const oasisVersion = '276';
+
+    if (!oasisParams.has('v') && !oasisParams.has('nosw')) {
+      const currentPath = window.location.pathname || '';
+      const isBarePagesEntry = /\/oasis-service\/(?:index\.html)?$/.test(currentPath);
+      if (isBarePagesEntry) {
+        window.location.replace(`./index.html?v=${oasisVersion}`);
+      }
+    }
 
     if (oasisNoServiceWorker && 'serviceWorker' in navigator) {
       window.addEventListener('load', () => {
@@ -152,7 +161,7 @@
       });
     } else if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js?v=269').then(registration => {
+        navigator.serviceWorker.register(`sw.js?v=${oasisVersion}`).then(registration => {
           console.log('SW registered: ', registration);
           registration.update();
 
