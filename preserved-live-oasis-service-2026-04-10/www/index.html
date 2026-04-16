@@ -17,7 +17,7 @@
 
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
-  <link rel="stylesheet" href="styles.css?v=261">
+  <link rel="stylesheet" href="styles.css?v=262">
 
   <style>
     /* Critical overrides for luxury feel */
@@ -136,7 +136,7 @@
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"></script>
-  <script src="app.js?v=261"></script>
+  <script src="app.js?v=262"></script>
   <script>
     const oasisParams = new URLSearchParams(window.location.search);
     const oasisNoServiceWorker = oasisParams.get('nosw') === '1';
@@ -152,7 +152,7 @@
       });
     } else if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js?v=261').then(registration => {
+        navigator.serviceWorker.register('sw.js?v=262').then(registration => {
           console.log('SW registered: ', registration);
           registration.update();
 

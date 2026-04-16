@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v261';
+const APP_VERSION = 'v262';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -1119,6 +1119,87 @@ function cleanupDuplicateMasterScheduleClients(clientList = []) {
   return mergedClients;
 }
 
+let cachedUiClientsSource = null;
+let cachedUiClients = [];
+let cachedDuplicateNameSource = null;
+let cachedDuplicateNameKeys = new Set();
+
+function getClientsStorageSource() {
+  try {
+    return window.localStorage.getItem('clients') || '[]';
+  } catch (error) {
+    return JSON.stringify(db.get('clients', []));
+  }
+}
+
+function getCachedUiClients() {
+  const source = getClientsStorageSource();
+  if (source === cachedUiClientsSource) {
+    return cachedUiClients;
+  }
+
+  let parsedClients;
+  try {
+    parsedClients = JSON.parse(source);
+  } catch (error) {
+    parsedClients = db.get('clients', []);
+  }
+
+  cachedUiClientsSource = source;
+  cachedUiClients = cleanupDuplicateMasterScheduleClients(parsedClients);
+  cachedDuplicateNameSource = null;
+  return cachedUiClients;
+}
+
+function getCachedDuplicateClientNameKeys(clients = getCachedUiClients()) {
+  const source = cachedUiClientsSource || getClientsStorageSource();
+  if (source === cachedDuplicateNameSource) {
+    return cachedDuplicateNameKeys;
+  }
+
+  cachedDuplicateNameSource = source;
+  cachedDuplicateNameKeys = getDuplicateClientNameKeys(clients);
+  return cachedDuplicateNameKeys;
+}
+
+function scheduleDeferredStartupTask(callback, timeout = 120) {
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(() => callback(), { timeout: Math.max(timeout, 800) });
+    return;
+  }
+
+  setTimeout(callback, timeout);
+}
+
+function runDeferredStartupWork() {
+  if (window.__oasisDeferredStartupRan) return;
+  window.__oasisDeferredStartupRan = true;
+
+  db.startRealtimeSync();
+
+  const currentClients = db.get('clients', []);
+  const dedupedClients = cleanupDuplicateMasterScheduleClients(currentClients);
+  if (JSON.stringify(dedupedClients) !== JSON.stringify(currentClients)) {
+    db.setExact('clients', dedupedClients);
+  }
+
+  cleanupTestClients();
+  if (db.get('dataVersion') !== DATA_VERSION) {
+    const existingClients = db.get('clients', []);
+    const userClients = existingClients.filter(c => !String(c.id || '').startsWith('c_'));
+    db.set('clients', userClients);
+    db.set('masterScheduleLoaded', false);
+    db.set('dataVersion', DATA_VERSION);
+  } else {
+    db.set('masterScheduleLoaded', false);
+  }
+
+  initMasterSchedule();
+  migrateLegacyRepairData();
+  rollOverPendingJobs();
+  populateLoginTechOptions();
+}
+
 function getDuplicateClientNameKeys(clients = []) {
   const grouped = new Map();
 
@@ -1137,7 +1218,9 @@ function getDuplicateClientNameKeys(clients = []) {
 }
 
 function getClientRouteDisplayName(client = {}, allClients = []) {
-  const duplicateNames = getDuplicateClientNameKeys(allClients);
+  const duplicateNames = Array.isArray(allClients) && allClients.length
+    ? getCachedDuplicateClientNameKeys(allClients)
+    : getCachedDuplicateClientNameKeys();
   const clientName = String(client?.name || '').trim() || 'Client';
 
   if (!duplicateNames.has(normalizeClientIdentityPart(clientName))) {
@@ -1864,7 +1947,7 @@ class Router {
     const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
     const todayStr = `${todayDay}, ${formatDisplayDate(new Date())}`;
 
-    const allClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
+    const allClients = getCachedUiClients();
     const scheduledRouteClients = getScheduledRouteClients(allClients, isAdmin ? '' : userName);
     const myRouteClients = scheduledRouteClients.filter(c => getClientServiceDays(c).includes(todayDay));
     const myTotalClients = isAdmin
@@ -2070,7 +2153,7 @@ class Router {
       return this.renderWorkOrders();
     }
 
-    const allClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
+    const allClients = getCachedUiClients();
     const DAY_ORDER = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
@@ -2121,12 +2204,12 @@ class Router {
       </div>
 
       <div id="routes-list">
-        ${this.renderRouteClients(visibleRouteClients, dayFilter, techFilter)}
+        ${this.renderRouteClients(visibleRouteClients, dayFilter, techFilter, allClients)}
       </div>
     `;
   }
 
-  renderRouteClients(clients, dayFilter, techFilter) {
+  renderRouteClients(clients, dayFilter, techFilter, allClients = getCachedUiClients()) {
     if (clients.length === 0) {
       return `
         <div class="empty-state">
@@ -2136,12 +2219,12 @@ class Router {
         </div>
       `;
     }
-    return clients.map(c => this.renderRouteCard(c)).join('');
+    return clients.map(c => this.renderRouteCard(c, allClients)).join('');
   }
 
-  renderRouteCard(client) {
+  renderRouteCard(client, allClients = getCachedUiClients()) {
     const daysLabel = getClientServiceDays(client).map(d => d.substring(0, 3)).join(', ') || 'Unscheduled';
-    const routeDisplayName = getClientRouteDisplayName(client, cleanupDuplicateMasterScheduleClients(db.get('clients', [])));
+    const routeDisplayName = getClientRouteDisplayName(client, allClients);
     const _rcUser = auth.getCurrentUser();
     const _rcIsAdmin = auth.isAdmin();
     const _rcIsJetOrMark = !_rcIsAdmin && (_rcUser?.username === 't9' || _rcUser?.username === 't10');
@@ -2200,7 +2283,7 @@ class Router {
   }
 
   renderClientsList(query = '') {
-    const allClients = cleanupDuplicateMasterScheduleClients(db.get('clients', []));
+    const allClients = getCachedUiClients();
     const isAdmin = auth.isAdmin();
     const currentUser = auth.getCurrentUser();
     const isJetOrMark = !isAdmin && (currentUser?.username === 't9' || currentUser?.username === 't10');
@@ -3956,30 +4039,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const savedUser = auth.getCurrentUser();
   setShellSignedInState(!!savedUser);
-  db.startRealtimeSync();
-
-  const currentClients = db.get('clients', []);
-  const dedupedClients = cleanupDuplicateMasterScheduleClients(currentClients);
-  if (JSON.stringify(dedupedClients) !== JSON.stringify(currentClients)) {
-    db.setExact('clients', dedupedClients);
-  }
-
-  cleanupTestClients();
-  // Data version check: if version changed, wipe & reseed all master-schedule clients
-  if (db.get('dataVersion') !== DATA_VERSION) {
-    const existingClients = db.get('clients', []);
-    // Master schedule clients have ids starting with 'c_'; user-created use 'c' + timestamp
-    const userClients = existingClients.filter(c => !String(c.id || '').startsWith('c_'));
-    db.set('clients', userClients);
-    db.set('masterScheduleLoaded', false);
-    db.set('dataVersion', DATA_VERSION);
-  } else {
-    db.set('masterScheduleLoaded', false);
-  }
-  initMasterSchedule();
-  migrateLegacyRepairData();
-  rollOverPendingJobs();
-  populateLoginTechOptions();
+  scheduleDeferredStartupTask(runDeferredStartupWork, savedUser ? 180 : 60);
 
   // Android Back Button Handling
   if (typeof Capacitor !== 'undefined' && Capacitor.Plugins.App) {
@@ -4018,7 +4078,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (auth.login(username, pin)) {
       console.log('Login successful');
-      initializePushNotificationsForUser().catch(() => {});
 
       if (loginError) loginError.style.display = 'none';
       curtainTransition(() => {
@@ -4045,6 +4104,9 @@ document.addEventListener('DOMContentLoaded', () => {
     unlockAppShellInteraction();
     try {
       router.navigate('dashboard', false);
+      scheduleDeferredStartupTask(() => {
+        initializePushNotificationsForUser().catch(() => {});
+      }, 1200);
     } catch (error) {
       console.error('Startup dashboard render failed', error);
       auth.logout();
