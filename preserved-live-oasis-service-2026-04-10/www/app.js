@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v274';
+const APP_VERSION = 'v275';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -8234,7 +8234,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
   const timeOut = order.timeOut || '';
   const timeSpent = calculateTimeSpent(timeIn, timeOut);
   const normalizedStatus = String(order.status || 'open').toLowerCase();
-  const isCompleted = normalizedStatus === 'completed';
+  const isSubmittedToAdmin = isOrderSubmittedToAdmin(order);
   const readyToComplete = isRepairOrderReadyToComplete({
     ...order,
     clientName: order.clientName || selectedClient?.name || selectedClientDisplay.split(' — ')[0] || '',
@@ -8350,9 +8350,9 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
       <div class="card" style="margin:12px;">
         <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save</button>
-          <button id="repair-send-btn" class="btn btn-primary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', false, true)" ${readyToComplete && !isCompleted ? '' : 'disabled'}>${isCompleted ? 'Completed and Sent' : 'Complete and Send'}</button>
+          <button id="repair-send-btn" class="btn btn-primary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', false, true)" ${readyToComplete && !isSubmittedToAdmin ? '' : 'disabled'}>${isSubmittedToAdmin ? 'Completed and Sent' : 'Complete and Send'}</button>
           ${auth.canShare() ? `<button class="btn send-report-btn" onclick="shareRepairPDF('${escapeHtml(activeOrderId)}')">Share Report</button>` : ''}
-          <div id="repair-completion-hint" class="wo-hint" style="flex-basis:100%;margin:0;">${isCompleted ? 'This work order has already been sent to admin.' : (readyToComplete ? 'Save progress any time. Use Complete and Send when the job is complete.' : 'Fill in client, address, date, assigned tech, work order type, and summary before completing and sending.')}</div>
+          <div id="repair-completion-hint" class="wo-hint" style="flex-basis:100%;margin:0;">${isSubmittedToAdmin ? 'This work order has already been sent to admin.' : (readyToComplete ? 'Save progress any time. Use Complete and Send when the job is complete.' : 'Fill in client, address, date, assigned tech, work order type, and summary before completing and sending.')}</div>
         </div>
       </div>
     </div>
@@ -10241,10 +10241,9 @@ function updateRepairCompletionState() {
   const hint = document.getElementById('repair-completion-hint');
   if (!button || !hint) return;
 
-  const status = String(document.getElementById('repair-status')?.value || 'open').toLowerCase();
   const existingId = document.querySelector('[data-active-repair-id]')?.getAttribute('data-active-repair-id') || '';
   const existingOrder = existingId ? getRepairOrders().find(item => item.id === existingId) : null;
-  if (status === 'completed' && isOrderSubmittedToAdmin(existingOrder || {})) {
+  if (isOrderSubmittedToAdmin(existingOrder || {})) {
     button.disabled = true;
     button.textContent = 'Completed and Sent';
     hint.textContent = 'This work order has already been sent to admin.';
