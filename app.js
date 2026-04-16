@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v268';
+const APP_VERSION = 'v269';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -877,10 +877,7 @@ class NotificationManager {
   }
 
   showUnreadToast(user = auth.getCurrentUser()) {
-    const unreadCount = this.getUnreadForUser(user).length;
-    if (unreadCount) {
-      showToast(`${unreadCount} new notification${unreadCount === 1 ? '' : 's'}`);
-    }
+    return this.getUnreadForUser(user).length;
   }
 
   renderDashboardPanel() {
@@ -1777,11 +1774,8 @@ async function initializePushNotificationsForUser(force = false) {
         if (permissionState.receive === 'denied') {
           console.warn('Native push permission denied', permissionState);
           setPushSetupState('error', 'Android notifications are blocked for Oasis on this phone.');
-          alert('Android notifications are currently blocked for Oasis. Please enable them in Settings > Apps > OASIS Service > Notifications, then try again.');
           return false;
         }
-
-        showToast('Registering phone notifications...');
 
         const nativeRegistrationResult = await new Promise(resolve => {
           let settled = false;
@@ -1800,7 +1794,6 @@ async function initializePushNotificationsForUser(force = false) {
             const saved = await registerPushTokenForCurrentUser(token, 'android-native', 'granted');
             if (saved) {
               setPushSetupState('push', 'Phone notifications enabled.');
-              showToast('Phone notifications enabled');
             } else {
               setPushSetupState('local-only', 'Live alerts will still show while Oasis is open on this device.');
             }
@@ -1811,7 +1804,6 @@ async function initializePushNotificationsForUser(force = false) {
             console.warn('Native push registration error', error);
             const details = error?.error || error?.message || 'registration error';
             setPushSetupState('local-only', `Live alerts will still show while Oasis is open on this device. ${details}`);
-            alert(`Phone notification setup failed: ${details}`);
             finish(false);
           });
 
@@ -1911,10 +1903,8 @@ async function initializePushNotificationsForUser(force = false) {
 
     if (saved) {
       setPushSetupState('push', 'Phone notifications enabled.');
-      showToast('Phone notifications enabled');
     } else {
       setPushSetupState('local-only', 'Live alerts will show while Oasis is open on this device.');
-      showToast('Notifications enabled for this device');
     }
 
     if (!window.__oasisMessagingOnMessageBound) {
@@ -2867,17 +2857,6 @@ class Router {
             <div class="detail-value">${APP_VERSION}</div>
           </div>
           <button class="btn btn-danger" onclick="auth.logout(); location.reload()" style="width: 100%; margin-top: 10px;">Sign Out</button>
-        </div>
-      </div>
-
-      <div class="card" style="margin-top: 10px;">
-        <div class="card-body">
-          <div style="font-weight:600; font-size:15px; margin-bottom:8px;">🔔 Notification Test</div>
-          <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">Send a visible test notification to this device for the current signed-in user.</p>
-          ${getPushSupportDiagnostic() ? `<div style="font-size:12px; color:#9a6a00; background:#fff7e6; border:1px solid #f3d08b; border-radius:8px; padding:10px; margin-bottom:10px;">${getPushSupportDiagnostic()}</div>` : ''}
-          <button class="btn btn-primary" onclick="sendTestNotification()" style="width: 100%;">Send Test Notification</button>
-          <button class="btn btn-secondary" onclick="useThisDeviceForAlerts()" style="width: 100%; margin-top: 8px;">Use This Device For Alerts</button>
-          <button class="btn btn-secondary" onclick="enablePhoneNotifications()" style="width: 100%; margin-top: 8px;">Enable Phone Notifications</button>
         </div>
       </div>
 
@@ -9821,31 +9800,20 @@ async function enablePhoneNotifications() {
 
   const diagnostic = getPushSupportDiagnostic();
   if (diagnostic) {
-    alert(diagnostic);
     if (isProbablyAndroidInAppBrowser()) {
       openInChromeForNotifications();
     }
-    showToast('Follow the setup steps shown');
     return false;
   }
 
   await notificationManager.requestPermission();
 
   if (!isCapacitorNativeApp() && typeof Notification !== 'undefined' && Notification.permission === 'denied') {
-    alert('Notifications are currently blocked for Oasis on this phone. Please allow them in the browser or Home Screen app settings, then try again.');
-    showToast('Notifications are blocked on this phone');
     return false;
   }
 
   const enabled = await initializePushNotificationsForUser(true);
   if (!enabled) {
-    const fallbackMessage = pushSetupMessage || (isCapacitorNativeApp()
-      ? 'Push setup did not complete yet. Please make sure Android notifications are allowed for OASIS, then tap Enable Phone Notifications again.'
-      : (isIosLikeDevice()
-        ? 'Push setup did not complete. Please launch Oasis from the Home Screen and try again.'
-        : 'Push setup did not complete. Please allow notifications for this site and try again.'));
-    alert(fallbackMessage);
-    showToast('Phone notification setup incomplete');
     return false;
   }
 
@@ -9858,7 +9826,6 @@ async function enablePhoneNotifications() {
     targetDeviceId: getCurrentDeviceId()
   });
 
-  showToast(pushSetupMode === 'push' ? 'Phone notifications enabled' : 'Live device alerts enabled');
   return true;
 }
 
