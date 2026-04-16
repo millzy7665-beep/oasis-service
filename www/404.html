@@ -116,7 +116,7 @@
     <p>This page removes the old Oasis service worker and browser cache first, then opens a browser-safe version of the app.</p>
     <div id="status" class="status">Preparing recovery…</div>
     <div class="actions">
-      <a id="open-link" class="btn btn-primary" href="./index.html?v=263&nosw=1&resetPush=1">Open Oasis</a>
+      <a id="open-link" class="btn btn-primary" href="./index.html?v=264&nosw=1&resetPush=1">Open Oasis</a>
       <button id="retry-btn" class="btn btn-secondary" type="button">Run Recovery Again</button>
     </div>
     <div class="small">If the normal app or recovery URL fell into a stale GitHub Pages 404, use Open Oasis from here.</div>
@@ -126,7 +126,7 @@
     async function runRecovery() {
       const status = document.getElementById('status');
       const openLink = document.getElementById('open-link');
-      const targetUrl = './index.html?v=263&nosw=1&resetPush=1';
+      const targetUrl = './index.html?v=264&nosw=1&resetPush=1';
       openLink.href = targetUrl;
 
       const notes = [];

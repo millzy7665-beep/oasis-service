@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v263';
+const APP_VERSION = 'v264';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -2554,7 +2554,7 @@ class Router {
     const allEstimates = [...getEstimateSheets()].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
     const sentQuotes     = allEstimates.filter(e => (e.status || '').toLowerCase() === 'sent');
     const approvedQuotes = allEstimates.filter(e => (e.status || '').toLowerCase() === 'approved');
-    const clients = db.get('clients', []);
+    const clients = getCachedUiClients();
 
     const renderQuoteCard = (estimate, showConvert = false) => {
       const client = clients.find(c => c.id === estimate.clientId);
@@ -2709,7 +2709,7 @@ class Router {
     const spa = { ...defaultChemReadings(), ...(order.readings?.spa || {}) };
     const poolAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.pool || {}) };
     const spaAdded = { ...defaultChemicalAdditions(), ...(order.chemicalsAdded?.spa || {}) };
-    const clients = getSortedClients(db.get('clients', []));
+    const clients = getSortedClients(getCachedUiClients());
     const _woCurUser = auth.getCurrentUser();
     const _woIsAdmin = auth.isAdmin();
     const _woIsJetOrMark = !_woIsAdmin && (_woCurUser?.username === 't9' || _woCurUser?.username === 't10');
@@ -2907,7 +2907,7 @@ class Router {
     this.updateNav();
   }
   createWorkOrder(clientId = '') {
-    const clients = db.get('clients', []);
+    const clients = getCachedUiClients();
     if (!clients.length) {
       showToast('Add a client first');
       this.renderClients();
@@ -2932,7 +2932,7 @@ class Router {
       return;
     }
 
-    const clients = db.get('clients', []);
+    const clients = getCachedUiClients();
     if (!clients.length) {
       showToast('Add a client first');
       this.renderClients();
@@ -2973,7 +2973,7 @@ class Router {
       showToast('Only admins and office staff can edit client details');
       return;
     }
-    const clients = db.get('clients', []);
+    const clients = getCachedUiClients();
     const client = clients.find(item => item.id === id);
     if (!client) {
       showToast('Client not found');
@@ -4259,7 +4259,7 @@ function onChemClientChange() {
   const title = document.getElementById('wo-client-name');
   if (!select) return;
 
-  const client = db.get('clients', []).find(item => item.id === select.value);
+  const client = getCachedUiClients().find(item => item.id === select.value);
   if (client) {
     if (addressField) addressField.value = client.address || '';
     if (title) title.textContent = client.name || 'Chem Sheet';
@@ -4325,7 +4325,7 @@ function collectWorkOrderForm(orderId) {
   const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
   const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
   const selectedClientId = getValue('wo-client', order.clientId || '');
-  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
+  const selectedClient = getCachedUiClients().find(item => item.id === selectedClientId);
   const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
 
   const updatedOrder = {
@@ -4491,7 +4491,7 @@ function getSortedClients(clients = []) {
   });
 }
 
-function findClientByRepairSearch(searchValue = '', clients = db.get('clients', [])) {
+function findClientByRepairSearch(searchValue = '', clients = getCachedUiClients()) {
   const term = String(searchValue || '').trim().toLowerCase();
   if (!term) return null;
 
@@ -4594,7 +4594,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
 function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = null) {
   const content = document.getElementById('main-content');
   const existing = !draftOrder && orderId ? getRepairOrders().find(order => order.id === orderId) : null;
-  const clients = db.get('clients', []);
+  const clients = getCachedUiClients();
   const assigneeOptions = getWorkOrderAssigneeOptions();
   const currentAssignee = normalizeTechnicianName((draftOrder || existing)?.assignedTo || auth.getCurrentUser()?.name || assigneeOptions[0] || '');
   const selectedClientId = (draftOrder || existing)?.clientId || presetClientId || '';
@@ -4752,7 +4752,7 @@ function onRepairClientChange() {
   const title = document.getElementById('repair-bar-title');
   if (!select || !address) return;
 
-  const client = db.get('clients', []).find(item => item.id === select.value);
+  const client = getCachedUiClients().find(item => item.id === select.value);
   if (client) {
     address.value = client.address || '';
     if (title) title.textContent = client.name || 'Work Order';
@@ -4775,7 +4775,7 @@ function collectRepairOrderFromForm(orderId = '') {
   const finalId = orderId || existing?.id || `r${Date.now()}`;
 
   const clientId = document.getElementById('repair-client')?.value || '';
-  const client = db.get('clients', []).find(item => item.id === clientId);
+  const client = getCachedUiClients().find(item => item.id === clientId);
   const partItems = Array.from(document.querySelectorAll('.repair-part-row')).map(row => {
     const category = row.querySelector('.repair-part-category')?.value || '';
     const productSelect = row.querySelector('.repair-part-product');
@@ -5230,7 +5230,7 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
     return;
   }
 
-  const clients = getSortedClients(db.get('clients', []));
+  const clients = getSortedClients(getCachedUiClients());
   if (!clients.length) {
     showToast('Add a client first');
     router.renderClients();
@@ -5364,7 +5364,7 @@ function renderEstimateForm(estimateId = '', presetClientId = '', draftEstimate 
 
 function onEstimateClientChange() {
   const clientId = document.getElementById('est-client')?.value || '';
-  const client = db.get('clients', []).find(item => item.id === clientId);
+  const client = getCachedUiClients().find(item => item.id === clientId);
   const address = document.getElementById('est-address');
   const title = document.getElementById('estimate-form-title');
 
@@ -7559,7 +7559,7 @@ function onChemClientChange() {
   const title = document.getElementById('wo-client-name');
   if (!select) return;
 
-  const client = db.get('clients', []).find(item => item.id === select.value);
+  const client = getCachedUiClients().find(item => item.id === select.value);
   if (client) {
     if (addressField) addressField.value = client.address || '';
     if (title) title.textContent = client.name || 'Chem Sheet';
@@ -7625,7 +7625,7 @@ function collectWorkOrderForm(orderId) {
   const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
   const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
   const selectedClientId = getValue('wo-client', order.clientId || '');
-  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
+  const selectedClient = getCachedUiClients().find(item => item.id === selectedClientId);
   const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
 
   const updatedOrder = {
@@ -8020,7 +8020,7 @@ function collectRepairOrderFromForm(orderId = '') {
 
   const clientId = document.getElementById('repair-client')?.value || '';
   const typedClient = (document.getElementById('repair-client-search')?.value || '').trim();
-  const client = db.get('clients', []).find(item => item.id === clientId);
+  const client = getCachedUiClients().find(item => item.id === clientId);
   const partItems = Array.from(document.querySelectorAll('.repair-part-row')).map(row => {
     const category = row.querySelector('.repair-part-category')?.value || '';
     const productSelect = row.querySelector('.repair-part-product');
@@ -9307,7 +9307,7 @@ function onChemClientChange() {
   const title = document.getElementById('wo-client-name');
   if (!select) return;
 
-  const client = db.get('clients', []).find(item => item.id === select.value);
+  const client = getCachedUiClients().find(item => item.id === select.value);
   if (client) {
     if (addressField) addressField.value = client.address || '';
     if (title) title.textContent = client.name || 'Chem Sheet';
@@ -9373,7 +9373,7 @@ function collectWorkOrderForm(orderId) {
   const existingPoolAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.pool || {}) };
   const existingSpaAdded = { ...defaultChemicalAdditions(), ...(existingChemicalsAdded.spa || {}) };
   const selectedClientId = getValue('wo-client', order.clientId || '');
-  const selectedClient = db.get('clients', []).find(item => item.id === selectedClientId);
+  const selectedClient = getCachedUiClients().find(item => item.id === selectedClientId);
   const followUpNotes = getValue('wo-notes', order.followUpNotes || order.notes || '');
 
   const updatedOrder = {
@@ -9770,7 +9770,7 @@ function onChemClientChange() {
   const techField = document.getElementById('wo-tech');
   if (!select) return;
 
-  const client = db.get('clients', []).find(item => item.id === select.value);
+  const client = getCachedUiClients().find(item => item.id === select.value);
   if (client) {
     if (addressField) addressField.value = client.address || '';
     if (title) title.textContent = client.name || 'Chem Sheet';
