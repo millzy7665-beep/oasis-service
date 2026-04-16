@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v272';
+const APP_VERSION = 'v273';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -1036,6 +1036,66 @@ function getOrderBadgePresentation(order = {}) {
     tone: status === 'completed' ? 'completed' : (status === 'in-progress' ? 'in-progress' : 'pending'),
     label: status.replace('-', ' ')
   };
+}
+
+function getOrderDateKey(order = {}) {
+  const rawDate = String(order?.date || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : '';
+}
+
+function getLocalDateKey(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildLocalDateTime(dateKey = '', hour = 6, minute = 30) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ''))) return null;
+  const [year, month, day] = String(dateKey).split('-').map(Number);
+  return new Date(year, month - 1, day, hour, minute, 0, 0);
+}
+
+function hasAssignedOrderReleaseReached(order = {}, now = new Date()) {
+  const workflowState = getOrderWorkflowState(order);
+  if (workflowState !== 'assigned') return true;
+
+  const releaseAt = buildLocalDateTime(getOrderDateKey(order), 6, 30);
+  if (!releaseAt) return true;
+  return now.getTime() >= releaseAt.getTime();
+}
+
+function shouldKeepSubmittedOrderVisibleToTech(order = {}, now = new Date()) {
+  if (!isOrderSubmittedToAdmin(order)) return true;
+
+  const serviceDate = buildLocalDateTime(getOrderDateKey(order), 6, 30);
+  if (!serviceDate) return false;
+
+  const removalAt = new Date(serviceDate);
+  removalAt.setDate(removalAt.getDate() + 1);
+  return now.getTime() < removalAt.getTime();
+}
+
+function shouldShowOrderToUser(order = {}, currentUser = null, technicianField = 'technician', now = new Date()) {
+  if (!currentUser) return false;
+  if (currentUser.role === 'admin') return true;
+
+  const assignedUser = normalizeTechnicianName(order?.[technicianField] || '');
+  if (!userNamesMatch(assignedUser, currentUser.name || '')) {
+    return false;
+  }
+
+  if (!hasAssignedOrderReleaseReached(order, now)) {
+    return false;
+  }
+
+  if (!shouldKeepSubmittedOrderVisibleToTech(order, now)) {
+    return false;
+  }
+
+  return true;
 }
 
 function getOrderScheduleTone(order = {}) {
@@ -2215,7 +2275,7 @@ class Router {
 
     return currentUser.role === 'admin'
       ? items
-      : items.filter(item => userNamesMatch(item?.[technicianField] || '', currentUser.name));
+      : items.filter(item => shouldShowOrderToUser(item, currentUser, technicianField));
   }
 
   getDateKey(value = '') {
@@ -2797,7 +2857,7 @@ class Router {
 
     let workorders = (currentUser && currentUser.role === 'admin')
       ? allWorkorders
-      : allWorkorders.filter(wo => userNamesMatch(wo.technician || '', currentUser.name));
+      : allWorkorders.filter(wo => shouldShowOrderToUser(wo, currentUser, 'technician'));
 
     if (isAdmin) {
       workorders = this.applyStatusFilter(workorders);
@@ -4836,7 +4896,7 @@ function renderRepairOrdersList(statusFilter = 'all') {
 
   let orders = (currentUser && currentUser.role === 'admin')
     ? allOrders
-    : allOrders.filter(o => userNamesMatch(o.assignedTo || '', currentUser.name));
+    : allOrders.filter(o => shouldShowOrderToUser(o, currentUser, 'assignedTo'));
 
   if (isAdmin) {
     if (statusFilter === 'completed') {
@@ -8246,7 +8306,7 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
             <select id="repair-status" onchange="updateRepairCompletionState()">
               <option value="open" ${normalizedStatus === 'open' ? 'selected' : ''}>Open</option>
               <option value="pending" ${(normalizedStatus === 'pending' || normalizedStatus === 'in-progress') ? 'selected' : ''}>Pending</option>
-              ${isCompleted ? '<option value="completed" selected>Completed</option>' : ''}
+              <option value="completed" ${normalizedStatus === 'completed' ? 'selected' : ''}>Completed</option>
             </select>
           </div>
         </div>
@@ -8290,9 +8350,9 @@ function renderRepairOrderForm(orderId = '', presetClientId = '', draftOrder = n
       <div class="card" style="margin:12px;">
         <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           <button class="btn btn-secondary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}')">Save</button>
-          <button id="repair-send-btn" class="btn btn-primary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', false, true)" ${readyToComplete && !isCompleted ? '' : 'disabled'}>${isCompleted ? 'Sent to Admin' : 'Send to Admin'}</button>
+          <button id="repair-send-btn" class="btn btn-primary" onclick="saveRepairWorkOrder('${escapeHtml(activeOrderId)}', false, true)" ${readyToComplete && !isCompleted ? '' : 'disabled'}>${isCompleted ? 'Completed and Sent' : 'Complete and Send'}</button>
           ${auth.canShare() ? `<button class="btn send-report-btn" onclick="shareRepairPDF('${escapeHtml(activeOrderId)}')">Share Report</button>` : ''}
-          <div id="repair-completion-hint" class="wo-hint" style="flex-basis:100%;margin:0;">${isCompleted ? 'This work order has already been sent to admin.' : (readyToComplete ? 'Save progress any time. Use Send to Admin when the job is complete.' : 'Fill in client, address, date, assigned tech, work order type, and summary before sending to admin.')}</div>
+          <div id="repair-completion-hint" class="wo-hint" style="flex-basis:100%;margin:0;">${isCompleted ? 'This work order has already been sent to admin.' : (readyToComplete ? 'Save progress any time. Use Complete and Send when the job is complete.' : 'Fill in client, address, date, assigned tech, work order type, and summary before completing and sending.')}</div>
         </div>
       </div>
     </div>
