@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v279';
+const APP_VERSION = 'v276';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -9872,7 +9872,7 @@ function shareReport(orderId) {
 }
 
 function sendReport(orderId) {
-  saveWorkOrderForm(orderId, true);
+  shareReport(orderId);
 }
 
 function getDefaultAppLink() {
