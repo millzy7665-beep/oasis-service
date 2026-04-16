@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v262';
+const APP_VERSION = 'v263';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -43,6 +43,14 @@ const PUSH_DISPATCH_COLLECTION = 'push_dispatch_queue';
 function cloneSyncedValue(value) {
   if (value === null || value === undefined) return value;
   return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeStoredValue(key, value) {
+  if (key === 'clients' && Array.isArray(value)) {
+    return cleanupDuplicateMasterScheduleClients(value);
+  }
+
+  return value;
 }
 
 function isMergeSyncedKey(key = '') {
@@ -157,8 +165,9 @@ class DB {
   set(key, value) {
     let serialized;
     let parsedValue;
+    const normalizedValue = normalizeStoredValue(key, value);
     try {
-      serialized = JSON.stringify(value);
+      serialized = JSON.stringify(normalizedValue);
       this.storage.setItem(key, serialized);
       parsedValue = JSON.parse(serialized);
     } catch (e) {
@@ -166,7 +175,8 @@ class DB {
     }
 
     if (firestore && SYNCED_KEYS.includes(key)) {
-      this.queueRemoteWrite(key, parsedValue, 'merge');
+      const writeMode = key === 'clients' ? 'exact' : 'merge';
+      this.queueRemoteWrite(key, parsedValue, writeMode);
 
       if (this._remoteWritesEnabled) {
         this.writeSyncedKey(key, parsedValue);
@@ -179,8 +189,9 @@ class DB {
   async setExact(key, value) {
     let serialized;
     let parsedValue;
+    const normalizedValue = normalizeStoredValue(key, value);
     try {
-      serialized = JSON.stringify(value);
+      serialized = JSON.stringify(normalizedValue);
       this.storage.setItem(key, serialized);
       parsedValue = JSON.parse(serialized);
     } catch (e) {
@@ -261,14 +272,16 @@ class DB {
   }
 
   queueRemoteWrite(key, value, mode = 'merge') {
-    this._pendingRemoteWrites.set(key, cloneSyncedValue(value));
-    this._pendingRemoteWriteModes.set(key, mode === 'exact' ? 'exact' : 'merge');
+    const normalizedValue = normalizeStoredValue(key, value);
+    const resolvedMode = key === 'clients' ? 'exact' : (mode === 'exact' ? 'exact' : 'merge');
+    this._pendingRemoteWrites.set(key, cloneSyncedValue(normalizedValue));
+    this._pendingRemoteWriteModes.set(key, resolvedMode);
   }
 
   async writeSyncedKey(key, value) {
     if (!firestore) return;
 
-    const queuedValue = cloneSyncedValue(value);
+    const queuedValue = cloneSyncedValue(normalizeStoredValue(key, value));
     const docRef = firestore.collection('app_data').doc(key);
 
     try {
@@ -355,7 +368,7 @@ class DB {
       }
 
       if (hasMeaningfulValue(localData)) {
-        this.queueRemoteWrite(key, clone(localData), 'merge');
+        this.queueRemoteWrite(key, clone(localData), key === 'clients' ? 'exact' : 'merge');
       }
     })).catch(error => {
       console.warn('Initial Firestore sync failed', error);
