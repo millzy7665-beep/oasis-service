@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v257';
+const APP_VERSION = 'v258';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -3932,9 +3932,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loginVersion.textContent = `Version ${APP_VERSION}`;
   }
 
-  // Always force login screen on startup
-  auth.logout();
-  setShellSignedInState(false);
+  const savedUser = auth.getCurrentUser();
+  setShellSignedInState(!!savedUser);
   db.startRealtimeSync();
 
   const currentClients = db.get('clients', []);
@@ -3998,20 +3997,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (auth.login(username, pin)) {
       console.log('Login successful');
       initializePushNotificationsForUser().catch(() => {});
-      const loginScreen = document.getElementById('login-screen');
-      const appShell = document.getElementById('app');
 
       if (loginError) loginError.style.display = 'none';
       curtainTransition(() => {
-        setShellSignedInState(true);
-        if (loginScreen?.parentNode) {
-          loginScreen.parentNode.removeChild(loginScreen);
-          window.__oasisLoginDetached = true;
-        }
-        unlockAppShellInteraction();
-        requestAnimationFrame(() => unlockAppShellInteraction());
-        setTimeout(() => unlockAppShellInteraction(), 80);
-        try { router.navigate('dashboard'); } catch (err) { location.reload(); }
+        location.reload();
       });
     } else {
       console.warn('Login failed: invalid username or PIN');
@@ -4024,6 +4013,22 @@ document.addEventListener('DOMContentLoaded', () => {
       modal.hide();
     }
   });
+
+  if (savedUser) {
+    const loginScreen = document.getElementById('login-screen');
+    if (loginScreen?.parentNode) {
+      loginScreen.parentNode.removeChild(loginScreen);
+      window.__oasisLoginDetached = true;
+    }
+    unlockAppShellInteraction();
+    try {
+      router.navigate('dashboard', false);
+    } catch (error) {
+      console.error('Startup dashboard render failed', error);
+      auth.logout();
+      location.reload();
+    }
+  }
 });
 
 // Dark curtain transition — prevents white flash between login and app
