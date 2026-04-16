@@ -116,7 +116,7 @@
     <p>This page removes the old Oasis service worker and browser cache first, then opens a browser-safe version of the app.</p>
     <div id="status" class="status">Preparing recovery…</div>
     <div class="actions">
-      <a id="open-link" class="btn btn-primary" href="./index.html?v=265&nosw=1&resetPush=1">Open Oasis</a>
+      <a id="open-link" class="btn btn-primary" href="./index.html?v=266&nosw=1&resetPush=1">Open Oasis</a>
       <button id="retry-btn" class="btn btn-secondary" type="button">Run Recovery Again</button>
     </div>
     <div class="small">If Safari would not open the main app link before, open this page first.</div>
@@ -126,7 +126,7 @@
     async function runRecovery() {
       const status = document.getElementById('status');
       const openLink = document.getElementById('open-link');
-      const targetUrl = './index.html?v=265&nosw=1&resetPush=1';
+      const targetUrl = './index.html?v=266&nosw=1&resetPush=1';
       openLink.href = targetUrl;
 
       const notes = [];

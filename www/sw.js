@@ -15,7 +15,9 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 const CACHE = 'oasis-v266';
 const PRECACHE = [
+  './404.html',
   './index.html',
+  './recovery.html',
   './app.js?v=266',
   './styles.css?v=266',
   './manifest.json',

@@ -66,6 +66,7 @@
         </div>
         <button type="submit" class="btn-login">Sign In</button>
         <div id="login-error" class="login-error" style="display:none">Invalid name or PIN.</div>
+        <div id="login-version" class="login-version" style="margin-top: 14px; text-align: center; font-size: 12px; color: rgba(201, 168, 124, 0.9); letter-spacing: 0.08em; text-transform: uppercase;">Version</div>
       </form>
     </div>
   </div>
@@ -137,7 +138,19 @@
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"></script>
   <script src="app.js?v=266"></script>
   <script>
-    if ('serviceWorker' in navigator) {
+    const oasisParams = new URLSearchParams(window.location.search);
+    const oasisNoServiceWorker = oasisParams.get('nosw') === '1';
+
+    if (oasisNoServiceWorker && 'serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.getRegistrations()
+          .then(registrations => Promise.all(registrations.map(registration => registration.unregister())))
+          .then(() => ('caches' in window ? caches.keys().then(keys => Promise.all(keys.map(key => caches.delete(key)))) : null))
+          .catch(error => {
+            console.log('SW cleanup skipped: ', error);
+          });
+      });
+    } else if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('sw.js?v=266').then(registration => {
           console.log('SW registered: ', registration);
