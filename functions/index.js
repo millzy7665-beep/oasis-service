@@ -190,8 +190,16 @@ exports.dispatchQueuedPush = functions.firestore
       tokenDocs = tokenSnap.docs;
     }
 
+    // If a targetDeviceId was supplied, prefer tokens registered to that
+    // device — but only if we actually have matches. Otherwise fall back to
+    // every token for the recipient. This prevents stale or mismatched
+    // preferred-device ids from silently blocking notifications when the
+    // tech has since signed in on a new device.
     if (targetDeviceId) {
-      tokenDocs = tokenDocs.filter(doc => String(doc.get('deviceId') || '').trim() === targetDeviceId);
+      const preferred = tokenDocs.filter(doc => String(doc.get('deviceId') || '').trim() === targetDeviceId);
+      if (preferred.length) {
+        tokenDocs = preferred;
+      }
     }
 
     const tokens = tokenDocs

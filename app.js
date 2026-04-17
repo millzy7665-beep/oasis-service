@@ -21,7 +21,7 @@ const firebaseApp = typeof firebase !== 'undefined'
   ? (firebase.apps?.length ? firebase.app() : firebase.initializeApp(firebaseConfig))
   : null;
 const firestore = firebaseApp?.firestore ? firebaseApp.firestore() : null;
-const APP_VERSION = 'v279';
+const APP_VERSION = 'v281';
 
 const WEEKLY_CHEM_VISIT_TARGETS = {
   'service - kadeem': 45,
@@ -51,6 +51,61 @@ function normalizeStoredValue(key, value) {
   }
 
   return value;
+}
+
+// Safety-net: strip any inline data-URL photos from workorders/repairOrders
+// before they go to Firestore. A single photo can be 300-500 KB; Firestore
+// caps a document at 1 MB, so inline photos quickly make writes fail with
+// "failed-precondition". Photos should be uploaded to Firebase Storage
+// separately (see uploadPhotoToFirebaseStorage); anything left as a data URL
+// at sync time is a bug — we replace it with an empty string so the write
+// succeeds and the user can re-attach the photo via the proper path.
+function leanRecordArrayForSync(key, value) {
+  if (!Array.isArray(value)) return value;
+  if (key !== 'workorders' && key !== 'repairOrders') return value;
+
+  const MAX_PHOTO_BYTES_PER_RECORD = 60000;   // ~60 KB total photos per record
+  const MAX_PHOTO_BYTES_PER_ENTRY = 30000;    // ~30 KB per single entry
+  const MAX_PHOTOS_PER_RECORD = 6;
+
+  let trimmedAny = false;
+  const leaned = value.map(record => {
+    if (!record || !Array.isArray(record.photos) || record.photos.length === 0) {
+      return record;
+    }
+
+    const originalPhotos = record.photos;
+    let runningBytes = 0;
+    let recordTrimmed = false;
+
+    const cleanedPhotos = originalPhotos.slice(0, MAX_PHOTOS_PER_RECORD).map(entry => {
+      if (typeof entry !== 'string' || !entry) return entry || '';
+
+      if (entry.startsWith('data:')) {
+        // Base64 inline photo: only allow if tiny; otherwise drop it.
+        if (entry.length > MAX_PHOTO_BYTES_PER_ENTRY || runningBytes + entry.length > MAX_PHOTO_BYTES_PER_RECORD) {
+          recordTrimmed = true;
+          return '';
+        }
+        runningBytes += entry.length;
+        return entry;
+      }
+
+      // HTTPS URL (Firebase Storage or any external host) — keep as-is.
+      return entry;
+    });
+
+    if (originalPhotos.length > MAX_PHOTOS_PER_RECORD) recordTrimmed = true;
+
+    if (!recordTrimmed) return record;
+    trimmedAny = true;
+    return { ...record, photos: cleanedPhotos, photosTrimmedAt: new Date().toISOString() };
+  });
+
+  if (trimmedAny) {
+    try { console.warn(`[Sync] Trimmed oversized inline photos for ${key}`); } catch (_) {}
+  }
+  return leaned;
 }
 
 function isMergeSyncedKey(key = '') {
@@ -381,7 +436,9 @@ class DB {
   async writeSyncedKey(key, value) {
     if (!firestore) return;
 
-    const queuedValue = cloneSyncedValue(normalizeStoredValue(key, value));
+    const normalized = normalizeStoredValue(key, value);
+    const leaned = leanRecordArrayForSync(key, normalized);
+    const queuedValue = cloneSyncedValue(leaned);
     const docRef = firestore.collection('app_data').doc(key);
 
     try {
@@ -1059,12 +1116,10 @@ function buildLocalDateTime(dateKey = '', hour = 6, minute = 30) {
 }
 
 function hasAssignedOrderReleaseReached(order = {}, now = new Date()) {
-  const workflowState = getOrderWorkflowState(order);
-  if (workflowState !== 'assigned') return true;
-
-  const releaseAt = buildLocalDateTime(getOrderDateKey(order), 6, 30);
-  if (!releaseAt) return true;
-  return now.getTime() >= releaseAt.getTime();
+  // Previous behaviour held assigned orders back until 6:30 AM on the service
+  // date. Admins now expect jobs to appear on the tech's home screen as soon
+  // as they are assigned, so always release immediately.
+  return true;
 }
 
 function shouldKeepSubmittedOrderVisibleToTech(order = {}, now = new Date()) {
@@ -3055,6 +3110,28 @@ class Router {
           </div>
         </div>
       </div>
+
+      <div class="section-header" style="margin-top: 20px;">
+        <div class="section-title" style="color:#b45309;">⚠️ Danger Zone</div>
+      </div>
+      <div class="card" style="border:1px solid #fca5a5;">
+        <div class="card-body">
+          <div style="font-weight:600; font-size:15px; margin-bottom:6px;">Reset Test Data</div>
+          <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">
+            Wipes ALL work orders and chem sheets from the app (every device). Clients and route assignments are preserved. Use this to clear testing records before going live.
+          </p>
+          <button class="btn btn-danger" style="width:100%;" onclick="resetTestWorkOrders()">🗑️ Wipe All Work Orders &amp; Chem Sheets</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:10px; border:1px solid #fca5a5;">
+        <div class="card-body">
+          <div style="font-weight:600; font-size:15px; margin-bottom:6px;">Clear Stuck Sync Queue</div>
+          <p style="font-size:13px; color:var(--gray-600); margin-bottom:10px;">
+            If saves are silently failing on this device, the offline write queue may be jammed. This button terminates the Firestore connection, clears cached writes, and reloads the app fresh.
+          </p>
+          <button class="btn btn-danger" style="width:100%;" onclick="clearStuckSyncQueue()">♻️ Clear Sync Queue &amp; Reload</button>
+        </div>
+      </div>
       ` : ''}
     `;
   }
@@ -4782,35 +4859,10 @@ function collectWorkOrderForm(orderId) {
   return updatedOrder;
 }
 
-function saveWorkOrderForm(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
-  workOrderManager.saveOrder(order);
-  router.navigate('workorders');
-  showToast(order.status === 'completed'
-    ? 'Completed chem sheet saved for admin export'
-    : 'Chem sheet saved');
-}
-
-function shareReport(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  workOrderManager.saveOrder(order);
-  workOrderManager.generateReport(order);
-}
-
-function sendReport(orderId) {
-  saveWorkOrderForm(orderId, true);
-}
+// NOTE: the canonical saveWorkOrderForm / shareReport / sendReport are
+// defined later in this file (around line 10148) with the full Save & Send
+// workflow. A duplicate stub used to live here and was shadowed by hoisting;
+// it has been removed to avoid confusion when tracing Save & Send behaviour.
 
 function getRepairOrders() {
   return db.get('repairOrders', []);
@@ -6433,7 +6485,7 @@ async function takeNativePhoto(type, orderId, slotIndex, preferredSource = 'CAME
   }
 }
 
-function resizeImageForStorage(file, maxDimension = 1280, quality = 0.78) {
+function resizeImageForStorage(file, maxDimension = 900, quality = 0.55) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
@@ -8091,35 +8143,9 @@ function collectWorkOrderForm(orderId) {
   return updatedOrder;
 }
 
-function saveWorkOrderForm(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
-  workOrderManager.saveOrder(order);
-  router.navigate('workorders');
-  showToast(order.status === 'completed'
-    ? 'Completed chem sheet saved for admin export'
-    : 'Chem sheet saved');
-}
-
-function shareReport(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  workOrderManager.saveOrder(order);
-  workOrderManager.generateReport(order);
-}
-
-function sendReport(orderId) {
-  saveWorkOrderForm(orderId, true);
-}
+// Duplicate stubs of saveWorkOrderForm / shareReport / sendReport used to
+// live here and were silently overridden by the canonical definitions later
+// in this file. They have been removed to avoid shadowing confusion.
 
 function getRepairOrders() {
   return db.get('repairOrders', []);
@@ -9845,35 +9871,9 @@ function collectWorkOrderForm(orderId) {
   return updatedOrder;
 }
 
-function saveWorkOrderForm(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  order.status = document.getElementById('wo-status')?.value || order.status || 'pending';
-  workOrderManager.saveOrder(order);
-  router.navigate('workorders');
-  showToast(order.status === 'completed'
-    ? 'Completed chem sheet saved for admin export'
-    : 'Chem sheet saved');
-}
-
-function shareReport(orderId) {
-  const order = collectWorkOrderForm(orderId);
-  if (!order) {
-    showToast('Work order not found');
-    return;
-  }
-
-  workOrderManager.saveOrder(order);
-  workOrderManager.generateReport(order);
-}
-
-function sendReport(orderId) {
-  saveWorkOrderForm(orderId, true);
-}
+// The third duplicate of saveWorkOrderForm / shareReport / sendReport has
+// been removed; the canonical definitions live just below this block at the
+// top of the Save & Send workflow section.
 
 function getDefaultAppLink() {
   const versionNumber = String(APP_VERSION || DATA_VERSION || 'v200').replace(/^v/i, '');
@@ -10145,6 +10145,21 @@ function onChemClientChange() {
     const assignedTech = getClientTechnician(client);
     if (techField && assignedTech) techField.value = assignedTech;
   }
+}
+
+function shareReport(orderId) {
+  const order = collectWorkOrderForm(orderId);
+  if (!order) {
+    showToast('Work order not found');
+    return;
+  }
+
+  workOrderManager.saveOrder(order);
+  workOrderManager.generateReport(order);
+}
+
+function sendReport(orderId) {
+  saveWorkOrderForm(orderId, true);
 }
 
 function saveWorkOrderForm(orderId, forceComplete = true) {
@@ -10654,6 +10669,92 @@ async function exportDailyWorkOrders() {
 
 async function exportCompletedToExcel() {
   return exportDailyWorkOrders();
+}
+
+// Admin "Danger Zone" - wipes all workorders and repairOrders in Firestore
+// and localStorage. Keeps clients/routes intact. Used to clear out testing
+// data before going live.
+async function resetTestWorkOrders() {
+  if (!auth.isAdmin()) {
+    showToast('Admin only');
+    return;
+  }
+
+  const confirm1 = window.confirm(
+    'This will permanently delete ALL work orders and chem sheets on every device. Clients and route assignments will be kept. Continue?'
+  );
+  if (!confirm1) return;
+
+  const confirm2 = window.prompt('Type RESET to confirm:');
+  if (String(confirm2 || '').trim().toUpperCase() !== 'RESET') {
+    showToast('Reset cancelled');
+    return;
+  }
+
+  showToast('Wiping work orders and chem sheets…');
+  try {
+    // Clear local arrays first so any onSnapshot echo is a no-op.
+    localStorage.setItem('workorders', '[]');
+    localStorage.setItem('repairOrders', '[]');
+
+    // Replace the remote docs with empty arrays.
+    if (firestore) {
+      const ts = firebase.firestore.FieldValue.serverTimestamp();
+      await firestore.collection('app_data').doc('workorders').set({ data: [], updatedAt: ts });
+      await firestore.collection('app_data').doc('repairOrders').set({ data: [], updatedAt: ts });
+    }
+    showToast('Work orders cleared. Reloading…');
+    setTimeout(() => location.reload(), 800);
+  } catch (err) {
+    console.error('Reset failed', err);
+    showToast('Reset failed: ' + (err && err.code || err && err.message || 'unknown'));
+  }
+}
+
+// Clears the stuck offline-write queue that can accumulate when Firestore
+// has been rejecting writes (e.g., oversized documents). Terminates the
+// Firestore client, clears its IndexedDB persistence, and reloads.
+async function clearStuckSyncQueue() {
+  if (!auth.isAdmin()) {
+    showToast('Admin only');
+    return;
+  }
+
+  const ok = window.confirm(
+    'This will terminate the Firestore connection, clear the offline write queue, and reload the app. Unsaved changes on this device may be lost. Continue?'
+  );
+  if (!ok) return;
+
+  showToast('Clearing sync queue…');
+  try {
+    if (firestore) {
+      try { await firestore.terminate(); } catch (_) {}
+      try { await firestore.clearPersistence(); } catch (_) {}
+    }
+  } catch (err) {
+    console.warn('Sync queue clear error', err);
+  }
+
+  // Also best-effort delete Firestore IndexedDB databases directly in case
+  // terminate() was wedged.
+  try {
+    if (indexedDB.databases) {
+      const dbs = await indexedDB.databases();
+      await Promise.all(
+        dbs
+          .filter(d => d && typeof d.name === 'string' && d.name.startsWith('firestore/'))
+          .map(d => new Promise(resolve => {
+            const req = indexedDB.deleteDatabase(d.name);
+            req.onsuccess = req.onerror = req.onblocked = () => resolve();
+          }))
+      );
+    }
+  } catch (err) {
+    console.warn('IDB delete error', err);
+  }
+
+  showToast('Reloading…');
+  setTimeout(() => location.reload(), 500);
 }
 
 async function exportMonthlyChemSheets() {

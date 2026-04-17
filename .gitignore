@@ -1,1 +1,4 @@
 node_modules
+
+.firebase/
+preserved-live-oasis-service-*/
